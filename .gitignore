@@ -1,0 +1,41 @@
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*service-account*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Node
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Flutter
+mobile/build/
+mobile/.dart_tool/
+
+# Blockchain
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Local data volumes
+infra/.data/
