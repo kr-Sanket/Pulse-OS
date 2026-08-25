@@ -43,7 +43,7 @@ pulse-os/
 
 ## Local Environment
 
-- Prereqs: Docker, Python 3.12 + uv (or poetry), Node 20 + pnpm, (Flutter SDK when relevant).
+- Prereqs: Docker, Python ≥3.12 (plain venv + pip; see backend/pyproject.toml), Node ≥20 + pnpm via corepack (CI uses Node 22), (Flutter SDK when relevant).
 - `docker compose up` must bring up a fully working local stack from a clean checkout — this is
   a standing acceptance criterion (see CHECKLIST.md phase gate).
 - Configuration only via env vars; `.env.example` lists every variable with a safe default or

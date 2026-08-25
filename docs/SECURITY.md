@@ -20,11 +20,16 @@
 
 ## AuthN / AuthZ
 
-- Firebase ID token verified server-side on every request; roles (patient / doctor /
-  hospital_admin) live in custom claims set by the backend during onboarding.
-- Deny by default: every route declares allowed roles; ownership and consent checked in the
-  service layer (`consent.enforce`), not ad hoc per router.
+- Firebase ID token verified server-side on every request (provider evaluated and confirmed in
+  ADR-011; all Firebase types confined to the `auth` module behind an internal port); roles
+  (patient / doctor / hospital_admin / system_admin) live in custom claims set by the backend
+  during onboarding.
+- Deny by default, three ordered layers (ADR-013): static role gate → relationship check (own
+  profile / own hospital / own upload) → consent grant via `consent.enforce`. Full permission
+  matrix: docs/DOMAIN_MODEL.md §3.
 - Hospital-admin actions are scoped to their own `HID`; doctors to their hospital affiliation.
+- **System Admin never has access to medical content** — platform operations require no PHI and
+  no admin break-glass path exists. This is an invariant, not a configuration.
 
 ## Data Protection
 

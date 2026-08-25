@@ -19,9 +19,9 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase:** 0 — Foundation & Planning (no application code exists yet)
-- **Completed:** Architecture review of original plan; revised architecture approved docs written; this documentation foundation.
-- **Next milestone:** M0 — Walking Skeleton (see [ROADMAP.md](ROADMAP.md))
+- **Phase:** 0 — M0.2 domain design COMPLETE (docs/DOMAIN_MODEL.md, ADR-011…013); still no business logic by design
+- **Completed:** Architecture review + ADRs; documentation foundation; engineering scaffold verified green (session 002); domain model, RBAC matrix, Health ID design, auth evaluation (session 003).
+- **Next milestone:** M0.3 — Walking Skeleton implementation (auth, Health ID issuance, profile end-to-end; needs PO approval of M0.2 design + open decisions OD-1…3)
 - **Session log / handoff notes:** [SESSION.md](SESSION.md) — read this second, update it before ending every session.
 
 ## Architecture in One Paragraph
@@ -49,6 +49,7 @@ and a typed API client (ADR-003), plus a Flutter patient app. Record metadata is
 | System design, module boundaries, data flow | [docs/SYSTEM_ARCHITECTURE.md](../docs/SYSTEM_ARCHITECTURE.md) |
 | Chosen technologies + rationale + deltas from original plan | [docs/TECH_STACK.md](../docs/TECH_STACK.md) |
 | Repo layout, environments, testing, CI | [docs/DEVELOPMENT_GUIDE.md](../docs/DEVELOPMENT_GUIDE.md) |
+| Domain model, RBAC matrix, Health ID design | [docs/DOMAIN_MODEL.md](../docs/DOMAIN_MODEL.md) |
 | REST conventions, versioning, errors | [docs/API_GUIDELINES.md](../docs/API_GUIDELINES.md) |
 | Data modeling principles (conceptual) | [docs/DATABASE_DESIGN.md](../docs/DATABASE_DESIGN.md) |
 | OCR/RAG/LLM pipeline design | [docs/AI_ARCHITECTURE.md](../docs/AI_ARCHITECTURE.md) |

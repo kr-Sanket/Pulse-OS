@@ -23,8 +23,11 @@
   return 404, not 403. 409 for state conflicts (approving an already-revoked request); 422 validation.
 - Pagination: cursor-based, `?cursor=&limit=` (max 100), response `{items, nextCursor}`.
   Offset pagination is not used.
-- Filtering/sorting: explicit whitelisted query params only.
+- Filtering/sorting: explicit whitelisted query params only; sorting via `?sort=field` /
+  `?sort=-field` (descending), whitelisted per endpoint.
 - Timestamps: ISO 8601 UTC strings. Enums: SCREAMING_SNAKE strings.
+- Every response echoes `X-Request-Id` (generated if absent) — the correlation key across
+  logs and audit events. Rate-limited endpoints return `Retry-After` on 429.
 
 ## AuthN / AuthZ
 

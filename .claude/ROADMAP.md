@@ -12,14 +12,20 @@
 
 ---
 
-## M0 — Walking Skeleton (Weeks 1–3, Month 1) ← CURRENT
+## M0 — Foundation (Month 1) ← CURRENT, split into sub-milestones by the PO
 
-Repo scaffolding per DEVELOPMENT_GUIDE.md; docker-compose (Postgres + pgvector, Redis, MinIO);
-FastAPI modular-monolith skeleton with `auth` and `patients` modules; Firebase Auth integration;
-Health ID generation; React monorepo shell (patient app only); CI (lint + typecheck + tests).
+- **M0.1 — Engineering scaffold ✅ DONE** (2026-07-20): repo structure, docker-compose
+  (Postgres+pgvector, Redis, MinIO), FastAPI skeleton, web monorepo shells, tooling, CI,
+  Makefile. All checks verified green locally.
+- **M0.2 — Domain Foundation & Identity Design ✅ DONE** (2026-07-20): docs/DOMAIN_MODEL.md
+  (entities, relationships, RBAC matrix, Health ID design), ADR-011 (Firebase Auth confirmed
+  after formal comparison), ADR-012 (Health ID format), ADR-013 (RBAC layers). Design-only.
+- **M0.3 — Walking Skeleton** (next): Firebase Auth integration, Alembic + first migration,
+  Health ID issuance, patient registration/profile, patient web login → profile page,
+  OpenAPI-generated api-client.
 
-**Gate:** a user can register, receive a `PHI-IND-2026-XXXXXX` ID, log in, and see their profile
-in the patient web app, running via one `docker compose up`. CI green.
+**Gate (unchanged):** a user can register, receive a `PHI-IND-2026-XXXXXXC` ID, log in, and see
+their profile in the patient web app, running via one `docker compose up`. CI green on GitHub.
 
 ## M1 — Research & Design (Month 1, parallel with M0)
 
