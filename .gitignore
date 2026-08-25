@@ -7,6 +7,7 @@
 
 # Python
 __pycache__/
+*.egg-info/
 *.py[cod]
 .venv/
 venv/
@@ -39,3 +40,16 @@ contracts/typechain-types/
 
 # Local data volumes
 infra/.data/
+
+# Local research & dataset assets — kept out of version control:
+# Synthea corpus is 1.3 GB (regenerable from the zip / synthea.mitre.org),
+# research PDFs are copyrighted third-party material, decks/plan are binary artifacts
+# (PulseOS_Review1.pptx is regenerable via scripts/review1_deck/).
+synthea_sample_data_fhir_r4_sep2019.zip
+FHIR_Dataset/fhir/
+Research Papers/
+*.pptx
+PulseOS_Project_Plan.pdf
+
+# Personal notes (not project material)
+For me/
