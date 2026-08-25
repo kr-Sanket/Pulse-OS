@@ -29,8 +29,8 @@
 
 - [x] ANY: First commit of scaffold + docs (session 006). Push + GitHub CI verification still pending (see Blocked on PO).
 - [ ] ANY: Verify `make up` against a real Docker daemon (Docker still not installed on dev machine as of session 006, 2026-08-25).
-- [ ] BE: Alembic wiring + first migration.
-- [ ] BE: Structured logging + RFC 7807 error handler.
+- [x] BE: Alembic wiring (async env.py, Settings-driven URL, reversible-migration template) — session 008. First migration lands with the first models (auth/patients).
+- [x] BE: Structured logging + RFC 7807 error handler + request-id middleware + /ready probe — session 008.
 - [ ] BE: `auth` module — Firebase Auth verification, role claims (patient/doctor/hospital_admin), auth dependency.
 - [ ] BE: `patients` module — registration, Health ID issuance (`PHI-IND-2026-XXXXXX`), profile read.
 - [ ] FE: patient app login → profile page; `api-client` generation from OpenAPI (script in scripts/).

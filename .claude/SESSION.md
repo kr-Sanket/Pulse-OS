@@ -5,6 +5,54 @@
 
 ---
 
+## Session 008 — 2026-08-26
+
+*(Numbering per PO's count; no session 007 entry exists in this log.)*
+
+**Phase:** 0 — M0.3 Walking Skeleton, Part 1: Database Foundation & Project Plumbing.
+PO directive to begin M0.3 implementation is taken as approval of the M0.2 design.
+No business features, auth, consent, AI, or blockchain — plumbing only.
+
+**Done (backend `app/core/` + Alembic, one commit):**
+- **Dependencies:** sqlalchemy[asyncio]≥2.0, asyncpg, alembic, redis; dev: aiosqlite (lets DB
+  and Alembic tests run without Docker/Postgres).
+- **`core/db.py`:** `Base` (DeclarativeBase, Alembic's metadata target), `create_db_engine`
+  (lazy-connecting, pool_pre_ping), `create_session_factory`, `get_db_session` request-scoped
+  dependency. Engine/factory live on `app.state` via lifespan — no module-level globals.
+- **Alembic:** `backend/alembic.ini` + async `env.py` (URL from Settings, overridable via
+  `sqlalchemy.url` for tests/ops), reversible-migration `script.py.mako`, empty `versions/`.
+  **No migration generated** — the first one lands with the first real models. Verified via
+  CLI (`heads`, `history`, offline `upgrade head --sql`) and tests (online upgrade vs SQLite).
+- **`core/logging.py`:** JSON formatter (timestamp/level/logger/message/request_id/extras,
+  redacted-by-design: no bodies, no query strings), `configure_logging` routes uvicorn through
+  it; `request_id` contextvar stamps every log line in a request.
+- **`core/middleware.py`:** `RequestContextMiddleware` — X-Request-Id generate/propagate/echo
+  + one access-log line per request (method, path, status, duration_ms).
+- **`core/errors.py`:** RFC 7807 `application/problem+json` handlers (HTTPException,
+  validation with `errors[]`, unhandled-500 that never leaks internals), per API_GUIDELINES.
+- **`core/health.py`:** router with `/health` (moved from main) and `/ready` (DB `SELECT 1` +
+  Redis PING as overridable dependencies; 200 ready / 503 unready with per-check detail).
+- **`main.py`:** lifespan wiring, middleware, handlers, router; `PULSEOS_LOG_LEVEL` setting
+  added (+ .env.example).
+- **Tests: 17 passing** (health, ready ok/db-down/redis-down, RFC 7807 shapes incl. 500
+  leak-check, request-id behavior, JSON formatter fields, access-log fields, session factory +
+  dependency via SQLite, Alembic online + offline smoke). ruff format/lint, mypy strict green.
+- **Live smoke (no services):** `/ready` → 503 `{"database":"failed","redis":"failed"}` with
+  correlated JSON logs — graceful degradation confirmed.
+
+**Deliberately not done:** models/tables/migrations, auth, module routers, api-client regen
+(OpenAPI surface changed only by /ready; generation script still doesn't exist — M0.3 Part 3).
+
+**Still open:** Docker still not installed (compose/`make up` unverified; `/ready` against real
+Postgres+Redis untested); push + GitHub CI run still pending; Spring-Boot-vs-FastAPI deck
+conflict, OD-1…3 formal sign-off, ADR-009/010, Gemini key — all PO items.
+
+**Next:** M0.3 Part 2 — `auth` module (Firebase port + verification dependency + role claims),
+then Part 3 — `patients` (registration, Health ID issuance per ADR-012, profile) + first
+Alembic migration + OpenAPI client generation + patient login/profile page.
+
+---
+
 ## Session 006 — 2026-08-25
 
 **Phase:** 0 — foundation verification & preparation (PO directive: implementation officially
