@@ -1,0 +1,4 @@
+{
+  "extends": "@pulseos/config/tsconfig.base.json",
+  "include": ["src"]
+}

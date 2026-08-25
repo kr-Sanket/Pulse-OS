@@ -1,0 +1,16 @@
+{
+  "name": "@pulseos/api-client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Type-safe API client — GENERATED from the backend OpenAPI spec (ADR-003). Do not hand-edit generated output.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@pulseos/config": "workspace:*",
+    "typescript": "^5.5.0"
+  }
+}

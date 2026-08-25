@@ -1,0 +1,89 @@
+# PulseOS local infrastructure (M0.1): PostgreSQL+pgvector, Redis, MinIO.
+# The api/worker containers join this file in a later milestone; for now the backend
+# runs on the host (make dev-api) against these services.
+#
+# All variables have safe local defaults — `docker compose up` works with no .env.
+# Override via the root .env (see .env.example). Never use these defaults outside local dev.
+
+name: pulseos
+
+services:
+  postgres:
+    # pgvector/pgvector = official PostgreSQL image + pgvector extension preinstalled (ADR-002).
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pulseos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pulseos}
+      POSTGRES_DB: ${POSTGRES_DB:-pulseos}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pulseos} -d ${POSTGRES_DB:-pulseos}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pulseos
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pulseos
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pulseos}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-pulseos-local-secret}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pulseos
+
+  # One-shot job: creates the records bucket, then exits.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-pulseos} $${MINIO_ROOT_PASSWORD:-pulseos-local-secret} &&
+      mc mb --ignore-existing local/$${RECORDS_BUCKET:-pulseos-records}
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pulseos}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-pulseos-local-secret}
+      RECORDS_BUCKET: ${PULSEOS_S3_BUCKET_RECORDS:-pulseos-records}
+    networks:
+      - pulseos
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+
+networks:
+  pulseos:
+    name: pulseos

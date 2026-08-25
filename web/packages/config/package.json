@@ -1,0 +1,10 @@
+{
+  "name": "@pulseos/config",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared tsconfig bases for PulseOS web apps and packages",
+  "files": [
+    "tsconfig.base.json",
+    "tsconfig.react.json"
+  ]
+}
