@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://pulseos:pulseos@localhost:5432/pulseos"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Path to a Firebase service-account JSON (ADR-011). None -> Application Default
+    # Credentials. Without either, auth endpoints answer 503; the rest of the API works.
+    firebase_credentials_file: str | None = None
+
     s3_endpoint_url: str = "http://localhost:9000"
     s3_access_key: str = "pulseos"
     s3_secret_key: str = "pulseos-local-secret"

@@ -19,6 +19,10 @@ from app.core.errors import register_exception_handlers
 from app.core.health import router as health_router
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
+from app.modules.auth.firebase import FirebaseAuthProvider
+from app.modules.auth.router import router as auth_router
+
+API_V1_PREFIX = "/api/v1"
 
 
 @asynccontextmanager
@@ -27,6 +31,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_db_engine(settings)
     app.state.db_engine = engine
     app.state.db_sessionmaker = create_session_factory(engine)
+    # Lazy-initializing provider (ADR-011): the app boots without Firebase credentials;
+    # tests override the get_auth_provider dependency with FakeAuthProvider.
+    app.state.auth_provider = FirebaseAuthProvider(settings)
     yield
     await engine.dispose()
 
@@ -45,6 +52,7 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestContextMiddleware)
     register_exception_handlers(application)
     application.include_router(health_router)
+    application.include_router(auth_router, prefix=API_V1_PREFIX)
     return application
 
 

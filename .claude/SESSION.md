@@ -5,6 +5,62 @@
 
 ---
 
+## Session 009 — 2026-08-26
+
+**Phase:** 0 — M0.3 Walking Skeleton, Part 2: Authentication Foundation (ADR-011, ADR-013).
+Auth infrastructure only — no DB models, no migration, no registration, no frontend.
+
+**Done (backend `app/modules/auth/` + one shared schema base, one commit):**
+- **Auth port (ADR-011):** `provider.py` — `AuthenticationProvider` ABC + provider-agnostic
+  `VerifiedToken`; `firebase.py` — `FirebaseAuthProvider` (the ONLY file allowed to import
+  firebase_admin; lazy init off the event loop via `asyncio.to_thread`, named app "pulseos",
+  service-account file or ADC; every SDK error mapped to domain errors — expired/invalid/
+  disabled → 401-class, cert-fetch/init/unknown → `AuthProviderUnavailableError` → 503; no
+  SDK detail or token ever leaks or is logged); `fake.py` — `FakeAuthProvider` (register
+  user/claims/error per token) for tests and credential-free dev.
+- **Domain:** `domain.py` — `Role` StrEnum (PATIENT/DOCTOR/HOSPITAL_ADMIN/SYSTEM_ADMIN,
+  SCREAMING_SNAKE per DOMAIN_MODEL) + frozen `AuthenticatedUser(user_id, firebase_uid, role)`
+  — the only identity object other modules may depend on. `errors.py` — domain exceptions.
+- **Custom claims:** `pulseos_role` + `pulseos_user_id` (namespaced — Firebase reserves bare
+  `user_id` in ID tokens). Set by registration in Part 3; verified here. Authentic token
+  without claims → 403 `UnprovisionedAccountError` (authn ok, authz fails).
+- **Service:** `service.py` — framework-free `AuthService`: Bearer-header parsing (case-
+  insensitive scheme, strict shape) → provider verify → claims→`AuthenticatedUser` mapping.
+- **Dependencies:** `dependencies.py` — `get_auth_provider` (reads `app.state.auth_provider`,
+  overridable in tests), `require_authenticated_user` (single place tokens are verified;
+  domain→RFC 7807 translation incl. RFC 6750 `WWW-Authenticate` challenges), `CurrentUser`
+  alias, `require_role(*roles)` factory (ADR-013 layer 1) + `RequirePatient`/`RequireDoctor`/
+  `RequireHospitalAdmin`/`RequireSystemAdmin`.
+- **Router:** `GET /api/v1/auth/me` (identity introspection; camelCase wire shape). New
+  `app/shared/schemas.py` `ApiModel` base (camelCase alias per API_GUIDELINES) — first
+  resident of `shared/`, used by all future modules.
+- **Core fix:** `core/errors.py` now propagates `HTTPException.headers` into problem+json
+  responses (WWW-Authenticate/Retry-After were silently dropped before).
+- **Config:** `PULSEOS_FIREBASE_CREDENTIALS_FILE` (optional; unset → ADC; without either,
+  auth endpoints answer 503 and the rest of the API works). `.env.example` updated.
+  `firebase-admin>=6.5` added; mypy override for the untyped SDK (no py.typed).
+- **Tests: 59 passing (17 → 59).** Unit (header parsing, claim mapping, unprovisioned
+  variants), Firebase provider with SDK fully mocked (error-mapping matrix incl. broken
+  credentials path — never contacts Google), HTTP (missing/malformed/invalid/expired token,
+  authenticated /me, forged role claim, provider-down 503, role gates incl. multi-role,
+  wrong-role 403, SYSTEM_ADMIN blocked from all clinical gates, 401-before-403 ordering).
+  ruff format/lint, mypy strict green.
+- **Live smoke (real provider, no credentials):** app boots, /health 200, /auth/me → 401
+  problem+json with correct challenge; token absent from all JSON logs.
+
+**Deliberately not done:** users table/migration (Part 3 with patients), registration/claim
+provisioning, rate limiting on auth endpoints (no rate-limit infra exists yet — M2-ish),
+api-client regen (generator still doesn't exist — Part 3).
+
+**Still open:** unchanged PO items (push + CI verification, Docker install, OD-1…3 formal
+sign-off, ADR-009/010, deck conflict, Gemini key).
+
+**Next:** M0.3 Part 3 — `patients` module (registration + claim provisioning via the auth
+port, Health ID issuance per ADR-012, profile read), first Alembic migration (users +
+patients), OpenAPI client generation script, patient login → profile page, seed stub.
+
+---
+
 ## Session 008 — 2026-08-26
 
 *(Numbering per PO's count; no session 007 entry exists in this log.)*

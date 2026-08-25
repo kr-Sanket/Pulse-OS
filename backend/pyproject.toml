@@ -13,6 +13,7 @@ dependencies = [
     "asyncpg>=0.29",
     "alembic>=1.13",
     "redis>=5.0",
+    "firebase-admin>=6.5",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +59,11 @@ strict = true
 python_version = "3.12"
 packages = ["app", "tests"]
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# firebase-admin ships no py.typed marker; its types stay confined to modules/auth/firebase.py.
+module = ["firebase_admin", "firebase_admin.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -7,6 +7,7 @@ construct HTTP responses themselves.
 """
 
 import logging
+from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
 
@@ -29,6 +30,7 @@ def problem_response(
     title: str,
     detail: str | None = None,
     errors: list[dict[str, str]] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
     body: dict[str, Any] = {
         "type": "about:blank",
@@ -41,12 +43,12 @@ def problem_response(
     if errors is not None:
         body["errors"] = errors
 
-    headers: dict[str, str] = {}
+    response_headers: dict[str, str] = dict(headers) if headers else {}
     request_id: str | None = getattr(request.state, "request_id", None)
     if request_id is not None:
-        headers[REQUEST_ID_HEADER] = request_id
+        response_headers[REQUEST_ID_HEADER] = request_id
     return JSONResponse(
-        body, status_code=status_code, media_type=PROBLEM_CONTENT_TYPE, headers=headers
+        body, status_code=status_code, media_type=PROBLEM_CONTENT_TYPE, headers=response_headers
     )
 
 
@@ -55,7 +57,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         title = HTTPStatus(exc.status_code).phrase
         detail = exc.detail if isinstance(exc.detail, str) and exc.detail != title else None
-        return problem_response(request, status_code=exc.status_code, title=title, detail=detail)
+        # Exception-supplied headers (WWW-Authenticate, Retry-After, ...) must survive
+        # the conversion to problem+json.
+        return problem_response(
+            request, status_code=exc.status_code, title=title, detail=detail, headers=exc.headers
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(

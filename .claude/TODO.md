@@ -31,7 +31,9 @@
 - [ ] ANY: Verify `make up` against a real Docker daemon (Docker still not installed on dev machine as of session 006, 2026-08-25).
 - [x] BE: Alembic wiring (async env.py, Settings-driven URL, reversible-migration template) — session 008. First migration lands with the first models (auth/patients).
 - [x] BE: Structured logging + RFC 7807 error handler + request-id middleware + /ready probe — session 008.
-- [ ] BE: `auth` module — Firebase Auth verification, role claims (patient/doctor/hospital_admin), auth dependency.
+- [x] BE: `auth` module — Firebase Auth port + verification dependency, role claims
+      (`pulseos_role`/`pulseos_user_id`), role gates per ADR-013 layer 1 — session 009.
+      Claim *provisioning* happens at registration (patients module, Part 3).
 - [ ] BE: `patients` module — registration, Health ID issuance (`PHI-IND-2026-XXXXXX`), profile read.
 - [ ] FE: patient app login → profile page; `api-client` generation from OpenAPI (script in scripts/).
 - [ ] ANY: Seed script stub for 3 simulated hospitals.
