@@ -87,6 +87,9 @@ class PatientService:
     async def get_profile(self, user_id: UUID) -> Patient | None:
         return await self._patients.get_by_user_id(user_id)
 
+    async def get_patient_by_id(self, id: UUID) -> Patient | None:
+        return await self._patients.get_by_id(id)
+
     async def _complete_existing(self, user: User) -> RegistrationOutcome:
         if user.role is not Role.PATIENT:
             raise RegistrationConflictError("Account is already registered with a different role.")

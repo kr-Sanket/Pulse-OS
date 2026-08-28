@@ -1,4 +1,19 @@
-"""records module — owns its routers, services, repositories, schemas, and models.
+"""Records module: clinical document metadata, categorization, and processing lifecycle."""
 
-See docs/SYSTEM_ARCHITECTURE.md for module responsibilities and isolation rules.
-"""
+from app.modules.records.models import (
+    DEFAULT_RECORD_CATEGORIES,
+    MedicalRecord,
+    ProcessingStatus,
+    RecordCategory,
+    RecordOrigin,
+)
+from app.modules.records.service import RecordService
+
+__all__ = [
+    "DEFAULT_RECORD_CATEGORIES",
+    "MedicalRecord",
+    "ProcessingStatus",
+    "RecordCategory",
+    "RecordOrigin",
+    "RecordService",
+]

@@ -18,6 +18,9 @@ class PatientRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def get_by_id(self, id: UUID) -> Patient | None:
+        return await self._session.get(Patient, id)
+
     async def get_by_user_id(self, user_id: UUID) -> Patient | None:
         result = await self._session.execute(select(Patient).where(Patient.user_id == user_id))
         return result.scalar_one_or_none()
