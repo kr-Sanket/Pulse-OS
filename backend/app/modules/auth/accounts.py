@@ -22,6 +22,9 @@ class UserAccountService:
     async def get_by_firebase_uid(self, firebase_uid: str) -> User | None:
         return await self._users.get_by_firebase_uid(firebase_uid)
 
+    async def get_by_id(self, user_id: UUID) -> User | None:
+        return await self._users.get_by_id(user_id)
+
     async def create_user(
         self, *, firebase_uid: str, role: Role, phone: str | None = None, email: str | None = None
     ) -> User:
