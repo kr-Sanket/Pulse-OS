@@ -22,6 +22,10 @@ class PatientRepository:
         result = await self._session.execute(select(Patient).where(Patient.user_id == user_id))
         return result.scalar_one_or_none()
 
+    async def get_by_health_id(self, health_id: str) -> Patient | None:
+        result = await self._session.execute(select(Patient).where(Patient.health_id == health_id))
+        return result.scalar_one_or_none()
+
     async def add(self, patient: Patient) -> Patient:
         """Flush a new patient; the violated unique constraint decides the domain error
         (constraint names/columns are stable across Postgres and SQLite messages)."""

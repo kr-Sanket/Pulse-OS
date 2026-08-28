@@ -27,6 +27,193 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/doctors/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Own Doctor Profile
+         * @description The caller's own doctor profile with hospital context.
+         *
+         *     Roles: DOCTOR. Failure modes: 401, 403, 404 (no doctor profile row).
+         */
+        get: operations["read_own_doctor_profile_api_v1_doctors_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/doctors/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Doctor
+         * @description Register the caller as a doctor of a VERIFIED hospital (ADR-015 step 3).
+         *
+         *     Roles: any *verified* identity — PulseOS claims are not required yet. Idempotent
+         *     (repeat calls → 200). The profile starts PENDING until the hospital admin activates
+         *     it. Failure modes: 401, 409 (different role / hospital not verified), 422 (validation
+         *     or unknown hospital HID), 503 (auth provider down — nothing is persisted).
+         */
+        post: operations["register_doctor_api_v1_doctors_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Own Hospital
+         * @description The caller's own hospital (ADR-013 layers 1+2 by construction).
+         *
+         *     Roles: HOSPITAL_ADMIN. Failure modes: 401, 403, 404 (no admin profile row).
+         */
+        get: operations["read_own_hospital_api_v1_hospitals_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/me/doctors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Own Hospital Doctors
+         * @description The caller's hospital's doctors, newest first, cursor-paginated.
+         *
+         *     Roles: HOSPITAL_ADMIN (own hospital only — other hospitals' rosters are invisible).
+         *     Failure modes: 401, 403, 404 (no admin profile), 422 (bad cursor/limit).
+         */
+        get: operations["list_own_hospital_doctors_api_v1_hospitals_me_doctors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/me/doctors/{doctor_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Activate Doctor
+         * @description Activate a doctor of the caller's hospital (ADR-015 step 3). Idempotent.
+         *
+         *     Roles: HOSPITAL_ADMIN. Failure modes: 401, 403, 404 (unknown doctor OR a doctor of
+         *     another hospital — indistinguishable by design).
+         */
+        post: operations["activate_doctor_api_v1_hospitals_me_doctors__doctor_id__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/me/doctors/{doctor_id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate Doctor
+         * @description Deactivate (remove) a doctor of the caller's hospital. Idempotent.
+         *
+         *     The row is kept (DISABLED) — identities referenced by records/audit are never deleted
+         *     (docs/DATABASE_DESIGN.md principle 5). Roles/failures: as for activate.
+         */
+        post: operations["deactivate_doctor_api_v1_hospitals_me_doctors__doctor_id__deactivate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Hospital
+         * @description Register a new hospital with the caller as its admin (ADR-015 step 1).
+         *
+         *     Roles: any *verified* identity — PulseOS claims are not required yet. Idempotent:
+         *     repeat calls return the existing hospital with 200. The hospital starts PENDING;
+         *     a System Admin must verify it before it can register doctors or upload records.
+         *     Failure modes: 401, 409 (registered with a different role), 422, 503 (auth provider
+         *     down — nothing is persisted).
+         */
+        post: operations["register_hospital_api_v1_hospitals_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/{hid}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Hospital
+         * @description Mark a hospital VERIFIED (ADR-015 step 2). Idempotent.
+         *
+         *     Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+         *     Failure modes: 401, 403, 404 (unknown HID).
+         */
+        post: operations["verify_hospital_api_v1_hospitals__hid__verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/patients/me": {
         parameters: {
             query?: never;
@@ -69,6 +256,111 @@ export interface paths {
          *     422 (validation), 503 (auth provider down — nothing is persisted).
          */
         post: operations["register_patient_api_v1_patients_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/record-categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Record Categories
+         * @description The record-category controlled vocabulary (docs/DOMAIN_MODEL.md §1).
+         *
+         *     Roles: any authenticated user (reference data, no PHI). Failure modes: 401.
+         */
+        get: operations["list_record_categories_api_v1_record_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Records
+         * @description The caller's records, newest first, cursor-paginated, optionally by category.
+         *
+         *     Roles: PATIENT (own records) or HOSPITAL_ADMIN (records their hospital uploaded).
+         *     Consent requirement: none — both scopes are ADR-013 layer-2 relationships.
+         *     Failure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category).
+         */
+        get: operations["list_records_api_v1_records_get"];
+        put?: never;
+        /**
+         * Upload Record
+         * @description Upload one medical document (multipart) and create its metadata row.
+         *
+         *     Roles: HOSPITAL_ADMIN (uploads for a patient by Health ID — requires ``patientHealthId``
+         *     and a VERIFIED hospital) or PATIENT (uploads to their own locker — ``patientHealthId``
+         *     must be absent). Consent requirement: none — uploading creates data, it reads nothing.
+         *     Failure modes: 401, 403, 404 (no profile row), 409 (hospital unverified),
+         *     413 (too large), 415 (bad type), 422 (validation / unknown Health ID or category /
+         *     future date), 503 (storage down — nothing is persisted).
+         */
+        post: operations["upload_record_api_v1_records_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/records/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Record Metadata
+         * @description Metadata of one record within the caller's relationship scope.
+         *
+         *     Roles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload). A record outside the
+         *     caller's scope answers 404, never 403 (existence must not leak, API_GUIDELINES).
+         *     Failure modes: 401, 403, 404.
+         */
+        get: operations["read_record_metadata_api_v1_records__record_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/records/{record_id}/download-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Download Url
+         * @description Issue a short-lived presigned download URL for the record's file.
+         *
+         *     Roles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload) — the URL is issued
+         *     only after the relationship check (docs/SECURITY.md). M3 adds the consent check +
+         *     audit-log write here for doctor access. Failure modes: 401, 403, 404, 503 (storage).
+         */
+        post: operations["create_download_url_api_v1_records__record_id__download_url_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -130,6 +422,96 @@ export interface components {
              */
             userId: string;
         };
+        /** Body_upload_record_api_v1_records_post */
+        Body_upload_record_api_v1_records_post: {
+            /** Categorycode */
+            categoryCode: string;
+            /**
+             * Dateofservice
+             * Format: date
+             */
+            dateOfService: string;
+            /** Description */
+            description?: string | null;
+            /** File */
+            file: string;
+            /** Patienthealthid */
+            patientHealthId?: string | null;
+        };
+        /** DoctorListResponse */
+        DoctorListResponse: {
+            /** Items */
+            items: components["schemas"]["DoctorResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /**
+         * DoctorProfileResponse
+         * @description A doctor's own profile, with their hospital context.
+         */
+        DoctorProfileResponse: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Fullname */
+            fullName: string;
+            hospital: components["schemas"]["HospitalResponse"];
+            /** Registrationnumber */
+            registrationNumber: string;
+            /** Specialty */
+            specialty: string | null;
+            status: components["schemas"]["DoctorStatus"];
+        };
+        /** DoctorRegistrationRequest */
+        DoctorRegistrationRequest: {
+            /** Fullname */
+            fullName: string;
+            /** Hospitalhid */
+            hospitalHid: string;
+            /** Registrationnumber */
+            registrationNumber: string;
+            /** Specialty */
+            specialty?: string | null;
+        };
+        /**
+         * DoctorResponse
+         * @description A doctor as seen by their hospital admin (and by themselves).
+         */
+        DoctorResponse: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Fullname */
+            fullName: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Registrationnumber */
+            registrationNumber: string;
+            /** Specialty */
+            specialty: string | null;
+            status: components["schemas"]["DoctorStatus"];
+        };
+        /**
+         * DoctorStatus
+         * @description Managed by the doctor's hospital admin (ADR-015): self-registration lands PENDING;
+         *     only ACTIVE doctors pass the relationship layer for clinical capabilities (M3+).
+         * @enum {string}
+         */
+        DoctorStatus: "PENDING" | "ACTIVE" | "DISABLED";
+        /** DownloadUrlResponse */
+        DownloadUrlResponse: {
+            /** Expiresinseconds */
+            expiresInSeconds: number;
+            /** Url */
+            url: string;
+        };
         /**
          * Gender
          * @description FHIR administrative-gender vocabulary, SCREAMING_SNAKE per API_GUIDELINES.
@@ -141,6 +523,44 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * HospitalAdminProfileResponse
+         * @description A hospital admin's view of their own hospital (registration + GET /hospitals/me).
+         */
+        HospitalAdminProfileResponse: {
+            /** Adminfullname */
+            adminFullName: string;
+            hospital: components["schemas"]["HospitalResponse"];
+        };
+        /** HospitalRegistrationRequest */
+        HospitalRegistrationRequest: {
+            /** Adminfullname */
+            adminFullName: string;
+            /** Hospitaladdress */
+            hospitalAddress?: string | null;
+            /** Hospitalname */
+            hospitalName: string;
+        };
+        /** HospitalResponse */
+        HospitalResponse: {
+            /** Address */
+            address: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Hid */
+            hid: string;
+            /** Name */
+            name: string;
+            verificationStatus: components["schemas"]["HospitalVerificationStatus"];
+        };
+        /**
+         * HospitalVerificationStatus
+         * @enum {string}
+         */
+        HospitalVerificationStatus: "PENDING" | "VERIFIED";
         /** PatientProfileResponse */
         PatientProfileResponse: {
             /**
@@ -164,6 +584,71 @@ export interface components {
             fullName: string;
             gender?: components["schemas"]["Gender"] | null;
         };
+        /** RecordCategoryListResponse */
+        RecordCategoryListResponse: {
+            /** Items */
+            items: components["schemas"]["RecordCategoryResponse"][];
+        };
+        /** RecordCategoryResponse */
+        RecordCategoryResponse: {
+            /** Code */
+            code: string;
+            /** Displayname */
+            displayName: string;
+        };
+        /** RecordListResponse */
+        RecordListResponse: {
+            /** Items */
+            items: components["schemas"]["RecordMetadataResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /** RecordMetadataResponse */
+        RecordMetadataResponse: {
+            /** Categorycode */
+            categoryCode: string;
+            /** Categorydisplayname */
+            categoryDisplayName: string;
+            /** Contenttype */
+            contentType: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Dateofservice
+             * Format: date
+             */
+            dateOfService: string;
+            /** Description */
+            description: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            origin: components["schemas"]["RecordOrigin"];
+            /** Originalfilename */
+            originalFilename: string;
+            processingStatus: components["schemas"]["RecordProcessingStatus"];
+            /** Sizebytes */
+            sizeBytes: number;
+            uploadedByHospital: components["schemas"]["UploadingHospitalResponse"] | null;
+        };
+        /**
+         * RecordOrigin
+         * @description docs/DOMAIN_MODEL.md §1: who brought the record onto the platform.
+         * @enum {string}
+         */
+        RecordOrigin: "HOSPITAL_UPLOAD" | "PATIENT_LOCKER";
+        /**
+         * RecordProcessingStatus
+         * @description ADR-008 pipeline states. M2 only ever writes UPLOADED — the OCR/embedding worker
+         *     that advances records to PROCESSING/INDEXED/FAILED is the M5 AI milestone.
+         * @enum {string}
+         */
+        RecordProcessingStatus: "UPLOADED" | "PROCESSING" | "INDEXED" | "FAILED";
         /**
          * Role
          * @description The four platform roles (docs/DOMAIN_MODEL.md §3, ADR-013).
@@ -173,6 +658,13 @@ export interface components {
          * @enum {string}
          */
         Role: "PATIENT" | "DOCTOR" | "HOSPITAL_ADMIN" | "SYSTEM_ADMIN";
+        /** UploadingHospitalResponse */
+        UploadingHospitalResponse: {
+            /** Hid */
+            hid: string;
+            /** Name */
+            name: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -211,6 +703,255 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthenticatedUserResponse"];
+                };
+            };
+        };
+    };
+    read_own_doctor_profile_api_v1_doctors_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorProfileResponse"];
+                };
+            };
+        };
+    };
+    register_doctor_api_v1_doctors_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DoctorRegistrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Already registered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorProfileResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_own_hospital_api_v1_hospitals_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalAdminProfileResponse"];
+                };
+            };
+        };
+    };
+    list_own_hospital_doctors_api_v1_hospitals_me_doctors_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_doctor_api_v1_hospitals_me_doctors__doctor_id__activate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doctor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_doctor_api_v1_hospitals_me_doctors__doctor_id__deactivate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doctor_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_hospital_api_v1_hospitals_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HospitalRegistrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Already registered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalAdminProfileResponse"];
+                };
+            };
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalAdminProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_hospital_api_v1_hospitals__hid__verify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -264,6 +1005,154 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PatientProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_record_categories_api_v1_record_categories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordCategoryListResponse"];
+                };
+            };
+        };
+    };
+    list_records_api_v1_records_get: {
+        parameters: {
+            query?: {
+                category?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_record_api_v1_records_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_record_api_v1_records_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_record_metadata_api_v1_records__record_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_download_url_api_v1_records__record_id__download_url_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DownloadUrlResponse"];
                 };
             };
             /** @description Validation Error */

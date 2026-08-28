@@ -1,0 +1,139 @@
+"""records module dependency wiring + domain-error → RFC 7807 translation.
+
+Composition only — no business logic. Like the auth module, the boundary-layer error
+translator lives here so routers stay thin and services never see HTTP.
+"""
+
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.core.db import get_db_session
+from app.core.queue import JobQueue
+from app.modules.auth.accounts import UserAccountService
+from app.modules.auth.dependencies import get_user_account_service
+from app.modules.patients.directory import PatientDirectoryService
+from app.modules.patients.repository import PatientRepository
+from app.modules.records.errors import (
+    DoctorNotFoundError,
+    EmptyFileError,
+    FileTooLargeError,
+    HospitalNotFoundError,
+    HospitalNotVerifiedError,
+    OrgRegistrationConflictError,
+    ProfileNotFoundError,
+    RecordNotFoundError,
+    RecordsError,
+    StorageUnavailableError,
+    UnknownCategoryError,
+    UnknownPatientError,
+    UnsupportedFileTypeError,
+)
+from app.modules.records.organizations import HospitalService
+from app.modules.records.repository import (
+    DoctorRepository,
+    HospitalAdminRepository,
+    HospitalRepository,
+    MedicalRecordRepository,
+    RecordCategoryRepository,
+)
+from app.modules.records.service import RecordService
+from app.modules.records.storage import ObjectStorage
+from app.shared.pagination import CursorKey, InvalidCursorError, decode_cursor
+
+
+def to_http_error(exc: RecordsError) -> HTTPException:
+    """Domain → RFC 7807 translation shared by the records routers."""
+    if isinstance(exc, ProfileNotFoundError):
+        return HTTPException(status_code=404, detail="Profile not found for this account.")
+    if isinstance(exc, RecordNotFoundError):
+        return HTTPException(status_code=404, detail="Record not found.")
+    if isinstance(exc, DoctorNotFoundError):
+        return HTTPException(status_code=404, detail="Doctor not found.")
+    if isinstance(exc, HospitalNotFoundError):
+        return HTTPException(status_code=404, detail="Hospital not found.")
+    if isinstance(exc, HospitalNotVerifiedError):
+        return HTTPException(status_code=409, detail="Hospital is not verified yet.")
+    if isinstance(exc, OrgRegistrationConflictError):
+        return HTTPException(status_code=409, detail=exc.detail)
+    if isinstance(exc, UnknownPatientError):
+        return HTTPException(status_code=422, detail="Unknown patient Health ID.")
+    if isinstance(exc, UnknownCategoryError):
+        return HTTPException(status_code=422, detail="Unknown record category code.")
+    if isinstance(exc, EmptyFileError):
+        return HTTPException(status_code=422, detail="Uploaded file is empty.")
+    if isinstance(exc, FileTooLargeError):
+        return HTTPException(
+            status_code=413,
+            detail=f"Uploaded file exceeds the {exc.max_bytes}-byte limit.",
+        )
+    if isinstance(exc, UnsupportedFileTypeError):
+        return HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type; allowed: {', '.join(exc.allowed)}.",
+        )
+    if isinstance(exc, StorageUnavailableError):
+        return HTTPException(status_code=503, detail="File storage is unavailable.")
+    # Any RecordsError without a specific mapping is a server-side problem.
+    return HTTPException(status_code=500, detail="The operation failed unexpectedly.")
+
+
+def parse_cursor(cursor: str | None) -> CursorKey | None:
+    """Decode an opaque pagination cursor; a forged/corrupted one is a validation error."""
+    if cursor is None:
+        return None
+    try:
+        return decode_cursor(cursor)
+    except InvalidCursorError:
+        raise HTTPException(status_code=422, detail="Invalid pagination cursor.") from None
+
+
+def get_object_storage(request: Request) -> ObjectStorage:
+    """The storage chosen at startup (lifespan); tests override this dependency."""
+    storage: ObjectStorage = request.app.state.object_storage
+    return storage
+
+
+def get_job_queue(request: Request) -> JobQueue:
+    """The queue chosen at startup (lifespan); tests override this dependency."""
+    queue: JobQueue = request.app.state.job_queue
+    return queue
+
+
+def get_hospital_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    accounts: Annotated[UserAccountService, Depends(get_user_account_service)],
+) -> HospitalService:
+    # All repositories share the request's single session/transaction (get_db_session
+    # is cached per request by FastAPI).
+    return HospitalService(
+        accounts=accounts,
+        hospitals=HospitalRepository(session),
+        admins=HospitalAdminRepository(session),
+        doctors=DoctorRepository(session),
+    )
+
+
+def get_record_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    storage: Annotated[ObjectStorage, Depends(get_object_storage)],
+    queue: Annotated[JobQueue, Depends(get_job_queue)],
+) -> RecordService:
+    settings = get_settings()
+    return RecordService(
+        records=MedicalRecordRepository(session),
+        categories=RecordCategoryRepository(session),
+        admins=HospitalAdminRepository(session),
+        hospitals=HospitalRepository(session),
+        patients=PatientDirectoryService(PatientRepository(session)),
+        storage=storage,
+        queue=queue,
+        presign_ttl_seconds=settings.s3_presign_ttl_seconds,
+        max_upload_bytes=settings.records_max_upload_bytes,
+    )
+
+
+HospitalServiceDep = Annotated[HospitalService, Depends(get_hospital_service)]
+RecordServiceDep = Annotated[RecordService, Depends(get_record_service)]

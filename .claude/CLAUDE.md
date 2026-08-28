@@ -19,9 +19,9 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase:** 0 — M0.2 domain design COMPLETE (docs/DOMAIN_MODEL.md, ADR-011…013); still no business logic by design
-- **Completed:** Architecture review + ADRs; documentation foundation; engineering scaffold verified green (session 002); domain model, RBAC matrix, Health ID design, auth evaluation (session 003).
-- **Next milestone:** M0.3 — Walking Skeleton implementation (auth, Health ID issuance, profile end-to-end; needs PO approval of M0.2 design + open decisions OD-1…3)
+- **Phase:** M2 Backend Core — records module code COMPLETE (2026-08-29, session 013, branch `feature/medical-records`); M0 fully done.
+- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (auth, Health ID, patient registration/profile, patient web portal, api-client, seed — merged as PR #1); M2 backend (hospital/doctor onboarding + management per ADR-015, record upload → S3 port, presigned downloads, arq worker skeleton per ADR-014, demo-actor seed).
+- **Next milestone:** M2 gate demo (needs deferred PO ops items: Docker/MinIO live run), then M3 — Consent Domain. M1 design items (Figma, ADR-009/010, OD-1…3 sign-off) still open in parallel.
 - **Session log / handoff notes:** [SESSION.md](SESSION.md) — read this second, update it before ending every session.
 
 ## Architecture in One Paragraph

@@ -1,6 +1,7 @@
 """Test helpers shared across unit tests (no fixtures here — those live in conftest)."""
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -35,6 +36,21 @@ def create_sqlite_test_engine() -> AsyncEngine:
         connection.exec_driver_sql("BEGIN")
 
     return engine
+
+
+def run_with_session[T](engine: AsyncEngine, action: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Run ``action`` against ``engine`` in one committed session/transaction.
+
+    Test arrangement helper: lets sync test code seed rows on the same engine the app's
+    overridden ``get_db_session`` uses (conftest ``db_engine``/``sqlite_db``).
+    """
+
+    async def scenario() -> T:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session, session.begin():
+            return await action(session)
+
+    return asyncio.run(scenario())
 
 
 @asynccontextmanager

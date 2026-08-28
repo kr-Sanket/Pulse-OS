@@ -6,6 +6,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ## [Unreleased]
 
 ### Added
+- **M2 Backend Core (records module):** hospital + admin and doctor self-registration with
+  System-Admin hospital verification and admin-managed doctor activation (ADR-015);
+  `MedicalRecord` (FHIR DocumentReference-aligned) with migration 0003; multipart record
+  upload → S3/MinIO behind an `ObjectStorage` port (hospital-for-Health-ID and patient
+  locker flows); relationship-scoped metadata listing (cursor pagination, category filter)
+  and short-lived presigned download URLs; arq chosen as the job queue (ADR-014) with a
+  `JobQueue` port, worker entry point (`arq app.workers.main.WorkerSettings`) and a
+  no-op `record_uploaded` task; seed extended with demo hospital staff and 3 synthetic
+  patients (pinned valid Health IDs). Doctors deliberately have **no** record access until
+  the consent module (M3). Backend tests 106 → 194.
+- **M0.3 Walking Skeleton** (shipped in PR #1): auth module (Firebase port, role gates),
+  patients module (registration, ADR-012 Health ID issuance, profile), migrations 0001–0002,
+  DB/logging/RFC 7807 plumbing, OpenAPI-generated api-client, patient web login → profile,
+  idempotent seed system.
 - M0.2 Domain Foundation & Identity Design (docs-only): `docs/DOMAIN_MODEL.md` (entities,
   relationships, RBAC matrix, Health ID design, open decisions OD-1…3) and ADR-011 (Firebase
   Auth evaluation), ADR-012 (Health ID format), ADR-013 (RBAC layers).

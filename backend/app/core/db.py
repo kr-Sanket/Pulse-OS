@@ -14,6 +14,7 @@ from datetime import datetime
 
 from fastapi import Request
 from sqlalchemy import DateTime, MetaData, Uuid, func
+from sqlalchemy.dialects import sqlite as sqlite_dialect
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -47,14 +48,26 @@ class UUIDPrimaryKeyMixin:
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
 
 
+# SQLite stores datetimes as text and CURRENT_TIMESTAMP writes no microseconds, while
+# SQLAlchemy's default bind format always appends them — so a keyset-pagination equality
+# (WHERE created_at = :cursor) could never match on SQLite. Truncating microseconds on
+# the SQLite side makes storage and bind formats identical; ties are broken by id in
+# every keyset query. Postgres (real timestamptz) is unaffected by the variant.
+_TIMESTAMP = DateTime(timezone=True).with_variant(
+    # The sqlite dialect ships no annotations for DATETIME — the call itself is typed fine.
+    sqlite_dialect.DATETIME(truncate_microseconds=True),  # type: ignore[no-untyped-call]
+    "sqlite",
+)
+
+
 class TimestampMixin:
     """UTC ``created_at``/``updated_at`` on every table (docs/DATABASE_DESIGN.md principle 6)."""
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        _TIMESTAMP, server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        _TIMESTAMP, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

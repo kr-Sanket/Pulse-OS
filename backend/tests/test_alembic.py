@@ -34,7 +34,15 @@ def test_alembic_offline_mode_configures(tmp_path: Path) -> None:
     command.upgrade(config, "head", sql=True)
 
 
-APP_TABLES = {"users", "patients", "hospitals", "record_categories"}
+APP_TABLES = {
+    "users",
+    "patients",
+    "hospitals",
+    "record_categories",
+    "doctors",
+    "hospital_admins",
+    "medical_records",
+}
 
 
 def test_migration_chain_is_reversible(tmp_path: Path) -> None:

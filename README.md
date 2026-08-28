@@ -64,9 +64,13 @@ gates: [`.claude/ROADMAP.md`](.claude/ROADMAP.md).
 
 ## Status
 
-**Phase 0 — M0.1 engineering scaffold and M0.2 domain design complete.** No business features
-yet. Next: M0.3 (walking skeleton: auth, Health ID issuance, patient profile end-to-end) —
-see [`.claude/ROADMAP.md`](.claude/ROADMAP.md) and [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md).
+**M0 complete; M2 backend core implemented.** The walking skeleton (M0.3) shipped: Firebase
+auth, Health ID issuance, patient registration/profile, patient web portal, generated
+api-client, idempotent seed. M2 adds the `records` backend: hospital/doctor onboarding and
+management (ADR-015), record upload → S3/MinIO with FHIR-aligned metadata, presigned
+downloads, the arq worker skeleton (ADR-014), and demo seed actors. Remaining before the M2
+gate demo: Docker/MinIO live verification (deferred PO ops items). See
+[`.claude/ROADMAP.md`](.claude/ROADMAP.md) and [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md).
 
 ## Stack (summary)
 

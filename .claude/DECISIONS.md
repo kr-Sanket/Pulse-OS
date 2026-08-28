@@ -215,6 +215,61 @@ Consent grants are per **individual doctor** and per **category** (not hospital-
 
 ---
 
+## ADR-014 — Async job queue library: arq
+**Date:** 2026-08-28 · **Status:** Accepted (the decision ADR-008 deferred to M2 start)
+
+**Context:** ADR-008 mandates a Redis-backed task queue for OCR, embeddings, notifications, and
+anchoring, with the library choice (arq vs Celery) deferred to M2 start. The backend is fully
+async (SQLAlchemy async, FastAPI); the worker shares its codebase (ADR-001).
+
+**Decision:** **arq.** Reasons: native asyncio (Celery's async story is bolted on — our worker
+code would either block or juggle event loops), one small dependency instead of Celery's
+kombu/billiard stack, typed (py.typed), and its feature set (retries with backoff, job
+uniqueness, cron) covers everything the roadmap needs through M6. Celery's advantages
+(multi-broker, rate-limited queues at scale) solve problems this project will never have.
+
+**Consequences:** `app/core/queue.py` defines a `JobQueue` port (enqueue-only — the API never
+consumes jobs) with `ArqJobQueue` and an in-memory fake; the worker entry point is
+`arq app.workers.main.WorkerSettings`. Enqueue failures never fail the originating request:
+the job is advisory at M2 (processing pipeline lands at M5), so the failure is logged
+(IDs only, no PHI) and the record simply stays `UPLOADED`. M5 must add reconciliation for
+missed jobs (e.g. a sweep for stale `UPLOADED` records) when processing becomes load-bearing.
+
+---
+
+## ADR-015 — Onboarding flows for hospitals, hospital admins, and doctors
+**Date:** 2026-08-28 · **Status:** Accepted (M2; flagged for PO review — see SESSION.md 013)
+
+**Context:** M2 requires "hospitals + doctor management with RBAC". DOMAIN_MODEL defines the
+entities and the permission matrix (admin manages own hospital's doctors; admin registers own
+hospital; System Admin verifies) but not the onboarding sequence. An "admin adds doctor"
+flow would need either the doctor's Firebase identity in advance or an invite pipeline
+(notifications module — not built). Claims can only be provisioned on an authenticated subject.
+
+**Decision:** Self-registration + verification, mirroring the proven patient pattern:
+1. **Hospital + admin:** an authenticated, unprovisioned user calls `POST /hospitals/register`
+   → creates the Hospital (`PENDING`, random draw-and-insert `HID-XXXX`), the admin's User
+   (`HOSPITAL_ADMIN`) + HospitalAdmin profile, and provisions claims — atomically, idempotently.
+   A `PENDING` hospital cannot take doctor registrations or upload records.
+2. **Verification:** `POST /hospitals/{hid}/verify`, SYSTEM_ADMIN only (RBAC matrix), idempotent.
+   The three simulated hospitals are seeded `VERIFIED`.
+3. **Doctor:** an authenticated, unprovisioned user calls `POST /doctors/register` naming a
+   VERIFIED hospital's HID → User (`DOCTOR`) + Doctor profile in status `PENDING`; the hospital's
+   admin activates/deactivates via `POST /hospitals/me/doctors/{id}/activate|deactivate`.
+   A non-`ACTIVE` doctor will fail the relationship layer for every clinical capability (M3+).
+
+**Why:** zero new infrastructure, single registration idiom across all roles, and the trust
+gap ("anyone can claim to work at TMH") is closed by the two human verification steps
+(System Admin verifies hospitals; hospital admins verify their doctors) instead of by an
+invite system we'd have to build early. Invites can replace step 3 later without schema changes.
+
+**Consequences:** Hospital IDs are random 4-digit draws (10k space is fine at 3–50 hospitals;
+hospitals are public entities, so ADR-012's enumeration concern does not apply). Live demo
+gap: attaching a *real* Firebase login as admin of a *seeded* hospital needs a small ops
+script (set claims + insert profile row) — tracked in TODO, not solved by this ADR.
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.

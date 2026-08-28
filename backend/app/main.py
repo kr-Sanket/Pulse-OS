@@ -1,9 +1,9 @@
 """Application entry point.
 
-M0.3 plumbing: app factory, lifespan-managed database engine/session factory, structured
-JSON logging with request-id propagation, RFC 7807 exception handlers, and the /health +
-/ready infrastructure probes. Module routers are mounted here as milestones land
-(see .claude/ROADMAP.md). Run locally with:
+App factory, lifespan-managed infrastructure (database engine/session factory, object
+storage, job queue, auth provider), structured JSON logging with request-id propagation,
+RFC 7807 exception handlers, and the /health + /ready probes. Module routers are mounted
+here as milestones land (see .claude/ROADMAP.md). Run locally with:
 
     uvicorn app.main:app --reload
 """
@@ -20,9 +20,13 @@ from app.core.errors import register_exception_handlers
 from app.core.health import router as health_router
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
+from app.core.queue import ArqJobQueue
 from app.modules.auth.firebase import FirebaseAuthProvider
 from app.modules.auth.router import router as auth_router
 from app.modules.patients.router import router as patients_router
+from app.modules.records.organizations_router import doctors_router, hospitals_router
+from app.modules.records.router import categories_router, records_router
+from app.modules.records.storage import S3ObjectStorage
 
 API_V1_PREFIX = "/api/v1"
 
@@ -33,10 +37,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_db_engine(settings)
     app.state.db_engine = engine
     app.state.db_sessionmaker = create_session_factory(engine)
-    # Lazy-initializing provider (ADR-011): the app boots without Firebase credentials;
-    # tests override the get_auth_provider dependency with FakeAuthProvider.
+    # Lazy-initializing providers (ADR-011/005/014): the app boots without Firebase,
+    # MinIO, or Redis; tests override the corresponding get_* dependencies with fakes.
     app.state.auth_provider = FirebaseAuthProvider(settings)
+    app.state.object_storage = S3ObjectStorage(settings)
+    job_queue = ArqJobQueue(settings.redis_url)
+    app.state.job_queue = job_queue
     yield
+    await job_queue.aclose()
     await engine.dispose()
 
 
@@ -65,6 +73,10 @@ def create_app() -> FastAPI:
     application.include_router(health_router)
     application.include_router(auth_router, prefix=API_V1_PREFIX)
     application.include_router(patients_router, prefix=API_V1_PREFIX)
+    application.include_router(hospitals_router, prefix=API_V1_PREFIX)
+    application.include_router(doctors_router, prefix=API_V1_PREFIX)
+    application.include_router(records_router, prefix=API_V1_PREFIX)
+    application.include_router(categories_router, prefix=API_V1_PREFIX)
     return application
 
 

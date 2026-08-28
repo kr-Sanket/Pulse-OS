@@ -5,7 +5,7 @@ are provisioned inside the same request transaction, so a provider failure rolls
 user/patient rows and a retry starts clean.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from uuid import UUID
@@ -64,8 +64,8 @@ class PatientService:
             user = await self._accounts.create_user(
                 firebase_uid=identity.firebase_uid,
                 role=Role.PATIENT,
-                phone=_claim_string(identity.claims, "phone_number", max_length=20),
-                email=_claim_string(identity.claims, "email", max_length=255),
+                phone=identity.string_claim("phone_number", max_length=20),
+                email=identity.string_claim("email", max_length=255),
             )
             patient = await self._create_patient_with_health_id(
                 user.id, full_name=full_name, date_of_birth=date_of_birth, gender=gender
@@ -115,12 +115,3 @@ class PatientService:
             except DuplicateHealthIdError:
                 continue
         raise HealthIdAllocationError()
-
-
-def _claim_string(claims: Mapping[str, object], key: str, *, max_length: int) -> str | None:
-    """Verified contact points from the token (docs/DOMAIN_MODEL.md: User carries them);
-    anything unexpected is dropped rather than trusted."""
-    value = claims.get(key)
-    if isinstance(value, str) and 0 < len(value) <= max_length:
-        return value
-    return None

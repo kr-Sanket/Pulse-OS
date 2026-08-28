@@ -17,6 +17,18 @@ class VerifiedToken:
     firebase_uid: str
     claims: Mapping[str, object]
 
+    def string_claim(self, key: str, *, max_length: int) -> str | None:
+        """A verified string claim (e.g. ``email``, ``phone_number``), or None.
+
+        Registration flows copy verified contact points from the token
+        (docs/DOMAIN_MODEL.md: User carries them); anything unexpected — wrong type,
+        empty, oversized — is dropped rather than trusted.
+        """
+        value = self.claims.get(key)
+        if isinstance(value, str) and 0 < len(value) <= max_length:
+            return value
+        return None
+
 
 class AuthenticationProvider(ABC):
     """Port for verifying bearer tokens issued by the identity provider."""

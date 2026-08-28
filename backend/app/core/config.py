@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     s3_access_key: str = "pulseos"
     s3_secret_key: str = "pulseos-local-secret"
     s3_bucket_records: str = "pulseos-records"
+    # MinIO ignores the region but boto3 requires one; real S3 uses it for signing.
+    s3_region: str = "us-east-1"
+    # Presigned download URLs are short-lived by design (docs/SECURITY.md: minutes).
+    s3_presign_ttl_seconds: int = 300
+
+    # Record uploads: hard size cap enforced before anything is stored (15 MiB).
+    records_max_upload_bytes: int = 15 * 1024 * 1024
 
 
 @lru_cache

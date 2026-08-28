@@ -24,6 +24,248 @@
         "title": "AuthenticatedUserResponse",
         "type": "object"
       },
+      "Body_upload_record_api_v1_records_post": {
+        "properties": {
+          "categoryCode": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "dateOfService": {
+            "format": "date",
+            "title": "Dateofservice",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "patientHealthId": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patienthealthid"
+          }
+        },
+        "required": [
+          "file",
+          "categoryCode",
+          "dateOfService"
+        ],
+        "title": "Body_upload_record_api_v1_records_post",
+        "type": "object"
+      },
+      "DoctorListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DoctorResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "DoctorListResponse",
+        "type": "object"
+      },
+      "DoctorProfileResponse": {
+        "description": "A doctor's own profile, with their hospital context.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "fullName": {
+            "title": "Fullname",
+            "type": "string"
+          },
+          "hospital": {
+            "$ref": "#/components/schemas/HospitalResponse"
+          },
+          "registrationNumber": {
+            "title": "Registrationnumber",
+            "type": "string"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialty"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DoctorStatus"
+          }
+        },
+        "required": [
+          "fullName",
+          "specialty",
+          "registrationNumber",
+          "status",
+          "hospital",
+          "createdAt"
+        ],
+        "title": "DoctorProfileResponse",
+        "type": "object"
+      },
+      "DoctorRegistrationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "fullName": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Fullname",
+            "type": "string"
+          },
+          "hospitalHid": {
+            "maxLength": 8,
+            "minLength": 1,
+            "title": "Hospitalhid",
+            "type": "string"
+          },
+          "registrationNumber": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Registrationnumber",
+            "type": "string"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialty"
+          }
+        },
+        "required": [
+          "fullName",
+          "registrationNumber",
+          "hospitalHid"
+        ],
+        "title": "DoctorRegistrationRequest",
+        "type": "object"
+      },
+      "DoctorResponse": {
+        "description": "A doctor as seen by their hospital admin (and by themselves).",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "fullName": {
+            "title": "Fullname",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "registrationNumber": {
+            "title": "Registrationnumber",
+            "type": "string"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialty"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DoctorStatus"
+          }
+        },
+        "required": [
+          "id",
+          "fullName",
+          "specialty",
+          "registrationNumber",
+          "status",
+          "createdAt"
+        ],
+        "title": "DoctorResponse",
+        "type": "object"
+      },
+      "DoctorStatus": {
+        "description": "Managed by the doctor's hospital admin (ADR-015): self-registration lands PENDING;\nonly ACTIVE doctors pass the relationship layer for clinical capabilities (M3+).",
+        "enum": [
+          "PENDING",
+          "ACTIVE",
+          "DISABLED"
+        ],
+        "title": "DoctorStatus",
+        "type": "string"
+      },
+      "DownloadUrlResponse": {
+        "properties": {
+          "expiresInSeconds": {
+            "title": "Expiresinseconds",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expiresInSeconds"
+        ],
+        "title": "DownloadUrlResponse",
+        "type": "object"
+      },
       "Gender": {
         "description": "FHIR administrative-gender vocabulary, SCREAMING_SNAKE per API_GUIDELINES.",
         "enum": [
@@ -47,6 +289,107 @@
         },
         "title": "HTTPValidationError",
         "type": "object"
+      },
+      "HospitalAdminProfileResponse": {
+        "description": "A hospital admin's view of their own hospital (registration + GET /hospitals/me).",
+        "properties": {
+          "adminFullName": {
+            "title": "Adminfullname",
+            "type": "string"
+          },
+          "hospital": {
+            "$ref": "#/components/schemas/HospitalResponse"
+          }
+        },
+        "required": [
+          "hospital",
+          "adminFullName"
+        ],
+        "title": "HospitalAdminProfileResponse",
+        "type": "object"
+      },
+      "HospitalRegistrationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adminFullName": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Adminfullname",
+            "type": "string"
+          },
+          "hospitalAddress": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hospitaladdress"
+          },
+          "hospitalName": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Hospitalname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hospitalName",
+          "adminFullName"
+        ],
+        "title": "HospitalRegistrationRequest",
+        "type": "object"
+      },
+      "HospitalResponse": {
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "hid": {
+            "title": "Hid",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "verificationStatus": {
+            "$ref": "#/components/schemas/HospitalVerificationStatus"
+          }
+        },
+        "required": [
+          "hid",
+          "name",
+          "address",
+          "verificationStatus",
+          "createdAt"
+        ],
+        "title": "HospitalResponse",
+        "type": "object"
+      },
+      "HospitalVerificationStatus": {
+        "enum": [
+          "PENDING",
+          "VERIFIED"
+        ],
+        "title": "HospitalVerificationStatus",
+        "type": "string"
       },
       "PatientProfileResponse": {
         "properties": {
@@ -134,6 +477,170 @@
         "title": "PatientRegistrationRequest",
         "type": "object"
       },
+      "RecordCategoryListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordCategoryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RecordCategoryListResponse",
+        "type": "object"
+      },
+      "RecordCategoryResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "displayName": {
+            "title": "Displayname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "displayName"
+        ],
+        "title": "RecordCategoryResponse",
+        "type": "object"
+      },
+      "RecordListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordMetadataResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "RecordListResponse",
+        "type": "object"
+      },
+      "RecordMetadataResponse": {
+        "properties": {
+          "categoryCode": {
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "categoryDisplayName": {
+            "title": "Categorydisplayname",
+            "type": "string"
+          },
+          "contentType": {
+            "title": "Contenttype",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "dateOfService": {
+            "format": "date",
+            "title": "Dateofservice",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/RecordOrigin"
+          },
+          "originalFilename": {
+            "title": "Originalfilename",
+            "type": "string"
+          },
+          "processingStatus": {
+            "$ref": "#/components/schemas/RecordProcessingStatus"
+          },
+          "sizeBytes": {
+            "title": "Sizebytes",
+            "type": "integer"
+          },
+          "uploadedByHospital": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadingHospitalResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "categoryCode",
+          "categoryDisplayName",
+          "origin",
+          "dateOfService",
+          "description",
+          "originalFilename",
+          "contentType",
+          "sizeBytes",
+          "processingStatus",
+          "uploadedByHospital",
+          "createdAt"
+        ],
+        "title": "RecordMetadataResponse",
+        "type": "object"
+      },
+      "RecordOrigin": {
+        "description": "docs/DOMAIN_MODEL.md \u00a71: who brought the record onto the platform.",
+        "enum": [
+          "HOSPITAL_UPLOAD",
+          "PATIENT_LOCKER"
+        ],
+        "title": "RecordOrigin",
+        "type": "string"
+      },
+      "RecordProcessingStatus": {
+        "description": "ADR-008 pipeline states. M2 only ever writes UPLOADED \u2014 the OCR/embedding worker\nthat advances records to PROCESSING/INDEXED/FAILED is the M5 AI milestone.",
+        "enum": [
+          "UPLOADED",
+          "PROCESSING",
+          "INDEXED",
+          "FAILED"
+        ],
+        "title": "RecordProcessingStatus",
+        "type": "string"
+      },
       "Role": {
         "description": "The four platform roles (docs/DOMAIN_MODEL.md \u00a73, ADR-013).\n\nSYSTEM_ADMIN is a platform-operations role with a hard invariant: it can never\nread medical content, so it must never appear in a role gate on a PHI endpoint.",
         "enum": [
@@ -144,6 +651,24 @@
         ],
         "title": "Role",
         "type": "string"
+      },
+      "UploadingHospitalResponse": {
+        "properties": {
+          "hid": {
+            "title": "Hid",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hid",
+          "name"
+        ],
+        "title": "UploadingHospitalResponse",
+        "type": "object"
       },
       "ValidationError": {
         "properties": {
@@ -212,6 +737,347 @@
         "summary": "Read Current User",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/doctors/me": {
+      "get": {
+        "description": "The caller's own doctor profile with hospital context.\n\nRoles: DOCTOR. Failure modes: 401, 403, 404 (no doctor profile row).",
+        "operationId": "read_own_doctor_profile_api_v1_doctors_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoctorProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Own Doctor Profile",
+        "tags": [
+          "doctors"
+        ]
+      }
+    },
+    "/api/v1/doctors/register": {
+      "post": {
+        "description": "Register the caller as a doctor of a VERIFIED hospital (ADR-015 step 3).\n\nRoles: any *verified* identity \u2014 PulseOS claims are not required yet. Idempotent\n(repeat calls \u2192 200). The profile starts PENDING until the hospital admin activates\nit. Failure modes: 401, 409 (different role / hospital not verified), 422 (validation\nor unknown hospital HID), 503 (auth provider down \u2014 nothing is persisted).",
+        "operationId": "register_doctor_api_v1_doctors_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoctorRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoctorProfileResponse"
+                }
+              }
+            },
+            "description": "Already registered"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoctorProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Doctor",
+        "tags": [
+          "doctors"
+        ]
+      }
+    },
+    "/api/v1/hospitals/me": {
+      "get": {
+        "description": "The caller's own hospital (ADR-013 layers 1+2 by construction).\n\nRoles: HOSPITAL_ADMIN. Failure modes: 401, 403, 404 (no admin profile row).",
+        "operationId": "read_own_hospital_api_v1_hospitals_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalAdminProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Own Hospital",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/me/doctors": {
+      "get": {
+        "description": "The caller's hospital's doctors, newest first, cursor-paginated.\n\nRoles: HOSPITAL_ADMIN (own hospital only \u2014 other hospitals' rosters are invisible).\nFailure modes: 401, 403, 404 (no admin profile), 422 (bad cursor/limit).",
+        "operationId": "list_own_hospital_doctors_api_v1_hospitals_me_doctors_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoctorListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Own Hospital Doctors",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/me/doctors/{doctor_id}/activate": {
+      "post": {
+        "description": "Activate a doctor of the caller's hospital (ADR-015 step 3). Idempotent.\n\nRoles: HOSPITAL_ADMIN. Failure modes: 401, 403, 404 (unknown doctor OR a doctor of\nanother hospital \u2014 indistinguishable by design).",
+        "operationId": "activate_doctor_api_v1_hospitals_me_doctors__doctor_id__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doctor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Doctor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoctorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Doctor",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/me/doctors/{doctor_id}/deactivate": {
+      "post": {
+        "description": "Deactivate (remove) a doctor of the caller's hospital. Idempotent.\n\nThe row is kept (DISABLED) \u2014 identities referenced by records/audit are never deleted\n(docs/DATABASE_DESIGN.md principle 5). Roles/failures: as for activate.",
+        "operationId": "deactivate_doctor_api_v1_hospitals_me_doctors__doctor_id__deactivate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doctor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Doctor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DoctorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deactivate Doctor",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/register": {
+      "post": {
+        "description": "Register a new hospital with the caller as its admin (ADR-015 step 1).\n\nRoles: any *verified* identity \u2014 PulseOS claims are not required yet. Idempotent:\nrepeat calls return the existing hospital with 200. The hospital starts PENDING;\na System Admin must verify it before it can register doctors or upload records.\nFailure modes: 401, 409 (registered with a different role), 422, 503 (auth provider\ndown \u2014 nothing is persisted).",
+        "operationId": "register_hospital_api_v1_hospitals_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HospitalRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalAdminProfileResponse"
+                }
+              }
+            },
+            "description": "Already registered"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalAdminProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Hospital",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/{hid}/verify": {
+      "post": {
+        "description": "Mark a hospital VERIFIED (ADR-015 step 2). Idempotent.\n\nRoles: SYSTEM_ADMIN (platform operations \u2014 touches no medical content).\nFailure modes: 401, 403, 404 (unknown HID).",
+        "operationId": "verify_hospital_api_v1_hospitals__hid__verify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hid",
+            "required": true,
+            "schema": {
+              "title": "Hid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Hospital",
+        "tags": [
+          "hospitals"
         ]
       }
     },
@@ -286,6 +1152,236 @@
         "summary": "Register Patient",
         "tags": [
           "patients"
+        ]
+      }
+    },
+    "/api/v1/record-categories": {
+      "get": {
+        "description": "The record-category controlled vocabulary (docs/DOMAIN_MODEL.md \u00a71).\n\nRoles: any authenticated user (reference data, no PHI). Failure modes: 401.",
+        "operationId": "list_record_categories_api_v1_record_categories_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordCategoryListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Record Categories",
+        "tags": [
+          "records"
+        ]
+      }
+    },
+    "/api/v1/records": {
+      "get": {
+        "description": "The caller's records, newest first, cursor-paginated, optionally by category.\n\nRoles: PATIENT (own records) or HOSPITAL_ADMIN (records their hospital uploaded).\nConsent requirement: none \u2014 both scopes are ADR-013 layer-2 relationships.\nFailure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category).",
+        "operationId": "list_records_api_v1_records_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Records",
+        "tags": [
+          "records"
+        ]
+      },
+      "post": {
+        "description": "Upload one medical document (multipart) and create its metadata row.\n\nRoles: HOSPITAL_ADMIN (uploads for a patient by Health ID \u2014 requires ``patientHealthId``\nand a VERIFIED hospital) or PATIENT (uploads to their own locker \u2014 ``patientHealthId``\nmust be absent). Consent requirement: none \u2014 uploading creates data, it reads nothing.\nFailure modes: 401, 403, 404 (no profile row), 409 (hospital unverified),\n413 (too large), 415 (bad type), 422 (validation / unknown Health ID or category /\nfuture date), 503 (storage down \u2014 nothing is persisted).",
+        "operationId": "upload_record_api_v1_records_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_record_api_v1_records_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordMetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Record",
+        "tags": [
+          "records"
+        ]
+      }
+    },
+    "/api/v1/records/{record_id}": {
+      "get": {
+        "description": "Metadata of one record within the caller's relationship scope.\n\nRoles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload). A record outside the\ncaller's scope answers 404, never 403 (existence must not leak, API_GUIDELINES).\nFailure modes: 401, 403, 404.",
+        "operationId": "read_record_metadata_api_v1_records__record_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Record Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordMetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Record Metadata",
+        "tags": [
+          "records"
+        ]
+      }
+    },
+    "/api/v1/records/{record_id}/download-url": {
+      "post": {
+        "description": "Issue a short-lived presigned download URL for the record's file.\n\nRoles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload) \u2014 the URL is issued\nonly after the relationship check (docs/SECURITY.md). M3 adds the consent check +\naudit-log write here for doctor access. Failure modes: 401, 403, 404, 503 (storage).",
+        "operationId": "create_download_url_api_v1_records__record_id__download_url_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Record Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadUrlResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Download Url",
+        "tags": [
+          "records"
         ]
       }
     },

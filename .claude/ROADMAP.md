@@ -12,7 +12,7 @@
 
 ---
 
-## M0 — Foundation (Month 1) ← CURRENT, split into sub-milestones by the PO
+## M0 — Foundation (Month 1) ✅ DONE, split into sub-milestones by the PO
 
 - **M0.1 — Engineering scaffold ✅ DONE** (2026-07-20): repo structure, docker-compose
   (Postgres+pgvector, Redis, MinIO), FastAPI skeleton, web monorepo shells, tooling, CI,
@@ -20,12 +20,15 @@
 - **M0.2 — Domain Foundation & Identity Design ✅ DONE** (2026-07-20): docs/DOMAIN_MODEL.md
   (entities, relationships, RBAC matrix, Health ID design), ADR-011 (Firebase Auth confirmed
   after formal comparison), ADR-012 (Health ID format), ADR-013 (RBAC layers). Design-only.
-- **M0.3 — Walking Skeleton** (next): Firebase Auth integration, Alembic + first migration,
-  Health ID issuance, patient registration/profile, patient web login → profile page,
-  OpenAPI-generated api-client.
+- **M0.3 — Walking Skeleton ✅ CODE DONE** (2026-08-28, merged as PR #1): Firebase Auth
+  integration, Alembic + migrations 0001–0002, Health ID issuance, patient registration/
+  profile, patient web login → profile page, OpenAPI-generated api-client, seed system.
 
-**Gate (unchanged):** a user can register, receive a `PHI-IND-2026-XXXXXXC` ID, log in, and see
-their profile in the patient web app, running via one `docker compose up`. CI green on GitHub.
+**Gate:** a user can register, receive a `PHI-IND-2026-XXXXXXC` ID, log in, and see their
+profile in the patient web app, running via one `docker compose up`. CI green on GitHub.
+*Status: code merged + pushed (PR #1). The live `docker compose up` + Firebase browser
+walk-through are deferred as PO ops/validation tasks (PO decision, 2026-08-28) — they do not
+block M2 implementation.*
 
 ## M1 — Research & Design (Month 1, parallel with M0)
 
@@ -35,7 +38,7 @@ deployment target, Flutter timing).
 
 **Gate:** Figma flows for the 3 core journeys approved; ADRs 009+ recorded for the open decisions.
 
-## M2 — Backend Core (Month 2)
+## M2 — Backend Core (Month 2) ← CURRENT, backend CODE DONE (2026-08-29)
 
 `records` module (upload → S3, metadata FHIR-aligned, categorization); `hospitals` +
 doctor management with RBAC; async worker skeleton (Redis queue); presigned-URL file access;
@@ -43,6 +46,9 @@ seed script for 3 simulated hospitals + synthetic patients.
 
 **Gate:** hospital admin can upload a record for a Health ID; file lands in MinIO/S3; metadata
 queryable; RBAC enforced (patient cannot call hospital endpoints); ≥80% coverage on `records`.
+*Status: implemented (ADR-014 arq, ADR-015 onboarding; 194 backend tests, records module
+88–100% coverage; every gate criterion verified against fakes). The live MinIO/Docker
+verification rides on the same deferred PO ops items as the M0.3 gate.*
 
 ## M3 — Consent Domain (Month 3)
 

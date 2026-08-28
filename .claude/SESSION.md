@@ -5,6 +5,92 @@
 
 ---
 
+## Session 013 — 2026-08-29
+
+**Phase:** M2 Backend Core — full milestone implementation. Branch `feature/medical-records`
+(cut from the merged `main`; PO approved starting M2 on 2026-08-28 and deferred the remaining
+M0.3 gate items — Docker, live Firebase browser run — as later ops/validation tasks).
+**Nothing committed** — suggested commit message in the session report.
+
+**Decisions (new ADRs, flagged for PO review):**
+- **ADR-014:** arq as the job queue (the choice ADR-008 deferred to M2 start). Enqueue-only
+  `JobQueue` port in `core/queue.py` (Arq impl, lazy pool + in-memory fake); enqueue failure
+  never fails an upload (job is advisory until M5's pipeline — logged, record stays UPLOADED).
+- **ADR-015:** onboarding = self-registration + human verification. Hospital admin registers
+  a NEW hospital (PENDING, random draw-and-insert `HID-XXXX`) and becomes its admin;
+  SYSTEM_ADMIN verifies (`POST /hospitals/{hid}/verify`); doctors self-register to a VERIFIED
+  hospital (PENDING) and the hospital admin activates/deactivates. Trust gap closed by the two
+  verification steps instead of an invite pipeline (needs notifications — not built).
+
+**Done (backend — records module + supporting seams):**
+- **Models + migration 0003:** `Doctor` (1:1 User, one hospital, status PENDING/ACTIVE/
+  DISABLED, registration_number), `HospitalAdmin` (1:1 User), `MedicalRecord` (FHIR
+  DocumentReference-shaped: category FK, origin HOSPITAL_UPLOAD/PATIENT_LOCKER, provenance
+  FKs, date_of_service, s3_key unique UUID-only, processing_status — M2 writes UPLOADED only,
+  is_hidden column for the M4 locker UI). Reversible, named constraints, indexed FKs.
+- **Storage port (ADR-005):** `records/storage.py` `ObjectStorage` ABC + `S3ObjectStorage`
+  (the ONLY boto3 importer, lazy client via to_thread, SigV4, all SDK errors →
+  `StorageUnavailableError`, sanitized Content-Disposition) + `records/fake.py`.
+- **Services:** `organizations.py` `HospitalService` (register/verify/own-hospital, doctor
+  register/list/activate — idempotent registrations mirroring the patients pattern, claims
+  provisioned in-transaction) and `service.py` `RecordService` (uploads validate type
+  {pdf,jpeg,png}/size/emptiness; flush row THEN put object — storage failure rolls back the
+  row; enqueue `record_uploaded` after storage, tolerated failure). **M2 read paths are
+  ADR-013 layer 2 only:** patient-own + hospital-own-upload; doctors have NO record access
+  until M3 wires `consent.enforce()` + audit in front of `get_for_caller`/
+  `create_download_link` (the single seam, documented in code).
+- **API:** POST/GET `/records` (multipart upload; role-scoped listing, category filter,
+  cursor pagination per API_GUIDELINES — new `shared/pagination.py` keyset helpers),
+  GET `/records/{id}`, POST `/records/{id}/download-url` (presigned, TTL
+  `PULSEOS_S3_PRESIGN_TTL_SECONDS`=300), GET `/record-categories`, `/hospitals/*` and
+  `/doctors/*` per ADR-015. 404-not-403 everywhere existence could leak; 413/415/422/409/503
+  mapped in `records/dependencies.py` (translator pattern from auth).
+- **Worker skeleton (ADR-008/014):** `workers/main.py` WorkerSettings + `workers/tasks.py`
+  no-op `record_uploaded` (logs opaque id only). Run: `arq app.workers.main.WorkerSettings`.
+- **Cross-module seams (isolation-preserving):** `patients/directory.py`
+  `PatientDirectoryService` (get_by_user_id / get_by_health_id — how records resolves
+  patients), `VerifiedToken.string_claim()` (moved from patients service, reused by org
+  registrations), `auth/seed.py` synthetic-user helper (refuses non-`synthetic:` subjects).
+- **Seed:** demo admin + ACTIVE demo doctor per simulated hospital (`records/seed.py`),
+  3 synthetic patients with pinned VALID Health IDs `PHI-IND-2026-1QE8DVR/5WD2FD4/AES1W87`
+  (`patients/seed.py`); `scripts/seed.py` orchestrates all of it, still strictly idempotent.
+- **Config:** `PULSEOS_S3_REGION`, `PULSEOS_S3_PRESIGN_TTL_SECONDS`,
+  `PULSEOS_RECORDS_MAX_UPLOAD_BYTES` (15 MiB default); deps arq/boto3/python-multipart.
+
+**Tests: 194 passing (106 → 194).** New: pagination cursors, queue port (arq mocked),
+storage port (boto3 mocked, header-injection-safe disposition), records repositories
+(keyset walk, scoping ValueError), org + record services (idempotency, HID redraw/
+exhaustion, cross-hospital 404s, storage-failure atomicity via HTTP retry, queue-outage
+tolerance incl. no-PHI log check), HTTP suites covering every M2 gate criterion (upload →
+fake MinIO → queryable; patient blocked from hospital endpoints; doctor/system-admin have
+zero record access), seed idempotency incl. demo actors + stable UUIDs, OpenAPI contract
+pins for all new paths. Coverage on records module 88–100% (gate ≥80%). ruff + mypy strict
+green; web gates green after `make api-client` regen (spec diff = the new M2 surface).
+
+**Gotcha worth remembering:** SQLite stores `CURRENT_TIMESTAMP` without microseconds but
+SQLAlchemy binds datetimes WITH them, so keyset `created_at = :cursor` could never match on
+SQLite and cursor pagination looped forever (caught by a hanging test). Fix in `core/db.py`:
+`TimestampMixin` uses `DateTime(timezone=True).with_variant(sqlite.DATETIME(
+truncate_microseconds=True), "sqlite")` — storage and bind formats now identical on SQLite;
+ties fall to the id tiebreaker; Postgres untouched.
+
+**Live smoke:** unmigrated DB → clean exit 1 + hint; migrate → seed run 1 creates 3+10+3+3+3;
+runs 2–3 create nothing; 0003 downgrade/upgrade round-trips. App boots with NO services and
+answers 401 problem+json with `WWW-Authenticate: Bearer` on all new surfaces.
+
+**Not done / still open:** M2 live verification vs real Postgres/MinIO/Redis (deferred PO ops
+items, same list as the M0.3 gate); ops script to attach a real Firebase login to a seeded
+hospital (needed for a live portal demo — TODO); rate limiting (TODO, needs live Redis);
+content sniffing on uploads (parking lot); ADR-009/010, OD-1…3 sign-off, deck conflict,
+Gemini key unchanged. ADR-015 awaits PO review (implemented per documented rationale).
+
+**Next:** commit + PR `feature/medical-records`; PO runs the deferred ops checklist (one
+`docker compose up` → migrate → seed → upload via API → file visible in MinIO console) to
+close the M0.3 + M2 gates; then M3 — Consent Domain (needs OD-1…3 sign-off), with M1 design
+items in parallel.
+
+---
+
 ## Session 012 — 2026-08-28
 
 **Phase:** 0 — M0.3 Walking Skeleton, final coding task: idempotent seed system.
