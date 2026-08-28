@@ -1,10 +1,29 @@
-// M0.1 scaffold shell — real screens arrive with their milestones (.claude/ROADMAP.md).
+// Patient portal routes (M0.3 part 3B): /login and the protected profile page.
+
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
+import { AuthProvider } from "./auth/AuthContext";
+import { ProtectedRoute } from "./components/ProtectedRoute";
+import { LoginPage } from "./pages/LoginPage";
+import { ProfilePage } from "./pages/ProfilePage";
 
 export function App() {
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem" }}>
-      <h1>PulseOS — Patient Portal</h1>
-      <p>Engineering scaffold (M0.1). No features yet.</p>
-    </main>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }

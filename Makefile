@@ -8,7 +8,7 @@ BACKEND := cd backend && . .venv/bin/activate &&
 
 .PHONY: help env up down logs install install-backend install-web \
 	dev-api dev-patient dev-doctor dev-hospital \
-	format lint typecheck test ci
+	api-client format lint typecheck test ci
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -45,6 +45,9 @@ dev-doctor: ## Run the doctor portal (http://localhost:5174)
 
 dev-hospital: ## Run the hospital portal (http://localhost:5175)
 	cd web && pnpm dev:hospital
+
+api-client: ## Regenerate web/packages/api-client from the backend OpenAPI spec (ADR-003)
+	scripts/generate-api-client.sh
 
 format: ## Auto-format backend and web
 	$(BACKEND) ruff format .

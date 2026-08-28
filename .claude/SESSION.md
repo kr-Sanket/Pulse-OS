@@ -5,6 +5,94 @@
 
 ---
 
+## Session 012 — 2026-08-28
+
+**Phase:** 0 — M0.3 Walking Skeleton, final coding task: idempotent seed system.
+Branch `feature/m0.3-patient-web` (still uncommitted incl. session 011; PO to commit —
+suggested message in the session report).
+
+**Done:**
+- **records module gets its first models** (`records/models.py`): minimal `Hospital`
+  (FHIR Organization — UUID PK, unique `hid` HID-XXXX business key, name, address,
+  verification_status PENDING/VERIFIED) and `RecordCategory` (unique `code` +
+  display_name; a seedable table, not a code enum, per DOMAIN_MODEL §1). Ownership
+  note: Hospital sits in `records` because DATABASE_DESIGN's entity map hangs
+  DocumentReference off Organization and ROADMAP M2 bundles hospitals with records;
+  revisit at M2 if doctor management argues otherwise (a move would be a reviewed
+  follow-up, not a schema change).
+- **Migration 0002** (`create_hospitals_and_record_categories`): reversible, named
+  constraints, same conventions as 0001; env.py imports records models.
+- **Repositories** (`records/repository.py`): HospitalRepository / RecordCategoryRepository
+  (get-by-business-key + add; persistence only).
+- **Seed logic in the owning module** (`records/seed.py`): `seed_reference_data(session)`
+  — insert-if-absent keyed on hid/code, never mutates existing rows, returns a
+  SeedResult; constants: HID-0001 TMH Jamshedpur / HID-0002 CMC Vellore / HID-0003
+  Apollo Hospitals (seeded VERIFIED — demo-ready), the exact 10 DOMAIN_MODEL categories.
+- **`scripts/seed.py`**: orchestration only — app Settings → engine → one session/
+  transaction → seed → summary; graceful exit 1 with a migrate hint on an unmigrated DB.
+- **Tests: 106 passing (102 → 106).** Idempotency across 11 runs in separate sessions
+  with stable counts AND stable UUIDs; exact documented reference data; backfill-only
+  behavior (pre-modified row is neither duplicated nor overwritten); constants pinned to
+  spec; migration-chain reversibility test extended to all four tables.
+- **Live smoke (the actual script, file SQLite via PULSEOS_DATABASE_URL):** unmigrated
+  DB → clean failure + hint; run 1 → 3+10 created; runs 2–10 → nothing; final counts 3/10.
+
+**M0.3 code is now complete.** Gate demo remains blocked on PO items: Docker
+(`make up`, migration + seed against real Postgres), GitHub push + CI, Firebase web
+config for the browser flow. ADR-009/010, OD-1…3, deck conflict, Gemini key unchanged.
+
+**Next:** commit + merge `feature/m0.3-patient-web`, then the M0.3 gate walk-through
+with the PO; then M1 decisions.
+
+---
+
+## Session 011 — 2026-08-28
+
+**Phase:** 0 — M0.3 Walking Skeleton, Part 3B: first end-to-end user flow (patient web).
+Branch `feature/m0.3-patient-web`. **Nothing committed** — PO asked for a suggested
+commit message only (see report).
+
+**Done — API client generation (ADR-003):**
+- `scripts/export_openapi.py` (deterministic spec → `web/packages/api-client/openapi.json`)
+  + `scripts/generate-api-client.sh` + `make api-client`. Generator: openapi-typescript →
+  `src/generated/schema.ts` (machine-owned; excluded from eslint/prettier), runtime:
+  openapi-fetch. Hand-written part is only `src/index.ts`: `createPulseOSClient({baseUrl,
+  getAccessToken, fetch?})` with a bearer-auth middleware (centralized — apps never touch
+  fetch/headers), exported types (PatientProfile etc.), RFC 7807 `problemDetail` helper.
+- Spec honesty fix: POST /patients/register now declares the idempotent 200 alongside 201.
+- Backend contract tests (`test_openapi.py`) pin the paths + camelCase schemas the client
+  is generated from.
+
+**Done — patient portal (React 19 + react-router 7 + Firebase web SDK 12, modular):**
+- `firebase.ts` (env-driven config, helpful error if unset; `.env.example` added),
+  `AuthContext` (single onAuthStateChanged listener; Google-popup sign-in per ADR-011's
+  documented fallback; signOut), `api.ts` (the app's single client instance),
+  `ProtectedRoute` + `LoadingScreen`, `LoginPage`, `ProfilePage` (Health ID, name, DOB,
+  gender, created date + sign-out; plain UI), routes `/login` and protected `/`.
+- **Transparent registration** (`profile/loadProfile.ts`, pure + unit-tested): GET /me →
+  403 ⇒ POST /register (fullName from displayName → email local part → placeholder) →
+  `getIdToken(true)` refresh → retry /me once (no loop). 409 role-conflict and other
+  problems surface their RFC 7807 detail.
+
+**Done — small fixes:** CORS middleware (new `PULSEOS_CORS_ORIGINS`, default = the three
+portal dev origins; Authorization allowed, X-Request-Id exposed; bearer-only so no
+credentials) — required for any browser→API call, was missing entirely. Tests in
+`test_cors.py`.
+
+**Tests: backend 102 (95 → 102: openapi contract 4, CORS 3); web 10 (1 → 10: api-client
+middleware/problemDetail 3, patient flow 6, ui 1).** All gates green: ruff, mypy strict,
+pytest; prettier, eslint, tsc, vitest, `pnpm build` (3 portals).
+
+**Not done / still open:** seed script stub (last M0.3 code item); real-Firebase live run
+of the web flow needs a Firebase web app config in `.env.local` (PO); Docker + push/CI
+still pending (PO) — the M0.3 gate demo needs both; ADR-009/010, OD-1…3 sign-off,
+deck conflict, Gemini key unchanged.
+
+**Next:** seed stub + M0.3 gate walk-through (register → Health ID → login → profile via
+one `docker compose up`), then PO items; M1 design work can proceed in parallel.
+
+---
+
 ## Session 010 — 2026-08-28
 
 **Phase:** 0 — M0.3 Walking Skeleton, Part 3A: Patient Foundation (backend). First real

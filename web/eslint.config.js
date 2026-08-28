@@ -4,7 +4,8 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "**/coverage/**"],
+    // src/generated is machine-owned (make api-client) — never linted, never hand-edited.
+    ignores: ["**/dist/**", "**/node_modules/**", "**/coverage/**", "**/src/generated/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

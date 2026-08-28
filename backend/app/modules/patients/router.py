@@ -14,7 +14,12 @@ from app.modules.patients.schemas import PatientProfileResponse, PatientRegistra
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 
-@router.post("/register", status_code=201, response_model=PatientProfileResponse)
+@router.post(
+    "/register",
+    status_code=201,
+    response_model=PatientProfileResponse,
+    responses={200: {"model": PatientProfileResponse, "description": "Already registered"}},
+)
 async def register_patient(
     body: PatientRegistrationRequest,
     identity: VerifiedIdentity,

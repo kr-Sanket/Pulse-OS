@@ -14,6 +14,7 @@ from app.core.db import Base
 # Module models — imported so their tables register on Base.metadata for autogenerate.
 from app.modules.auth import models as auth_models  # noqa: F401
 from app.modules.patients import models as patients_models  # noqa: F401
+from app.modules.records import models as records_models  # noqa: F401
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
