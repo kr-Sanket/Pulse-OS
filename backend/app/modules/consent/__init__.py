@@ -1,4 +1,21 @@
-"""consent module — owns its routers, services, repositories, schemas, and models.
+"""Consent module: granular access requests, immutable decisions, active grants, and enforcement."""
 
-See docs/SYSTEM_ARCHITECTURE.md for module responsibilities and isolation rules.
-"""
+from app.modules.consent.models import (
+    AccessRequest,
+    AccessRequestCategory,
+    ConsentDecision,
+    ConsentGrant,
+    DecisionType,
+    RequestStatus,
+)
+from app.modules.consent.service import ConsentService
+
+__all__ = [
+    "AccessRequest",
+    "AccessRequestCategory",
+    "ConsentDecision",
+    "ConsentGrant",
+    "ConsentService",
+    "DecisionType",
+    "RequestStatus",
+]
