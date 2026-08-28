@@ -32,7 +32,7 @@ Organization (hospital, HID-XXXX)
       │                 uploading org, OCR/processing status)
       └─< RecordChunk ─ Embedding (pgvector)
 
-Patient (Health ID PHI-IND-YYYY-NNNNNN, health profile, QR payload)
+Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
  ├─< DocumentReference (records are linked to exactly one patient)
  ├─< AccessRequest (from a practitioner/org; N requested categories)
  │    └─< ConsentDecision (per category: APPROVED | REJECTED; later REVOKED event)

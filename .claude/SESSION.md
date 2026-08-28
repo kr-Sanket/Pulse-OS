@@ -5,6 +5,79 @@
 
 ---
 
+## Session 010 — 2026-08-28
+
+**Phase:** 0 — M0.3 Walking Skeleton, Part 3A: Patient Foundation (backend). First real
+feature: persistence, registration, Health ID issuance, profile read. One commit.
+
+**Part 1 — Health ID doc consistency (ADR-012 now the only format anywhere):**
+- Fixed stale formats in PROJECT_OVERVIEW, DATABASE_DESIGN, API_GUIDELINES (which had
+  cited the *rejected sequential* `PHI-IND-2026-000001` as its opaque-ID example),
+  CONTEXT.md, CLAUDE.md, TODO.md.
+- DOMAIN_MODEL's example `PHI-IND-2026-7K3M9QX` was **not a valid ID** (its true ISO 7064
+  check char is `*`). Canonical example everywhere is now **`PHI-IND-2026-7K3M99X`** —
+  genuinely valid, verified by a test.
+
+**Done (backend):**
+- **core/db.py:** metadata naming convention (deterministic constraint names);
+  `UUIDPrimaryKeyMixin` + `TimestampMixin`; `get_db_session` now owns the transaction —
+  one session + one transaction per request, commit on success, rollback on exception.
+  Services never touch the session; repositories flush inside savepoints and translate
+  IntegrityError into domain errors.
+- **Models:** `auth/models.py` User (firebase_uid unique, role, status, phone/email from
+  verified token claims); `patients/models.py` Patient (user_id FK unique 1:1, health_id
+  unique business key, full_name, date_of_birth, gender). Enum columns are plain VARCHAR
+  (non-native, no CHECK) — values enforced by the typed app layer. No cross-module ORM
+  relationships; FK only.
+- **Migration 0001** (`create_users_and_patients`): handwritten, reversible, named
+  constraints; up/down/up round-trip tested. env.py imports module models.
+- **Health ID (`patients/health_id.py`):** ADR-012 exactly — 6 crypto-random Crockford
+  chars + ISO 7064 mod 37-2 check char over the alphanumeric ID body; case-insensitive
+  offline validation. **One strengthening:** generation redraws when the check char falls
+  outside Crockford (`I L O U *`, ~1/7 of draws) so issued IDs are unambiguous end to end;
+  validation stays strict ISO 7064.
+- **Auth extensions:** `set_custom_claims` on the provider port (Firebase impl via
+  to_thread with error mapping; fake records claims + failure injection);
+  `UserRepository`; `UserAccountService` (accounts.py — how other modules provision/look
+  up identities; claim names stay auth-internal); `AuthService.verify_credentials`
+  (authn without claims); `require_verified_identity` dependency + shared
+  `to_http_error` translator.
+- **Patients module:** repository / service / schemas / router per Clean Architecture.
+  `POST /api/v1/patients/register` (auth: verified identity, claims NOT required):
+  idempotent — existing account returns 200 with the same profile and re-provisions
+  claims (self-healing); fresh account: create User → draw-and-insert Patient (redraw on
+  health_id collision, 8-attempt cap) → provision claims **inside the request
+  transaction** (provider failure ⇒ full rollback, verified by test) → 201.
+  Role-mismatch → 409. `GET /api/v1/patients/me` behind RequirePatient (404 if row
+  missing). Shared `RequestModel` base (extra="forbid" per API_GUIDELINES).
+- **Tests: 95 passing (59 → 95).** Health ID (format, randomness, doc example validity,
+  exhaustive single-substitution + adjacent-transposition detection, Crockford-safe check
+  chars, invalid shapes incl. sequential style); repositories (CRUD, duplicate
+  translation, session usable after contained failures); service (register/idempotent/
+  role-conflict/collision-redraw/exhaustion/claims incl. failure); HTTP (201/200
+  idempotency, 401, 422 incl. unknown fields + future DOB, **atomicity on claim failure:
+  503 then retry gets 201 not 200**, /me after simulated token refresh, /me 403 wrong
+  role, /me 404 missing row); migration up/down/up; Firebase set_custom_claims mapping.
+  ruff + mypy strict green.
+
+**Gotcha worth remembering:** pysqlite implicitly commits around SAVEPOINT — it silently
+broke request-transaction rollback in the SQLite test harness (NOT in Postgres). Fixed
+with SQLAlchemy's documented recipe (tests/support.py `create_sqlite_test_engine`:
+driver isolation_level=None + explicit BEGIN event). Any future SQLite-backed test must
+use that helper.
+
+**Deliberately not done:** frontend/login page, api-client generation, QR, doctor/
+hospital modules, records, `/ready` migration-status check, rate limiting.
+
+**Still open:** unchanged PO items (push + CI, Docker, OD-1…3 sign-off, ADR-009/010,
+deck conflict, Gemini key).
+
+**Next:** M0.3 Part 3B — OpenAPI client generation script (scripts/), patient web login →
+profile page (Firebase web SDK → register/me), seed stub; then verify the M0.3 gate
+end-to-end (needs Docker + push for CI).
+
+---
+
 ## Session 009 — 2026-08-26
 
 **Phase:** 0 — M0.3 Walking Skeleton, Part 2: Authentication Foundation (ADR-011, ADR-013).

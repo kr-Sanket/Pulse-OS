@@ -10,11 +10,12 @@ import asyncio
 from alembic import context
 from app.core.config import get_settings
 from app.core.db import Base
+
+# Module models — imported so their tables register on Base.metadata for autogenerate.
+from app.modules.auth import models as auth_models  # noqa: F401
+from app.modules.patients import models as patients_models  # noqa: F401
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
-
-# Import module models here as milestones land, e.g.:
-# from app.modules.patients import models as patients_models
 
 config = context.config
 target_metadata = Base.metadata

@@ -17,7 +17,8 @@ time-costly for doctors.
 
 ## Solution
 
-1. **Universal Health Identity** — permanent `PHI-IND-2026-XXXXXX` per patient, plus QR identity.
+1. **Universal Health Identity** — permanent `PHI-IND-YYYY-XXXXXXC` per patient (random,
+   check-charactered — ADR-012; e.g. `PHI-IND-2026-7K3M99X`), plus QR identity.
 2. **Patient-controlled granular consent** — doctors request record *categories*; the patient
    approves/rejects each individually and can revoke anytime; every access is logged and visible
    to the patient forever.

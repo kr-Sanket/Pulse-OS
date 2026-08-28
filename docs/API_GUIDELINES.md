@@ -9,8 +9,8 @@
 - Resources are plural kebab-case nouns: `/patients`, `/access-requests`, `/consent-grants`.
   Actions that don't map to CRUD use a verb sub-resource: `POST /consent-grants/{id}/revoke`.
 - JSON bodies, `camelCase` fields (frontend-native); backend converts at the schema layer.
-- Public identifiers are opaque (UUIDs or domain IDs like `PHI-IND-2026-000001`) — never
-  sequential integers in URLs (enumeration risk).
+- Public identifiers are opaque (UUIDs or random domain IDs like `PHI-IND-2026-7K3M99X`,
+  ADR-012) — never sequential integers in URLs (enumeration risk).
 
 ## Requests & Responses
 

@@ -29,10 +29,16 @@ class AuthService:
     def __init__(self, provider: AuthenticationProvider) -> None:
         self._provider = provider
 
-    async def authenticate(self, authorization: str | None) -> AuthenticatedUser:
+    async def verify_credentials(self, authorization: str | None) -> VerifiedToken:
+        """Header parsing + token verification only — no PulseOS claims required.
+
+        This is the pre-registration identity: authentic Firebase subject, possibly
+        not yet provisioned (registration consumes exactly this state)."""
         token = _extract_bearer_token(authorization)
-        verified = await self._provider.verify_id_token(token)
-        return _to_authenticated_user(verified)
+        return await self._provider.verify_id_token(token)
+
+    async def authenticate(self, authorization: str | None) -> AuthenticatedUser:
+        return _to_authenticated_user(await self.verify_credentials(authorization))
 
 
 def _extract_bearer_token(authorization: str | None) -> str:

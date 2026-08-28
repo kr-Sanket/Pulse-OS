@@ -12,3 +12,13 @@ class ApiModel(BaseModel):
         populate_by_name=True,
         from_attributes=True,
     )
+
+
+class RequestModel(ApiModel):
+    """Base for request bodies: unknown fields are rejected on writes (API_GUIDELINES)."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+    )

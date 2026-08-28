@@ -28,3 +28,11 @@ class AuthenticationProvider(ABC):
         Raises ``InvalidTokenError`` / ``ExpiredTokenError`` for client-side problems and
         ``AuthProviderUnavailableError`` for server-side ones. Never raises SDK exceptions.
         """
+
+    @abstractmethod
+    async def set_custom_claims(self, firebase_uid: str, claims: Mapping[str, object]) -> None:
+        """Replace the subject's custom claims (they appear in tokens after refresh).
+
+        Raises ``InvalidTokenError`` if the subject no longer exists and
+        ``AuthProviderUnavailableError`` for server-side failures.
+        """

@@ -8,22 +8,54 @@ Repositories receive an ``AsyncSession`` via ``get_db_session``; domain services
 touch the session directly (Clean Architecture rule, docs/SYSTEM_ARCHITECTURE.md §Isolation).
 """
 
+import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 from fastapi import Request
+from sqlalchemy import DateTime, MetaData, Uuid, func
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.core.config import Settings
+
+# Deterministic constraint names so migrations can ALTER/DROP them by name on every
+# backend (docs/DATABASE_DESIGN.md: migrations are reversible, reviewed).
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(referred_table_name)s_%(column_0_name)s",
+    "pk": "pk_%(table_name)s",
+}
 
 
 class Base(DeclarativeBase):
     """Declarative base for all module models; its metadata is Alembic's autogenerate target."""
+
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+class UUIDPrimaryKeyMixin:
+    """UUID primary key, generated client-side (docs/DATABASE_DESIGN.md principle 6)."""
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+
+
+class TimestampMixin:
+    """UTC ``created_at``/``updated_at`` on every table (docs/DATABASE_DESIGN.md principle 6)."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 def create_db_engine(settings: Settings) -> AsyncEngine:
@@ -37,7 +69,13 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
 
 
 async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency yielding one AsyncSession per request (closed automatically)."""
+    """FastAPI dependency: one AsyncSession and one transaction per request.
+
+    Commits when the request handler returns cleanly, rolls back on any exception —
+    services and repositories only flush (and may use savepoints); they never commit.
+    This makes every use case atomic by construction (docs/API_GUIDELINES.md:
+    state-changing endpoints are transactional).
+    """
     factory: async_sessionmaker[AsyncSession] = request.app.state.db_sessionmaker
-    async with factory() as session:
+    async with factory() as session, session.begin():
         yield session

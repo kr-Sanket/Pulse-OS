@@ -147,7 +147,8 @@ what the caller couldn't read directly.
 - `C` — check character, ISO 7064 (mod 37-2) over the full ID: catches typos and
   transpositions offline, before any API call.
 
-Example: `PHI-IND-2026-7K3M9QX`.
+Example: `PHI-IND-2026-7K3M99X` (a genuinely valid ID — the `X` is the computed check
+character for body `7K3M99`, year 2026).
 
 **Generation:** draw random candidate → compute check char → INSERT with a DB unique
 constraint → on collision (p < 0.1% even at millions of IDs) redraw. No sequences, no
@@ -158,7 +159,7 @@ enumerable — an attacker could walk the ID space probing which patients exist,
 disclosed to competitors/reviewers. Random draws from 1.07B kill enumeration at negligible cost.
 The display format stays exactly as demo-friendly.
 
-**QR integration:** the identity QR encodes a versioned URI — `pulseos://p/v1/PHI-IND-2026-7K3M9QX`
+**QR integration:** the identity QR encodes a versioned URI — `pulseos://p/v1/PHI-IND-2026-7K3M99X`
 — containing **only** the Health ID (which the check char makes offline-validatable). No name,
 no PHI, no signature needed: the QR is a pointer, the server is the authority, and scanning is
 useful only to an authenticated Doctor/Hospital Admin whose search permission is rate-limited

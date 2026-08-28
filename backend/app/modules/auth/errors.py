@@ -37,3 +37,7 @@ class UnprovisionedAccountError(AuthError):
 
 class AuthProviderUnavailableError(AuthError):
     """The provider could not be reached or is misconfigured — a server-side problem."""
+
+
+class DuplicateUserError(AuthError):
+    """A user row for this provider subject already exists (unique firebase_uid)."""

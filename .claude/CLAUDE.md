@@ -6,7 +6,7 @@
 ## What PulseOS Is
 
 A **patient-centric healthcare interoperability platform** (final-year project, production-grade
-ambitions). Every patient gets a permanent **Pulse Health ID** (`PHI-IND-2026-XXXXXX`) usable
+ambitions). Every patient gets a permanent **Pulse Health ID** (`PHI-IND-YYYY-XXXXXXC`, ADR-012) usable
 across hospitals. Doctors discover that records exist elsewhere but can only open them after the
 patient grants **granular, per-category consent**. Every consent/access event is anchored to the
 **Polygon Amoy** blockchain. An **AI layer** (OCR → RAG → LLM) produces clinical summaries,

@@ -19,6 +19,10 @@ class FakeAuthProvider(AuthenticationProvider):
     def __init__(self) -> None:
         self._tokens: dict[str, VerifiedToken] = {}
         self._errors: dict[str, AuthError] = {}
+        #: Claims recorded by set_custom_claims, keyed by firebase_uid — assert on this.
+        self.custom_claims: dict[str, dict[str, object]] = {}
+        #: Set to make every set_custom_claims call raise (failure-path tests).
+        self.set_claims_error: AuthError | None = None
 
     def register_user(self, token: str, *, user_id: UUID, firebase_uid: str, role: Role) -> None:
         """Register a fully provisioned user (role + user id claims present)."""
@@ -45,3 +49,8 @@ class FakeAuthProvider(AuthenticationProvider):
             return self._tokens[token]
         except KeyError:
             raise InvalidTokenError() from None
+
+    async def set_custom_claims(self, firebase_uid: str, claims: Mapping[str, object]) -> None:
+        if self.set_claims_error is not None:
+            raise self.set_claims_error
+        self.custom_claims[firebase_uid] = dict(claims)

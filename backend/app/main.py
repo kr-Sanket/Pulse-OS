@@ -21,6 +21,7 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.modules.auth.firebase import FirebaseAuthProvider
 from app.modules.auth.router import router as auth_router
+from app.modules.patients.router import router as patients_router
 
 API_V1_PREFIX = "/api/v1"
 
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(application)
     application.include_router(health_router)
     application.include_router(auth_router, prefix=API_V1_PREFIX)
+    application.include_router(patients_router, prefix=API_V1_PREFIX)
     return application
 
 

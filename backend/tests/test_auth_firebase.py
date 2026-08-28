@@ -107,6 +107,46 @@ def test_certificate_fetch_failure_is_unavailable(monkeypatch: pytest.MonkeyPatc
         _verify(provider)
 
 
+def test_set_custom_claims_passes_claims_to_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _provider(monkeypatch)
+    recorded: dict[str, object] = {}
+
+    def fake_set(uid: str, claims: dict[str, object], app: object = None) -> None:
+        recorded["uid"] = uid
+        recorded["claims"] = claims
+
+    monkeypatch.setattr(firebase_auth, "set_custom_user_claims", fake_set)
+    asyncio.run(provider.set_custom_claims("fb-1", {"pulseos_role": "PATIENT"}))
+
+    assert recorded == {"uid": "fb-1", "claims": {"pulseos_role": "PATIENT"}}
+
+
+def test_set_custom_claims_for_unknown_subject_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _provider(monkeypatch)
+
+    def fake_set(uid: str, claims: dict[str, object], app: object = None) -> None:
+        raise firebase_auth.UserNotFoundError("gone")
+
+    monkeypatch.setattr(firebase_auth, "set_custom_user_claims", fake_set)
+    with pytest.raises(InvalidTokenError):
+        asyncio.run(provider.set_custom_claims("fb-1", {}))
+
+
+def test_set_custom_claims_unexpected_failure_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _provider(monkeypatch)
+
+    def fake_set(uid: str, claims: dict[str, object], app: object = None) -> None:
+        raise ConnectionError("network down")
+
+    monkeypatch.setattr(firebase_auth, "set_custom_user_claims", fake_set)
+    with pytest.raises(AuthProviderUnavailableError):
+        asyncio.run(provider.set_custom_claims("fb-1", {}))
+
+
 def test_broken_credentials_config_is_unavailable(tmp_path_factory: pytest.TempPathFactory) -> None:
     # Real _get_app path: a nonexistent service-account file fails initialization
     # locally (no network) and surfaces as a server-side error, not a token error.

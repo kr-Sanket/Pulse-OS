@@ -18,7 +18,7 @@ and every access is permanently logged where the patient can see it.
 
 ## The Three Core Journeys (demo-critical)
 
-1. **Identity:** register patient → issue `PHI-IND-2026-XXXXXX` → QR identity.
+1. **Identity:** register patient → issue `PHI-IND-2026-XXXXXXC` (ADR-012) → QR identity.
 2. **Interoperability + Consent (the thesis):** Hospital A uploads records → doctor at Hospital B
    searches ID → sees records *exist* but are locked → requests categories (CBC, MRI,
    Prescriptions) → patient gets push notification → approves per category → consent anchored
@@ -31,7 +31,7 @@ and every access is permanently logged where the patient can see it.
 
 | Term | Meaning |
 |---|---|
-| **PHI / Pulse Health ID** | Permanent patient identifier, format `PHI-IND-2026-XXXXXX`. Note: also collides with "Protected Health Information" — in this repo, write **Health ID** for the identifier and **PHI** only for protected health information. |
+| **PHI / Pulse Health ID** | Permanent patient identifier, format `PHI-IND-YYYY-XXXXXXC` (random Crockford Base32 + check character, ADR-012). Note: also collides with "Protected Health Information" — in this repo, write **Health ID** for the identifier and **PHI** only for protected health information. |
 | **HID** | Hospital ID, format `HID-XXXX` |
 | **Record category** | Consent granularity unit: e.g. CBC, MRI, X-Ray, Prescription, Discharge Summary |
 | **Consent grant** | Patient approval for one (requester, patient, category-set) tuple, revocable |

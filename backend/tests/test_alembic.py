@@ -2,6 +2,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import create_engine, inspect
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
@@ -13,9 +14,17 @@ def _config(database_url: str) -> Config:
     return config
 
 
+def _table_names(db_file: Path) -> set[str]:
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        return set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
 def test_alembic_env_runs_upgrade_head(tmp_path: Path) -> None:
-    # No revisions exist yet by design; this still executes env.py end-to-end
-    # (async engine, connection, migration context) against a throwaway SQLite DB.
+    # Executes env.py end-to-end (async engine, connection, migration context)
+    # against a throwaway SQLite DB.
     config = _config(f"sqlite+aiosqlite:///{tmp_path / 'alembic-smoke.db'}")
     command.upgrade(config, "head")
 
@@ -23,3 +32,20 @@ def test_alembic_env_runs_upgrade_head(tmp_path: Path) -> None:
 def test_alembic_offline_mode_configures(tmp_path: Path) -> None:
     config = _config(f"sqlite+aiosqlite:///{tmp_path / 'alembic-offline.db'}")
     command.upgrade(config, "head", sql=True)
+
+
+def test_first_migration_is_reversible(tmp_path: Path) -> None:
+    """Revision 0001: upgrade creates users + patients, downgrade removes them cleanly,
+    and the round-trip back up succeeds (docs/DATABASE_DESIGN.md: reversible migrations).
+    """
+    db_file = tmp_path / "migrate.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+
+    command.upgrade(config, "head")
+    assert {"users", "patients"} <= _table_names(db_file)
+
+    command.downgrade(config, "base")
+    assert not ({"users", "patients"} & _table_names(db_file))
+
+    command.upgrade(config, "head")
+    assert {"users", "patients"} <= _table_names(db_file)

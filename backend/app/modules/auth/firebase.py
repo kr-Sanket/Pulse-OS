@@ -12,6 +12,7 @@ Initialization is lazy and happens off the event loop: the API must boot and ser
 import asyncio
 import logging
 import threading
+from collections.abc import Mapping
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
@@ -64,6 +65,23 @@ class FirebaseAuthProvider(AuthenticationProvider):
         if not isinstance(firebase_uid, str) or not firebase_uid:
             raise InvalidTokenError()
         return VerifiedToken(firebase_uid=firebase_uid, claims=claims)
+
+    async def set_custom_claims(self, firebase_uid: str, claims: Mapping[str, object]) -> None:
+        try:
+            await asyncio.to_thread(self._set_claims_sync, firebase_uid, dict(claims))
+        except AuthProviderUnavailableError:
+            raise
+        except firebase_auth.UserNotFoundError as exc:
+            raise InvalidTokenError() from exc
+        except ValueError as exc:  # SDK rejects malformed uid/claims client-side
+            raise InvalidTokenError() from exc
+        except Exception as exc:
+            logger.exception("firebase set_custom_claims failed unexpectedly")
+            raise AuthProviderUnavailableError() from exc
+
+    def _set_claims_sync(self, firebase_uid: str, claims: dict[str, object]) -> None:
+        app = self._get_app()
+        firebase_auth.set_custom_user_claims(firebase_uid, claims, app=app)
 
     def _verify_sync(self, token: str) -> dict[str, object]:
         app = self._get_app()

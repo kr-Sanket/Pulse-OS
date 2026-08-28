@@ -34,7 +34,9 @@
 - [x] BE: `auth` module — Firebase Auth port + verification dependency, role claims
       (`pulseos_role`/`pulseos_user_id`), role gates per ADR-013 layer 1 — session 009.
       Claim *provisioning* happens at registration (patients module, Part 3).
-- [ ] BE: `patients` module — registration, Health ID issuance (`PHI-IND-2026-XXXXXX`), profile read.
+- [x] BE: `patients` module — registration (idempotent, atomic with claim provisioning),
+      Health ID issuance (`PHI-IND-YYYY-XXXXXXC`, ADR-012, draw-and-insert), profile read,
+      first Alembic migration (0001: users + patients) — session 010.
 - [ ] FE: patient app login → profile page; `api-client` generation from OpenAPI (script in scripts/).
 - [ ] ANY: Seed script stub for 3 simulated hospitals.
 
