@@ -34,18 +34,21 @@ def test_alembic_offline_mode_configures(tmp_path: Path) -> None:
     command.upgrade(config, "head", sql=True)
 
 
-def test_first_migration_is_reversible(tmp_path: Path) -> None:
-    """Revision 0001: upgrade creates users + patients, downgrade removes them cleanly,
-    and the round-trip back up succeeds (docs/DATABASE_DESIGN.md: reversible migrations).
+APP_TABLES = {"users", "patients", "hospitals", "record_categories"}
+
+
+def test_migration_chain_is_reversible(tmp_path: Path) -> None:
+    """Full chain (0001 + 0002): upgrade creates every table, downgrade removes them
+    cleanly, and the round-trip back up succeeds (docs/DATABASE_DESIGN.md: reversible).
     """
     db_file = tmp_path / "migrate.db"
     config = _config(f"sqlite+aiosqlite:///{db_file}")
 
     command.upgrade(config, "head")
-    assert {"users", "patients"} <= _table_names(db_file)
+    assert _table_names(db_file) >= APP_TABLES
 
     command.downgrade(config, "base")
-    assert not ({"users", "patients"} & _table_names(db_file))
+    assert not (APP_TABLES & _table_names(db_file))
 
     command.upgrade(config, "head")
-    assert {"users", "patients"} <= _table_names(db_file)
+    assert _table_names(db_file) >= APP_TABLES

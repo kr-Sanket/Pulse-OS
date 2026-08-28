@@ -37,8 +37,12 @@
 - [x] BE: `patients` module — registration (idempotent, atomic with claim provisioning),
       Health ID issuance (`PHI-IND-YYYY-XXXXXXC`, ADR-012, draw-and-insert), profile read,
       first Alembic migration (0001: users + patients) — session 010.
-- [ ] FE: patient app login → profile page; `api-client` generation from OpenAPI (script in scripts/).
-- [ ] ANY: Seed script stub for 3 simulated hospitals.
+- [x] FE: patient app login → profile page (Firebase Google sign-in, transparent
+      registration, protected routing); `api-client` generated from OpenAPI
+      (`make api-client`, openapi-typescript + openapi-fetch) — session 011, branch
+      `feature/m0.3-patient-web` (uncommitted; PO to review + commit).
+- [x] ANY: Seed script — idempotent `scripts/seed.py` (3 simulated hospitals + record-category
+      vocabulary, migration 0002) — session 012. Synthetic patients/doctors extend it at M2.
 
 ## M1 — Research & Design (parallel)
 

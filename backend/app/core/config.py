@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     # Credentials. Without either, auth endpoints answer 503; the rest of the API works.
     firebase_credentials_file: str | None = None
 
+    # Browser origins allowed to call the API (the three portal dev servers by default).
+    # Env format is JSON: PULSEOS_CORS_ORIGINS=["https://patient.example.com"]
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+    ]
+
     s3_endpoint_url: str = "http://localhost:9000"
     s3_access_key: str = "pulseos"
     s3_secret_key: str = "pulseos-local-secret"
