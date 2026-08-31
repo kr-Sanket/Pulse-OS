@@ -23,6 +23,7 @@ from app.core.middleware import RequestContextMiddleware
 from app.core.queue import ArqJobQueue
 from app.modules.auth.firebase import FirebaseAuthProvider
 from app.modules.auth.router import router as auth_router
+from app.modules.consent.router import access_requests_router, consent_grants_router
 from app.modules.patients.router import router as patients_router
 from app.modules.records.organizations_router import doctors_router, hospitals_router
 from app.modules.records.router import categories_router, records_router
@@ -77,6 +78,8 @@ def create_app() -> FastAPI:
     application.include_router(doctors_router, prefix=API_V1_PREFIX)
     application.include_router(records_router, prefix=API_V1_PREFIX)
     application.include_router(categories_router, prefix=API_V1_PREFIX)
+    application.include_router(access_requests_router, prefix=API_V1_PREFIX)
+    application.include_router(consent_grants_router, prefix=API_V1_PREFIX)
     return application
 
 

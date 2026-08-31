@@ -42,11 +42,16 @@ APP_TABLES = {
     "doctors",
     "hospital_admins",
     "medical_records",
+    "consent_requests",
+    "consent_request_categories",
+    "consent_decisions",
+    "consent_grants",
+    "audit_logs",
 }
 
 
 def test_migration_chain_is_reversible(tmp_path: Path) -> None:
-    """Full chain (0001 + 0002): upgrade creates every table, downgrade removes them
+    """Full chain (0001-0004): upgrade creates every table, downgrade removes them
     cleanly, and the round-trip back up succeeds (docs/DATABASE_DESIGN.md: reversible).
     """
     db_file = tmp_path / "migrate.db"

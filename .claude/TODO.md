@@ -9,11 +9,16 @@
       and M2 gate demos, not blocking implementation: install Docker + verify `make up`;
       run migrations + `scripts/seed.py` against real Postgres; live browser flow with a
       Firebase web config in `.env.local`; verify record upload lands in real MinIO.
-- [ ] Formally sign off OD-1 (unclaimed patients: recommend NO for MVP), OD-2 (grant expiry:
-      recommend 90d adjustable), OD-3 (grant exposes health profile: recommend YES, explicit
-      on consent screen) — see DOMAIN_MODEL.md §5. Needed before M3 consent implementation.
-- [ ] Review ADR-015 (self-registration + verification onboarding for hospitals/doctors) —
-      implemented at M2 per the documented rationale; flag any objection before M3 builds on it.
+- [ ] **Retrospectively sign off OD-1…3** — M3 shipped without them, running on the documented
+      recommendations: OD-1 unclaimed patients NO; OD-2 grant expiry 90d, injected as a service
+      default (`DEFAULT_GRANT_TTL`) and overridable per approval, not hard-coded; OD-3 grant
+      exposes health profile — **not implemented either way**, so a ruling still changes code.
+      See DOMAIN_MODEL.md §5.
+- [ ] Review ADR-015 (self-registration + verification onboarding) and **ADR-016…019** (M3:
+      records ⇄ consent dependency, return-not-raise for audited failures, `ACCESS_DENIED`,
+      SHA-256 until keccak256) — all implemented per their documented rationale.
+- [ ] Amend DOMAIN_MODEL.md §1: the audit action vocabulary there is now a strict subset of the
+      implemented one (`ACCESS_DENIED` missing) — ADR-018.
 - [ ] Resolve Review-1 deck conflict: Spring Boot + Synthea (slide 20) vs ADR-001 FastAPI +
       3-simulated-hospitals plan — amend ADRs or fix the slide (see SESSION.md session 005).
 - [ ] Decide ADR-009 (deployment: Render vs AWS) — needed by M1 gate.
@@ -26,24 +31,19 @@
   · M0.3 walking skeleton ✅ (2026-08-28, sessions 008–012, merged as PR #1). Gate demo rides
   on the deferred PO ops items above.
 
-## M2 — Backend Core (code done 2026-08-29, session 013 — branch `feature/medical-records`)
+## M2 — Backend Core ✅ DONE (2026-08-29, merged to `main`)
 
-- [x] BE: ADR-014 — arq chosen as the job queue; `core/queue.py` port (Arq + in-memory);
-      worker entry point `arq app.workers.main.WorkerSettings`; no-op `record_uploaded` task.
-- [x] BE: ADR-015 — onboarding flows; `records` org tables (Doctor, HospitalAdmin) +
-      `MedicalRecord`, migration 0003; hospital register/verify; doctor register/activate/
-      deactivate/list (cursor-paginated).
-- [x] BE: record upload (multipart) → `ObjectStorage` port (S3/MinIO impl + fake), hospital
-      + patient-locker flows; relationship-scoped list/get; presigned download URLs
-      (M3 will insert `consent.enforce()` + audit ahead of these reads — doctors have NO
-      record access until then, by design).
-- [x] ANY: seed extended — demo admins + doctors per simulated hospital, 3 synthetic
-      patients with pinned valid Health IDs; idempotency re-verified end to end.
-- [x] ANY: api-client regenerated from the new OpenAPI spec; all web gates green.
 - [ ] ANY: small ops script to attach a *real* Firebase login as admin of a *seeded* hospital
       (set claims + insert HospitalAdmin row) — needed for a live portal demo (ADR-015 note).
-- [ ] BE: rate limiting middleware (Redis buckets; stricter on auth) — deferred since M0.3,
-      fits when Redis is verified live (M2 gate ops or early M3).
+- [ ] BE: **no code path provisions `Role.SYSTEM_ADMIN`**, so `POST /hospitals/{hid}/verify` has
+      no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in demos
+      because the three simulated hospitals are seeded `VERIFIED`.
+- [ ] BE: rate limiting middleware (Redis buckets; stricter on auth) — deferred since M0.3.
+      **Now load-bearing:** see M3 findings below.
+- [ ] BE: `ObjectStorage.put_object` sends no `ServerSideEncryption`; ADR-005 says
+      "server-side encryption on". Unimplemented clause of an accepted ADR, on the PHI path.
+- [ ] BE: `S3ObjectStorage._get_client()` builds the boto3 client lazily inside worker threads
+      with no lock, unlike `FirebaseAuthProvider` which guards the identical pattern.
 
 ## M1 — Research & Design (parallel)
 
@@ -52,13 +52,37 @@
 - [ ] AI: Spike — Gemini free-tier limits vs expected summary/copilot volume; report findings.
 - [ ] AI: Spike — EasyOCR vs Tesseract accuracy on 5 synthetic Indian lab-report PDFs.
 
-## M3 — Consent Domain (next implementation milestone, after M2 gate + OD-1…3 sign-off)
+## M3 — Consent Domain (backend ✅ 2026-09-01, branch `feature/consent`)
 
-- [ ] BE: consent module — AccessRequest → per-category ConsentDecision/ConsentGrant → revoke;
-      `consent.enforce()` dependency wired into every record read; append-only AuditEvent
-      (same-transaction); `AuditAnchor` interface + DB impl; notification fan-out stub.
-- [ ] FE: doctor portal — search by Health ID, request access; patient portal — consent inbox,
-      audit log view.
+- [x] BE: consent module — access request → per-category decision → grant → revoke;
+      `consent.enforce()` on every non-owner record read; append-only `AuditLog`; migration 0004.
+- [x] BE: records ⇄ consent integration, routers mounted, api-client regenerated (17 → 23 paths).
+- [x] BE: merge-blocking review fixes — denied downloads now durably audited (M3-A); `is_hidden`
+      enforced against consent reads (M3-C).
+- [ ] ANY: **commit branch `feature/consent`** — only the schema (`a893611`) is committed; the
+      repository, service, HTTP, integration, tests and these docs are not.
+
+### Deferred M3 review findings (backend)
+
+- [ ] BE: **M3-B** — `GET /records` returns full metadata (filenames, dates, descriptions) and
+      writes **no** audit event. SYSTEM_ARCHITECTURE rule 3 covers "metadata-beyond-existence";
+      CHECKLIST:26 requires an entry for every read. Either audit listings or amend the rule.
+- [ ] BE: **M3-D** — `POST /access-requests` is an unthrottled Health-ID existence oracle
+      (201 for a real ID, 422 for a fake one). SECURITY.md names rate limiting as the control.
+      Must not survive into M7.
+- [ ] BE: **M3-E** — hospital-admin denials are unaudited (layer 2 refuses before the choke
+      point), while clinician denials are logged. Same family as the hidden-record refusal,
+      which also writes nothing. One ruling should settle both.
+- [ ] BE: **systemic** — no security event survives a failed request; ADR-017 treats the two
+      read paths only. The durable fix (independent audit sink or outbox) needs its own ADR and
+      changes DOMAIN_MODEL §1's same-transaction rule.
+- [ ] BE: minors — `ConsentGrantRepository.list_page_by_patient` has no caller (a patient cannot
+      list, therefore cannot revoke, a grant through any endpoint); N+1 on consent listings;
+      `revokedAt` serialises naive on SQLite / aware on Postgres (API_GUIDELINES:28); records'
+      read endpoints still declare only 200/422 in the spec; expiry sweep and the
+      `(patient_id, status, …)` inbox index absent; `get_request_context` duplicated in two
+      modules; three names for one concept (`ConsentRequest` / `/access-requests` /
+      DOMAIN_MODEL's `AccessRequest`).
 
 ## Parking Lot (not now)
 
