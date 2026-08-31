@@ -1,10 +1,11 @@
 """Records domain service: upload → object storage, metadata queries, presigned downloads.
 
-M2 scope (ROADMAP): the only read relationships are ADR-013 **layer 2** — a patient reads
-their own records; a hospital admin reads records their hospital uploaded. Doctors have NO
-read path here: doctor access is consent-gated and arrives with the consent module (M3),
-which will add the ``consent.enforce()`` dependency + audit write in front of these reads
-(docs/SYSTEM_ARCHITECTURE.md rule 3). Nothing in this service may widen access before that.
+Read authorization is ADR-013's ordered layers meeting at one seam. Layer 2 — a hospital
+reads what it uploaded — is decided here, because only this module knows who uploaded what.
+Everything else goes through ``consent.enforce``: a patient reading their own records passes
+trivially and is still logged, and a clinician passes only on an active grant
+(docs/SYSTEM_ARCHITECTURE.md rule 3). Every read of record content crosses that seam exactly
+once, and a refusal is reported as "not found" so existence never leaks.
 
 Framework-free; owns no transaction. The object-storage write happens AFTER the metadata
 flush, so a DB failure never leaves a file behind, and a storage failure rolls back the
@@ -15,11 +16,13 @@ harmless, unreferenced).
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Final
+from typing import Final, Protocol
 from uuid import UUID, uuid4
 
 from app.core.queue import JobQueue, QueueUnavailableError
 from app.modules.auth.domain import AuthenticatedUser, Role
+from app.modules.consent.errors import AccessDeniedError
+from app.modules.consent.models import AuditAction
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.records.errors import (
     EmptyFileError,
@@ -55,6 +58,26 @@ ALLOWED_CONTENT_TYPES: Final = ("application/pdf", "image/jpeg", "image/png")
 
 #: Worker task emitted per upload (ADR-014); the M5 pipeline consumes it.
 RECORD_UPLOADED_TASK: Final = "record_uploaded"
+
+
+class ConsentEnforcer(Protocol):
+    """The consent module's authorization choke point, as this module needs it.
+
+    A protocol rather than an import of ``ConsentService`` so the dependency is one method
+    wide: records asks whether a read is permitted and consent answers by returning or
+    raising, auditing the outcome either way (ADR-013 layer 3, ADR-004).
+    """
+
+    async def enforce(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        category_id: UUID,
+        action: AuditAction,
+        record_id: UUID | None = None,
+        request_context: str | None = None,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +119,7 @@ class RecordService:
         patients: PatientDirectoryService,
         storage: ObjectStorage,
         queue: JobQueue,
+        consent: ConsentEnforcer,
         *,
         presign_ttl_seconds: int,
         max_upload_bytes: int,
@@ -107,6 +131,7 @@ class RecordService:
         self._patients = patients
         self._storage = storage
         self._queue = queue
+        self._consent = consent
         self._presign_ttl_seconds = presign_ttl_seconds
         self.max_upload_bytes = max_upload_bytes
 
@@ -174,7 +199,7 @@ class RecordService:
         )
         return RecordView(record=record, category=category, hospital=None)
 
-    # -- reads (ADR-013 layer 2 only at M2 — see module docstring) --------------------
+    # -- reads (ADR-013 layers 2 + 3 — see module docstring) --------------------------
 
     async def list_for_caller(
         self,
@@ -195,7 +220,7 @@ class RecordService:
             rows = await self._records.list_page(
                 patient_id=patient.id, category_id=category_id, after=after, limit=limit + 1
             )
-        else:  # HOSPITAL_ADMIN (the router's role gate admits no other role)
+        elif caller.role is Role.HOSPITAL_ADMIN:
             admin = await self._admins.get_by_user_id(caller.user_id)
             if admin is None:
                 raise ProfileNotFoundError()
@@ -205,6 +230,10 @@ class RecordService:
                 after=after,
                 limit=limit + 1,
             )
+        else:
+            # No other role has a listing scope. Fail closed by construction rather than
+            # by relying on the route's gate to admit nobody else.
+            raise ProfileNotFoundError()
         has_more = len(rows) > limit
         page = rows[:limit]
         next_cursor = None
@@ -213,21 +242,37 @@ class RecordService:
             next_cursor = encode_cursor(CursorKey(created_at=last.created_at, item_id=last.id))
         return RecordPage(items=[self._to_view(row) for row in page], next_cursor=next_cursor)
 
-    async def get_for_caller(self, caller: AuthenticatedUser, record_id: UUID) -> RecordView:
-        """Single record metadata; outside the caller's relationship scope it is
-        indistinguishable from nonexistent (404-not-403, docs/API_GUIDELINES.md)."""
+    async def get_for_caller(
+        self,
+        caller: AuthenticatedUser,
+        record_id: UUID,
+        *,
+        action: AuditAction = AuditAction.RECORD_VIEWED,
+        request_context: str | None = None,
+    ) -> RecordView:
+        """Single record metadata, authorized and audited; outside the caller's scope it is
+        indistinguishable from nonexistent (404-not-403, docs/API_GUIDELINES.md).
+
+        The one place a record read is authorized. ``action`` distinguishes what the audit
+        trail records — reading metadata is not the same event as taking the file.
+        """
         row = await self._records.get_with_context(record_id)
-        if row is None or not await self._caller_may_read(caller, row[0]):
+        if row is None:
             raise RecordNotFoundError()
+        await self._authorize_read(caller, row[0], action=action, request_context=request_context)
         return self._to_view(row)
 
     async def create_download_link(
-        self, caller: AuthenticatedUser, record_id: UUID
+        self, caller: AuthenticatedUser, record_id: UUID, *, request_context: str | None = None
     ) -> DownloadLink:
-        """Short-lived presigned URL for the record's file, issued only after the
-        relationship check. M3 wires ``consent.enforce()`` + the audit write in front of
-        this — file access is already funneled through this single method."""
-        view = await self.get_for_caller(caller, record_id)
+        """Short-lived presigned URL for the record's file, issued only after the same
+        authorization every metadata read passes — recorded as a download, not a view."""
+        view = await self.get_for_caller(
+            caller,
+            record_id,
+            action=AuditAction.RECORD_DOWNLOADED,
+            request_context=request_context,
+        )
         url = await self._storage.create_download_url(
             view.record.s3_key,
             expires_in_seconds=self._presign_ttl_seconds,
@@ -292,18 +337,52 @@ class RecordService:
             logger.warning("record_uploaded enqueue failed", extra={"record_id": str(record_id)})
         return record
 
-    async def _caller_may_read(self, caller: AuthenticatedUser, record: MedicalRecord) -> bool:
-        if caller.role is Role.PATIENT:
-            patient = await self._patients.get_by_user_id(caller.user_id)
-            return patient is not None and record.patient_id == patient.id
+    async def _authorize_read(
+        self,
+        caller: AuthenticatedUser,
+        record: MedicalRecord,
+        *,
+        action: AuditAction,
+        request_context: str | None,
+    ) -> None:
+        """Permit the read or raise ``RecordNotFoundError``. Never returns a boolean, so a
+        caller cannot proceed by ignoring the answer."""
         if caller.role is Role.HOSPITAL_ADMIN:
+            # ADR-013 layer 2, unchanged from M2: a hospital may read what it uploaded, and
+            # consent has no say because the basis is the upload relationship, not a grant.
+            # Only this module can evaluate that, so it does not cross the choke point.
             admin = await self._admins.get_by_user_id(caller.user_id)
-            return (
-                admin is not None
-                and record.uploaded_by_hospital_id is not None
-                and record.uploaded_by_hospital_id == admin.hospital_id
+            if (
+                admin is None
+                or record.uploaded_by_hospital_id is None
+                or record.uploaded_by_hospital_id != admin.hospital_id
+            ):
+                raise RecordNotFoundError()
+            return
+        if record.is_hidden and caller.role is not Role.PATIENT:
+            # Patient-controlled visibility (docs/DOMAIN_MODEL.md §1). Hiding withdraws a
+            # record from the set consent is able to share, so it is settled before the
+            # choke point rather than inside it: there is no grant that could answer this,
+            # and asking consent would either log a view that never happened or a denial of
+            # a grant that is in fact valid. To a grantee the record is simply not there.
+            # Spelled as "not PATIENT" rather than "is DOCTOR" so a role added to the read
+            # gate later inherits the restriction instead of an exemption; the owner check
+            # itself stays with enforce, which refuses a patient who is not the owner.
+            raise RecordNotFoundError()
+        try:
+            # Patients pass trivially, clinicians only on an active grant; either way the
+            # outcome is audited inside consent, in this request's transaction.
+            await self._consent.enforce(
+                caller,
+                patient_id=record.patient_id,
+                category_id=record.category_id,
+                action=action,
+                record_id=record.id,
+                request_context=request_context,
             )
-        return False  # DOCTOR waits for consent (M3); SYSTEM_ADMIN never reads content
+        except AccessDeniedError as exc:
+            # A refusal must be indistinguishable from a record that does not exist.
+            raise RecordNotFoundError() from exc
 
     def _to_view(self, row: RecordRow) -> RecordView:
         record, category, hospital = row

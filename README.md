@@ -64,13 +64,17 @@ gates: [`.claude/ROADMAP.md`](.claude/ROADMAP.md).
 
 ## Status
 
-**M0 complete; M2 backend core implemented.** The walking skeleton (M0.3) shipped: Firebase
+**M0 complete; M2 and M3 backends implemented.** The walking skeleton (M0.3) shipped: Firebase
 auth, Health ID issuance, patient registration/profile, patient web portal, generated
-api-client, idempotent seed. M2 adds the `records` backend: hospital/doctor onboarding and
-management (ADR-015), record upload → S3/MinIO with FHIR-aligned metadata, presigned
-downloads, the arq worker skeleton (ADR-014), and demo seed actors. Remaining before the M2
-gate demo: Docker/MinIO live verification (deferred PO ops items). See
-[`.claude/ROADMAP.md`](.claude/ROADMAP.md) and [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md).
+api-client, idempotent seed. M2 added the `records` backend: hospital/doctor onboarding
+(ADR-015), record upload → S3/MinIO with FHIR-aligned metadata, presigned downloads, and the
+arq worker skeleton (ADR-014). M3 adds the `consent` backend — the heart of the system: access
+request → per-category approve/reject → revoke, with a single enforcement choke point in front
+of every non-owner record read and an append-only, hash-chained audit log behind it
+(ADR-016…019). Still to come for M3: the doctor and patient portal journeys, so the consent
+flow is not yet demonstrable end to end. Also outstanding: Docker/MinIO live verification
+(deferred PO ops items). See [`.claude/ROADMAP.md`](.claude/ROADMAP.md) and
+[`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md).
 
 ## Stack (summary)
 

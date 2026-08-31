@@ -14,6 +14,14 @@ import pytest
 from app.core.queue import InMemoryJobQueue, QueueUnavailableError
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.models import User
+from app.modules.consent.repository import (
+    AuditLogRepository,
+    ConsentDecisionRepository,
+    ConsentGrantRepository,
+    ConsentRequestCategoryRepository,
+    ConsentRequestRepository,
+)
+from app.modules.consent.service import ConsentService
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
@@ -47,7 +55,7 @@ from app.modules.records.service import RECORD_UPLOADED_TASK, FileUpload, Record
 from app.shared.pagination import CursorKey, decode_cursor
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.support import sqlite_session
+from tests.support import FakeClinicianDirectory, sqlite_session
 
 PDF = FileUpload(filename="cbc report.pdf", content_type="application/pdf", data=b"%PDF-1.7 x")
 
@@ -55,10 +63,13 @@ PDF = FileUpload(filename="cbc report.pdf", content_type="application/pdf", data
 @dataclass
 class Harness:
     service: RecordService
+    consent: ConsentService
+    audit: AuditLogRepository
     storage: FakeObjectStorage
     queue: InMemoryJobQueue
     admin_caller: AuthenticatedUser
     patient_caller: AuthenticatedUser
+    doctor_caller: AuthenticatedUser
     patient: Patient
     hospital: Hospital
 
@@ -81,7 +92,8 @@ async def _harness(
     session.add(hospital)
     admin_user = User(firebase_uid=f"fb-admin-{uuid4()}", role=Role.HOSPITAL_ADMIN)
     patient_user = User(firebase_uid=f"fb-patient-{uuid4()}", role=Role.PATIENT)
-    session.add_all([admin_user, patient_user])
+    doctor_user = User(firebase_uid=f"fb-doctor-{uuid4()}", role=Role.DOCTOR)
+    session.add_all([admin_user, patient_user, doctor_user])
     await session.flush()
     session.add(HospitalAdmin(user_id=admin_user.id, hospital_id=hospital.id, full_name="Admin"))
     patient = Patient(
@@ -92,6 +104,15 @@ async def _harness(
 
     storage = FakeObjectStorage()
     queue = InMemoryJobQueue()
+    consent = ConsentService(
+        requests=ConsentRequestRepository(session),
+        request_categories=ConsentRequestCategoryRepository(session),
+        decisions=ConsentDecisionRepository(session),
+        grants=ConsentGrantRepository(session),
+        audit=AuditLogRepository(session),
+        patients=PatientDirectoryService(PatientRepository(session)),
+        clinicians=FakeClinicianDirectory(),
+    )
     service = RecordService(
         records=MedicalRecordRepository(session),
         categories=RecordCategoryRepository(session),
@@ -100,11 +121,14 @@ async def _harness(
         patients=PatientDirectoryService(PatientRepository(session)),
         storage=storage,
         queue=queue,
+        consent=consent,
         presign_ttl_seconds=300,
         max_upload_bytes=max_upload_bytes,
     )
     return Harness(
         service=service,
+        consent=consent,
+        audit=AuditLogRepository(session),
         storage=storage,
         queue=queue,
         admin_caller=AuthenticatedUser(
@@ -112,6 +136,9 @@ async def _harness(
         ),
         patient_caller=AuthenticatedUser(
             user_id=patient_user.id, firebase_uid=patient_user.firebase_uid, role=Role.PATIENT
+        ),
+        doctor_caller=AuthenticatedUser(
+            user_id=doctor_user.id, firebase_uid=doctor_user.firebase_uid, role=Role.DOCTOR
         ),
         patient=patient,
         hospital=hospital,
@@ -344,10 +371,13 @@ def test_reads_outside_the_relationship_scope_are_404() -> None:
             with pytest.raises(RecordNotFoundError):
                 await h.service.get_for_caller(h.patient_caller, uuid4())
 
-            # A doctor has no read path at M2 at all (consent arrives at M3).
-            doctor = AuthenticatedUser(user_id=uuid4(), firebase_uid="fb-doc", role=Role.DOCTOR)
+            # A clinician without a grant is refused, and cannot tell refusal from absence.
             with pytest.raises(RecordNotFoundError):
-                await h.service.get_for_caller(doctor, locker_view.record.id)
+                await h.service.get_for_caller(h.doctor_caller, locker_view.record.id)
+            # ...and the refusal is on the record, not silent: consent audited it.
+            trail = await h.audit.list_page_by_patient(h.patient.id, after=None, limit=10)
+            assert [row.action.value for row in trail] == ["ACCESS_DENIED"]
+            assert trail[0].target_record_id == locker_view.record.id
 
     asyncio.run(scenario())
 

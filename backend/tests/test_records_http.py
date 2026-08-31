@@ -6,7 +6,7 @@ a patient cannot call hospital surfaces, a doctor/system-admin has no record acc
 """
 
 from dataclasses import dataclass
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 import pytest
@@ -62,7 +62,7 @@ def actors(
     fake_storage: FakeObjectStorage,
     fake_queue: InMemoryJobQueue,
 ) -> Actors:
-    async def arrange(session: AsyncSession) -> tuple[UUID, UUID, UUID]:
+    async def arrange(session: AsyncSession) -> tuple[UUID, UUID, UUID, UUID, UUID]:
         await seed_reference_data(session)  # HID-0001..3 VERIFIED + 10 categories
         await seed_synthetic_patients(session)  # includes the owner of HEALTH_ID
 
@@ -79,11 +79,26 @@ def actors(
             )
             admin_ids.append(user.id)
 
+        # Real identity rows: any actor that reaches an audited path is a foreign key on
+        # audit_logs.actor_user_id, so a fabricated id would fail the write.
+        doctor_user = User(firebase_uid="fb-doc", role=Role.DOCTOR)
+        system_admin_user = User(firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN)
+        session.add_all([doctor_user, system_admin_user])
+        await session.flush()
+
         patient_query = select(User).where(User.firebase_uid == "synthetic:patient:aarav")
         patient_user = (await session.execute(patient_query)).scalar_one()
-        return admin_ids[0], admin_ids[1], patient_user.id
+        return (
+            admin_ids[0],
+            admin_ids[1],
+            patient_user.id,
+            doctor_user.id,
+            system_admin_user.id,
+        )
 
-    admin_a_id, admin_b_id, patient_user_id = run_with_session(db_engine, arrange)
+    admin_a_id, admin_b_id, patient_user_id, doctor_user_id, system_admin_user_id = (
+        run_with_session(db_engine, arrange)
+    )
 
     fake_auth.register_user(
         "admin-a", user_id=admin_a_id, firebase_uid="fb-admin-0", role=Role.HOSPITAL_ADMIN
@@ -97,9 +112,11 @@ def actors(
         firebase_uid="synthetic:patient:aarav",
         role=Role.PATIENT,
     )
-    fake_auth.register_user("doctor", user_id=uuid4(), firebase_uid="fb-doc", role=Role.DOCTOR)
     fake_auth.register_user(
-        "sysadmin", user_id=uuid4(), firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN
+        "doctor", user_id=doctor_user_id, firebase_uid="fb-doc", role=Role.DOCTOR
+    )
+    fake_auth.register_user(
+        "sysadmin", user_id=system_admin_user_id, firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN
     )
     return Actors(
         admin_a=_bearer("admin-a"),
@@ -199,17 +216,31 @@ def test_rbac_patient_cannot_use_hospital_surfaces_and_vice_versa(
     assert client.get("/api/v1/hospitals/me/doctors", headers=actors.patient).status_code == 403
 
 
-def test_rbac_doctor_and_system_admin_have_no_record_access_at_m2(
+def test_rbac_system_admin_has_no_record_access_and_a_doctor_has_none_without_consent(
     client: TestClient, actors: Actors
 ) -> None:
+    """M3 access model: a clinician may reach the read path but is refused without a grant,
+    and the refusal is a 404 so it cannot be distinguished from a missing record. A system
+    admin never reaches it at all — no admin break-glass (docs/SECURITY.md)."""
     record_id = _upload(client, actors.admin_a).json()["id"]
+
+    # Neither role may list or upload: both need a relationship records can evaluate.
     for headers in (actors.doctor, actors.system_admin):
         assert client.get(RECORDS, headers=headers).status_code == 403
-        assert client.get(f"{RECORDS}/{record_id}", headers=headers).status_code == 403
-        assert (
-            client.post(f"{RECORDS}/{record_id}/download-url", headers=headers).status_code == 403
-        )
         assert _upload(client, headers).status_code == 403
+
+    # SYSTEM_ADMIN is stopped at the role gate.
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.system_admin).status_code == 403
+    assert (
+        client.post(f"{RECORDS}/{record_id}/download-url", headers=actors.system_admin).status_code
+        == 403
+    )
+
+    # A clinician passes the gate and is refused by consent, as "not found".
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.doctor).status_code == 404
+    assert (
+        client.post(f"{RECORDS}/{record_id}/download-url", headers=actors.doctor).status_code == 404
+    )
 
 
 def test_patient_locker_upload(client: TestClient, actors: Actors) -> None:

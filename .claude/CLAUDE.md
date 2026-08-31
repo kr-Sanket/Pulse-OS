@@ -19,9 +19,9 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase:** M2 Backend Core — records module code COMPLETE (2026-08-29, session 013, branch `feature/medical-records`); M0 fully done.
-- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (auth, Health ID, patient registration/profile, patient web portal, api-client, seed — merged as PR #1); M2 backend (hospital/doctor onboarding + management per ADR-015, record upload → S3 port, presigned downloads, arq worker skeleton per ADR-014, demo-actor seed).
-- **Next milestone:** M2 gate demo (needs deferred PO ops items: Docker/MinIO live run), then M3 — Consent Domain. M1 design items (Figma, ADR-009/010, OD-1…3 sign-off) still open in parallel.
+- **Phase:** M3 Consent Domain — **backend COMPLETE** (2026-09-01, session 014, branch `feature/consent`, largely uncommitted); M0 and the M2 backend fully done.
+- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (auth, Health ID, patient registration/profile, patient web portal, api-client, seed — merged as PR #1); M2 backend (hospital/doctor onboarding per ADR-015, record upload → S3 port, presigned downloads, arq worker per ADR-014, demo-actor seed); M3 backend (consent request → per-category decision → grant → revoke, `consent.enforce()` on every non-owner record read, append-only audit log, migration 0004, records ⇄ consent integration — ADR-016…019).
+- **Next milestone:** M3 frontend (doctor search + request flow, patient consent inbox and audit view) plus the two backend pieces those journeys need — the clinician-facing record-existence projection and a patient audit-log endpoint — both now listed under M4. The M3 gate is **not yet demonstrable end to end**: the backend passes every criterion in `tests/test_m3_gate.py`, but there is no UI. Deferred M3 review findings and the still-open PO items (ops/Docker, OD-1…3, ADR-009/010) are in TODO.md.
 - **Session log / handoff notes:** [SESSION.md](SESSION.md) — read this second, update it before ending every session.
 
 ## Architecture in One Paragraph

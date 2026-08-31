@@ -5,6 +5,97 @@
 
 ---
 
+## Session 014 — 2026-09-01
+
+**Phase:** M3 Consent Domain — backend implemented end to end. Branch `feature/consent`
+(cut from `main` after the M2 merge). One commit so far (`a893611`, schema only); everything
+after it is uncommitted — see "Not committed" below.
+
+**Decisions (new ADRs):** ADR-016 records ⇄ consent bidirectional dependency; ADR-017
+return-not-raise for audited read failures; ADR-018 `ACCESS_DENIED` audit action; ADR-019
+SHA-256 digests until keccak256 (M6). All four came out of the final PR review, which found
+them undocumented.
+
+**Done — schema (migration 0004, five tables):** `ConsentRequest` (mutable: status),
+`ConsentRequestCategory` (the normalised requested set), `ConsentDecision` (immutable),
+`ConsentGrant` (mutable: `revoked_at` — what enforcement reads), `AuditLog` (append-only).
+Two invariants pushed into the database and proven by rejected inserts: a decision can only
+answer a **requested** category (composite FK into `consent_request_categories`), and an
+approval spawns **exactly one** grant (unique `decision_id`). Append-only tables carry
+`created_at` only — no `updated_at`, no `onupdate` — so the DDL cannot advertise a mutation
+DATABASE_DESIGN principle 3 forbids. `AuditLog` has two timestamps on purpose: app-assigned
+`occurred_at` (hashed, and the keyset order) and server-assigned `created_at` (not hashed),
+which is what makes `event_hash` computable before the INSERT. Verified: zero drift vs
+`Base.metadata` under `compare_type=True`; reversible `head→base→head` and `0004→0003→0004`.
+
+**Done — repository:** five repositories, pure persistence, savepoints only where a
+constraint is a domain signal, and error translation **per constraint** rather than per table
+(a foreign-key violation and a unique violation on `consent_decisions` mean opposite things).
+Unbounded listings keyset-paginated; bounded child collections returned whole.
+
+**Done — service:** the full lifecycle — create request, patient inbox, clinician sent list,
+approve, reject, revoke, and `enforce`. Every state change writes its audit event in the same
+transaction, in the same private helper that performs the change. Clock and `event_hasher`
+injected. `request_context` capped at 200 chars and stripped of control characters (the
+service half of the unbounded-column fix).
+
+**Done — HTTP:** six endpoints under `/access-requests` and `/consent-grants` (the paths
+API_GUIDELINES names verbatim), one `to_http_error`, full failure sets declared in the spec
+with `application/problem+json`, four-part docstrings on all six. The API speaks category
+**codes**; a `CategoryVocabularySource` protocol translates.
+
+**Done — integration:** routers mounted; `records/directory.py` publishes the clinician and
+category seams; `records.service` gained a `ConsentEnforcer` port; `get_for_caller` is the one
+authorization seam and takes an `action`, so downloads and metadata reads are distinguishable
+in the trail. A second role gate (`RequireRecordReader`) admits clinicians to single-record
+reads only — they still have no listing or upload scope. Hospital-admin own-upload reads are
+unchanged (ADR-013 layer 2, decided in `records`). api-client regenerated: 17 → 23 paths.
+
+**Tests: 194 → 268.** New: `test_consent_repositories.py` (10), `test_consent_service.py` (26),
+`test_consent_http.py` (33), `test_m3_gate.py` (7 — the ROADMAP gate walked over HTTP across
+two hospitals). Consent module coverage 99–100% per file; overall 97%. `tests/support.py` now
+enables `PRAGMA foreign_keys=ON`, so constraints the migration declares are actually enforced
+in tests — they were silently inert before, and all 194 pre-existing tests still passed once
+it was on.
+
+**Final review — merge blockers found and fixed:**
+- **M3-A:** denied *downloads* were refused but not logged. `create_download_url` still raised,
+  and the raise rolled back the `ACCESS_DENIED` row (`GET` had already been fixed; the edit had
+  silently failed to match on `POST` and no test covered it). Fixed per ADR-017. Verified:
+  404 + the audit row commits.
+- **M3-C:** `is_hidden` was ignored, so a clinician holding a grant could read a record the
+  patient had hidden. Now settled in `_authorize_read` **before** the choke point — hiding
+  withdraws a record from the set consent can share, so there is no grant question to answer
+  and no audit row is written. Owner and uploading-hospital behaviour unchanged.
+- Four regression tests added; both defect tests confirmed red before the fix, green after.
+
+**Review findings deliberately NOT fixed (see TODO):** listings write no audit (M3-B);
+`POST /access-requests` is an unthrottled Health-ID existence oracle (M3-D); hospital-admin
+denials are unaudited (M3-E); `AuditAnchor` interface not built (M3-G); plus ten minors.
+
+**Gotcha worth remembering:** `DateTime(timezone=True)` round-trips **aware** on Postgres and
+**naive** on SQLite. It bit twice — a `TypeError` comparing a persisted deadline with the
+clock (fixed with `as_utc` in the consent service), and `revokedAt` serialising with and
+without a `Z` in the same flow depending on whether the value was just assigned or re-read.
+The second is still open. Any comparison between a persisted timestamp and `now()` needs
+normalising.
+
+**Not committed:** everything after `a893611` — the consent repository/service/HTTP layers,
+`records/directory.py`, the records integration, all four test files, the doc updates in this
+session, and the regenerated api-client. The seven consent scaffold files from the first M3
+task are still untracked too.
+
+**Not done:** notifications fan-out, `AuditAnchor`, the category-existence projection a
+clinician needs to *discover* records, a patient audit-log endpoint, and all M3 frontend work
+(doctor search + request flow, patient consent inbox and audit view). OD-1…3 were never signed
+off — the implementation runs on the documented recommendations, with the 90-day grant expiry
+as an injected default rather than a hard-coded rule.
+
+**Next:** commit the branch, then close the remaining M3 review findings (M3-B/D/E/G) or
+schedule them explicitly; then M3 frontend, which is what the gate demo actually needs.
+
+---
+
 ## Session 013 — 2026-08-29
 
 **Phase:** M2 Backend Core — full milestone implementation. Branch `feature/medical-records`

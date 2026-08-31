@@ -1,6 +1,123 @@
 {
   "components": {
     "schemas": {
+      "AccessRequestCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "categoryCodes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Categorycodes",
+            "type": "array"
+          },
+          "patientHealthId": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Patienthealthid",
+            "type": "string"
+          },
+          "purpose": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "patientHealthId",
+          "categoryCodes",
+          "purpose"
+        ],
+        "title": "AccessRequestCreateRequest",
+        "type": "object"
+      },
+      "AccessRequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccessRequestResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "AccessRequestListResponse",
+        "type": "object"
+      },
+      "AccessRequestResponse": {
+        "description": "One access request as both parties see it: what was asked, of whom, and whether it\nis still open. What a clinician may actually *read* is never answered here \u2014 that is\n``enforce``'s job on each read (docs/SYSTEM_ARCHITECTURE.md rule 3).",
+        "properties": {
+          "categoryCodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categorycodes",
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          },
+          "requesterDoctorId": {
+            "format": "uuid",
+            "title": "Requesterdoctorid",
+            "type": "string"
+          },
+          "requesterHospitalId": {
+            "format": "uuid",
+            "title": "Requesterhospitalid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConsentRequestStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "purpose",
+          "categoryCodes",
+          "requesterDoctorId",
+          "requesterHospitalId",
+          "expiresAt",
+          "createdAt"
+        ],
+        "title": "AccessRequestResponse",
+        "type": "object"
+      },
       "AuthenticatedUserResponse": {
         "properties": {
           "firebaseUid": {
@@ -74,6 +191,162 @@
           "dateOfService"
         ],
         "title": "Body_upload_record_api_v1_records_post",
+        "type": "object"
+      },
+      "CategorySelectionRequest": {
+        "additionalProperties": false,
+        "description": "The categories a patient is answering for, shared by approve and reject.",
+        "properties": {
+          "categoryCodes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Categorycodes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "categoryCodes"
+        ],
+        "title": "CategorySelectionRequest",
+        "type": "object"
+      },
+      "ConsentDecisionResponse": {
+        "description": "One immutable per-category answer. ``decidedAt`` is the row's creation instant \u2014\nfor an append-only record they are the same moment by design.",
+        "properties": {
+          "categoryCode": {
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "decidedAt": {
+            "format": "date-time",
+            "title": "Decidedat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConsentDecisionStatus"
+          }
+        },
+        "required": [
+          "id",
+          "categoryCode",
+          "status",
+          "decidedAt"
+        ],
+        "title": "ConsentDecisionResponse",
+        "type": "object"
+      },
+      "ConsentDecisionStatus": {
+        "description": "The patient's answer for one category. Two members only, by design: a decision is\nan immutable historical fact, so there is no pending state to occupy and no revoked\nstate to transition into \u2014 revocation is recorded on the derived ``ConsentGrant`` plus\na new audit event (docs/DOMAIN_MODEL.md \u00a71).",
+        "enum": [
+          "APPROVED",
+          "REJECTED"
+        ],
+        "title": "ConsentDecisionStatus",
+        "type": "string"
+      },
+      "ConsentGrantResponse": {
+        "description": "An active permission derived from an approval. ``revokedAt`` is null while the\ngrant stands; once set, the next read is refused immediately.",
+        "properties": {
+          "categoryCode": {
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "grantedAt": {
+            "format": "date-time",
+            "title": "Grantedat",
+            "type": "string"
+          },
+          "granteeDoctorId": {
+            "format": "uuid",
+            "title": "Granteedoctorid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revokedat"
+          }
+        },
+        "required": [
+          "id",
+          "categoryCode",
+          "granteeDoctorId",
+          "grantedAt",
+          "expiresAt",
+          "revokedAt"
+        ],
+        "title": "ConsentGrantResponse",
+        "type": "object"
+      },
+      "ConsentRequestStatus": {
+        "description": "Lifecycle of a clinician's petition (docs/DOMAIN_MODEL.md \u00a71).\n\n``DECIDED`` means the patient answered every requested category \u2014 approving some and\nrejecting others is still a decided request. ``EXPIRED`` is reached by the sweep when\n``expires_at`` passes with the request still ``PENDING``; ``CANCELLED`` is the\nrequester withdrawing.",
+        "enum": [
+          "PENDING",
+          "DECIDED",
+          "EXPIRED",
+          "CANCELLED"
+        ],
+        "title": "ConsentRequestStatus",
+        "type": "string"
+      },
+      "DecisionOutcomeResponse": {
+        "description": "What one approve or reject call produced. ``grants`` is empty for a rejection, and\n``requestStatus`` becomes ``DECIDED`` once every requested category has an answer.",
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ConsentDecisionResponse"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/ConsentGrantResponse"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "requestId": {
+            "format": "uuid",
+            "title": "Requestid",
+            "type": "string"
+          },
+          "requestStatus": {
+            "$ref": "#/components/schemas/ConsentRequestStatus"
+          }
+        },
+        "required": [
+          "requestId",
+          "requestStatus",
+          "decisions",
+          "grants"
+        ],
+        "title": "DecisionOutcomeResponse",
         "type": "object"
       },
       "DoctorListResponse": {
@@ -718,6 +991,362 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/access-requests": {
+      "post": {
+        "description": "Ask a patient for access to a set of record categories.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).\nConsent requirement: none \u2014 this *asks* for consent, it reads nothing.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n422 (validation, unknown Health ID, unknown category code).",
+        "operationId": "create_access_request_api_v1_access_requests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessRequestCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Not a doctor, or the clinician is not active"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No profile for this account"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          }
+        },
+        "summary": "Create Access Request",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
+    "/api/v1/access-requests/inbox": {
+      "get": {
+        "description": "The patient's consent inbox: requests naming them, newest first.\n\nRoles: PATIENT (own inbox only \u2014 the scope comes from the token, never from a\nparameter). Consent requirement: none; a request is not record content.\nFailure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).",
+        "operationId": "list_inbox_api_v1_access_requests_inbox_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessRequestListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No profile for this account"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          }
+        },
+        "summary": "List Inbox",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
+    "/api/v1/access-requests/sent": {
+      "get": {
+        "description": "The clinician's own outgoing requests, newest first.\n\nRoles: DOCTOR (own requests only). A non-ACTIVE clinician may still read this: seeing\nwhat you asked for is not a clinical capability. The response reports status only \u2014\nwhat may actually be read is answered per read by the enforcement check, never by a\nlisting. Consent requirement: none.\nFailure modes: 401, 403, 404 (no clinician profile), 422 (bad cursor or limit).",
+        "operationId": "list_sent_requests_api_v1_access_requests_sent_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessRequestListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No profile for this account"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          }
+        },
+        "summary": "List Sent Requests",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
+    "/api/v1/access-requests/{request_id}/approve": {
+      "post": {
+        "description": "Approve some of the categories an access request asked for.\n\nEach approval is recorded permanently and produces the grant that enforcement reads.\nRoles: PATIENT, and only for their own request \u2014 another patient's request answers 404,\nnever 403. Consent requirement: this *is* the consent decision.\nFailure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category\nalready answered), 422 (unknown code, or a category this request never asked for).",
+        "operationId": "approve_categories_api_v1_access_requests__request_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategorySelectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOutcomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No such request for this patient"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Request closed, or category already answered"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          }
+        },
+        "summary": "Approve Categories",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
+    "/api/v1/access-requests/{request_id}/reject": {
+      "post": {
+        "description": "Refuse some of the categories an access request asked for.\n\nA rejection is recorded as permanently as an approval and grants nothing.\nRoles/failures: as for approve.",
+        "operationId": "reject_categories_api_v1_access_requests__request_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategorySelectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOutcomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No such request for this patient"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Request closed, or category already answered"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          }
+        },
+        "summary": "Reject Categories",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
     "/api/v1/auth/me": {
       "get": {
         "description": "Return the caller's authenticated identity.\n\nRoles: any authenticated, provisioned user. Failure modes: 401 (missing/malformed/\ninvalid/expired token), 403 (unprovisioned account), 503 (provider unavailable).",
@@ -737,6 +1366,68 @@
         "summary": "Read Current User",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/consent-grants/{grant_id}/revoke": {
+      "post": {
+        "description": "Withdraw a grant. Takes effect for the very next read \u2014 no cache, no grace period.\n\nIdempotent: revoking an already-revoked grant returns it unchanged.\nRoles: PATIENT, and only their own grant \u2014 another patient's answers 404.\nConsent requirement: this *is* the consent decision. Failure modes: 401, 403, 404.",
+        "operationId": "revoke_grant_api_v1_consent_grants__grant_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No such grant for this patient"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Grant",
+        "tags": [
+          "consent"
         ]
       }
     },
@@ -1299,7 +1990,7 @@
     },
     "/api/v1/records/{record_id}": {
       "get": {
-        "description": "Metadata of one record within the caller's relationship scope.\n\nRoles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload). A record outside the\ncaller's scope answers 404, never 403 (existence must not leak, API_GUIDELINES).\nFailure modes: 401, 403, 404.",
+        "description": "Metadata of one record the caller is authorized to see.\n\nRoles: PATIENT (own), HOSPITAL_ADMIN (own hospital's upload), DOCTOR (an active consent\ngrant for the record's category). Consent requirement: enforced for patients and\nclinicians at the single choke point; a hospital's own upload is a layer-2 relationship\ninstead. Every outcome, allowed or refused, is audited. A record the caller may not see\nanswers 404, never 403 (existence must not leak, API_GUIDELINES).\nFailure modes: 401, 403, 404.",
         "operationId": "read_record_metadata_api_v1_records__record_id__get",
         "parameters": [
           {
@@ -1343,7 +2034,7 @@
     },
     "/api/v1/records/{record_id}/download-url": {
       "post": {
-        "description": "Issue a short-lived presigned download URL for the record's file.\n\nRoles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload) \u2014 the URL is issued\nonly after the relationship check (docs/SECURITY.md). M3 adds the consent check +\naudit-log write here for doctor access. Failure modes: 401, 403, 404, 503 (storage).",
+        "description": "Issue a short-lived presigned download URL for the record's file.\n\nRoles: as for reading metadata. The URL is issued only after the same authorization\n(docs/SECURITY.md), and the event is audited as a download rather than a view.\nFailure modes: 401, 403, 404, 503 (storage).",
         "operationId": "create_download_url_api_v1_records__record_id__download_url_post",
         "parameters": [
           {

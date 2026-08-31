@@ -4,6 +4,130 @@
  */
 
 export interface paths {
+    "/api/v1/access-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Access Request
+         * @description Ask a patient for access to a set of record categories.
+         *
+         *     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
+         *     Consent requirement: none — this *asks* for consent, it reads nothing.
+         *     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
+         *     422 (validation, unknown Health ID, unknown category code).
+         */
+        post: operations["create_access_request_api_v1_access_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access-requests/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Inbox
+         * @description The patient's consent inbox: requests naming them, newest first.
+         *
+         *     Roles: PATIENT (own inbox only — the scope comes from the token, never from a
+         *     parameter). Consent requirement: none; a request is not record content.
+         *     Failure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).
+         */
+        get: operations["list_inbox_api_v1_access_requests_inbox_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access-requests/sent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Sent Requests
+         * @description The clinician's own outgoing requests, newest first.
+         *
+         *     Roles: DOCTOR (own requests only). A non-ACTIVE clinician may still read this: seeing
+         *     what you asked for is not a clinical capability. The response reports status only —
+         *     what may actually be read is answered per read by the enforcement check, never by a
+         *     listing. Consent requirement: none.
+         *     Failure modes: 401, 403, 404 (no clinician profile), 422 (bad cursor or limit).
+         */
+        get: operations["list_sent_requests_api_v1_access_requests_sent_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access-requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Categories
+         * @description Approve some of the categories an access request asked for.
+         *
+         *     Each approval is recorded permanently and produces the grant that enforcement reads.
+         *     Roles: PATIENT, and only for their own request — another patient's request answers 404,
+         *     never 403. Consent requirement: this *is* the consent decision.
+         *     Failure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category
+         *     already answered), 422 (unknown code, or a category this request never asked for).
+         */
+        post: operations["approve_categories_api_v1_access_requests__request_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/access-requests/{request_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Categories
+         * @description Refuse some of the categories an access request asked for.
+         *
+         *     A rejection is recorded as permanently as an approval and grants nothing.
+         *     Roles/failures: as for approve.
+         */
+        post: operations["reject_categories_api_v1_access_requests__request_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/me": {
         parameters: {
             query?: never;
@@ -21,6 +145,30 @@ export interface paths {
         get: operations["read_current_user_api_v1_auth_me_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/consent-grants/{grant_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Grant
+         * @description Withdraw a grant. Takes effect for the very next read — no cache, no grace period.
+         *
+         *     Idempotent: revoking an already-revoked grant returns it unchanged.
+         *     Roles: PATIENT, and only their own grant — another patient's answers 404.
+         *     Consent requirement: this *is* the consent decision. Failure modes: 401, 403, 404.
+         */
+        post: operations["revoke_grant_api_v1_consent_grants__grant_id__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -328,10 +476,13 @@ export interface paths {
         };
         /**
          * Read Record Metadata
-         * @description Metadata of one record within the caller's relationship scope.
+         * @description Metadata of one record the caller is authorized to see.
          *
-         *     Roles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload). A record outside the
-         *     caller's scope answers 404, never 403 (existence must not leak, API_GUIDELINES).
+         *     Roles: PATIENT (own), HOSPITAL_ADMIN (own hospital's upload), DOCTOR (an active consent
+         *     grant for the record's category). Consent requirement: enforced for patients and
+         *     clinicians at the single choke point; a hospital's own upload is a layer-2 relationship
+         *     instead. Every outcome, allowed or refused, is audited. A record the caller may not see
+         *     answers 404, never 403 (existence must not leak, API_GUIDELINES).
          *     Failure modes: 401, 403, 404.
          */
         get: operations["read_record_metadata_api_v1_records__record_id__get"];
@@ -356,9 +507,9 @@ export interface paths {
          * Create Download Url
          * @description Issue a short-lived presigned download URL for the record's file.
          *
-         *     Roles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload) — the URL is issued
-         *     only after the relationship check (docs/SECURITY.md). M3 adds the consent check +
-         *     audit-log write here for doctor access. Failure modes: 401, 403, 404, 503 (storage).
+         *     Roles: as for reading metadata. The URL is issued only after the same authorization
+         *     (docs/SECURITY.md), and the event is audited as a download rather than a view.
+         *     Failure modes: 401, 403, 404, 503 (storage).
          */
         post: operations["create_download_url_api_v1_records__record_id__download_url_post"];
         delete?: never;
@@ -411,6 +562,60 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccessRequestCreateRequest */
+        AccessRequestCreateRequest: {
+            /** Categorycodes */
+            categoryCodes: string[];
+            /** Patienthealthid */
+            patientHealthId: string;
+            /** Purpose */
+            purpose: string;
+        };
+        /** AccessRequestListResponse */
+        AccessRequestListResponse: {
+            /** Items */
+            items: components["schemas"]["AccessRequestResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /**
+         * AccessRequestResponse
+         * @description One access request as both parties see it: what was asked, of whom, and whether it
+         *     is still open. What a clinician may actually *read* is never answered here — that is
+         *     ``enforce``'s job on each read (docs/SYSTEM_ARCHITECTURE.md rule 3).
+         */
+        AccessRequestResponse: {
+            /** Categorycodes */
+            categoryCodes: string[];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Purpose */
+            purpose: string;
+            /**
+             * Requesterdoctorid
+             * Format: uuid
+             */
+            requesterDoctorId: string;
+            /**
+             * Requesterhospitalid
+             * Format: uuid
+             */
+            requesterHospitalId: string;
+            status: components["schemas"]["ConsentRequestStatus"];
+        };
         /** AuthenticatedUserResponse */
         AuthenticatedUserResponse: {
             /** Firebaseuid */
@@ -437,6 +642,102 @@ export interface components {
             file: string;
             /** Patienthealthid */
             patientHealthId?: string | null;
+        };
+        /**
+         * CategorySelectionRequest
+         * @description The categories a patient is answering for, shared by approve and reject.
+         */
+        CategorySelectionRequest: {
+            /** Categorycodes */
+            categoryCodes: string[];
+        };
+        /**
+         * ConsentDecisionResponse
+         * @description One immutable per-category answer. ``decidedAt`` is the row's creation instant —
+         *     for an append-only record they are the same moment by design.
+         */
+        ConsentDecisionResponse: {
+            /** Categorycode */
+            categoryCode: string;
+            /**
+             * Decidedat
+             * Format: date-time
+             */
+            decidedAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            status: components["schemas"]["ConsentDecisionStatus"];
+        };
+        /**
+         * ConsentDecisionStatus
+         * @description The patient's answer for one category. Two members only, by design: a decision is
+         *     an immutable historical fact, so there is no pending state to occupy and no revoked
+         *     state to transition into — revocation is recorded on the derived ``ConsentGrant`` plus
+         *     a new audit event (docs/DOMAIN_MODEL.md §1).
+         * @enum {string}
+         */
+        ConsentDecisionStatus: "APPROVED" | "REJECTED";
+        /**
+         * ConsentGrantResponse
+         * @description An active permission derived from an approval. ``revokedAt`` is null while the
+         *     grant stands; once set, the next read is refused immediately.
+         */
+        ConsentGrantResponse: {
+            /** Categorycode */
+            categoryCode: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Grantedat
+             * Format: date-time
+             */
+            grantedAt: string;
+            /**
+             * Granteedoctorid
+             * Format: uuid
+             */
+            granteeDoctorId: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Revokedat */
+            revokedAt: string | null;
+        };
+        /**
+         * ConsentRequestStatus
+         * @description Lifecycle of a clinician's petition (docs/DOMAIN_MODEL.md §1).
+         *
+         *     ``DECIDED`` means the patient answered every requested category — approving some and
+         *     rejecting others is still a decided request. ``EXPIRED`` is reached by the sweep when
+         *     ``expires_at`` passes with the request still ``PENDING``; ``CANCELLED`` is the
+         *     requester withdrawing.
+         * @enum {string}
+         */
+        ConsentRequestStatus: "PENDING" | "DECIDED" | "EXPIRED" | "CANCELLED";
+        /**
+         * DecisionOutcomeResponse
+         * @description What one approve or reject call produced. ``grants`` is empty for a rejection, and
+         *     ``requestStatus`` becomes ``DECIDED`` once every requested category has an answer.
+         */
+        DecisionOutcomeResponse: {
+            /** Decisions */
+            decisions: components["schemas"]["ConsentDecisionResponse"][];
+            /** Grants */
+            grants: components["schemas"]["ConsentGrantResponse"][];
+            /**
+             * Requestid
+             * Format: uuid
+             */
+            requestId: string;
+            requestStatus: components["schemas"]["ConsentRequestStatus"];
         };
         /** DoctorListResponse */
         DoctorListResponse: {
@@ -687,6 +988,326 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    create_access_request_api_v1_access_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessRequestCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessRequestResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Not a doctor, or the clinician is not active */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No profile for this account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_inbox_api_v1_access_requests_inbox_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessRequestListResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No profile for this account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    list_sent_requests_api_v1_access_requests_sent_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessRequestListResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No profile for this account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    approve_categories_api_v1_access_requests__request_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CategorySelectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOutcomeResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No such request for this patient */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Request closed, or category already answered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    reject_categories_api_v1_access_requests__request_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CategorySelectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOutcomeResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No such request for this patient */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Request closed, or category already answered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     read_current_user_api_v1_auth_me_get: {
         parameters: {
             query?: never;
@@ -703,6 +1324,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthenticatedUserResponse"];
+                };
+            };
+        };
+    };
+    revoke_grant_api_v1_consent_grants__grant_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentGrantResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No such grant for this patient */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

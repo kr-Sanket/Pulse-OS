@@ -6,6 +6,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ## [Unreleased]
 
 ### Added
+- **M3 Consent Domain (backend):** the `consent` module — access request → per-category
+  approve/reject → revoke, with `consent.enforce()` attached to every non-owner record read.
+  Migration 0004 adds five tables: `consent_requests`, `consent_request_categories`,
+  `consent_decisions` (immutable), `consent_grants` (what enforcement reads, O(1) by index),
+  and the append-only `audit_logs`. Two invariants are enforced by the database rather than by
+  code: a decision may only answer a category the request asked for (composite foreign key),
+  and an approval spawns exactly one grant (unique `decision_id`). Six endpoints under
+  `/api/v1/access-requests` and `/api/v1/consent-grants`. Every consent decision, revocation,
+  allowed read and **denied** read appends an audit event in the same transaction as the action
+  (`ACCESS_DENIED` added to the vocabulary, ADR-018), hashed for later on-chain anchoring
+  (SHA-256 for now, ADR-019). `records` gained a published identity/vocabulary seam
+  (`records/directory.py`) and a `ConsentEnforcer` port, making the records ⇄ consent dependency
+  explicit and cycle-free (ADR-016); audited read failures return their RFC 7807 response rather
+  than raising it, so a refusal is durably recorded (ADR-017). Patient-controlled visibility is
+  honoured: a hidden record is invisible to a clinician holding a valid grant, and unchanged for
+  its owner and its uploading hospital. Hospital-admin own-upload reads keep their M2 behaviour
+  (ADR-013 layer 2). Backend tests 194 → 268; the ROADMAP M3 gate is walked over HTTP across two
+  simulated hospitals. **Not included:** notifications fan-out, the `AuditAnchor` interface, the
+  clinician-facing record-existence projection, a patient audit-log endpoint, and all M3
+  frontend work.
 - **M2 Backend Core (records module):** hospital + admin and doctor self-registration with
   System-Admin hospital verification and admin-managed doctor activation (ADR-015);
   `MedicalRecord` (FHIR DocumentReference-aligned) with migration 0003; multipart record

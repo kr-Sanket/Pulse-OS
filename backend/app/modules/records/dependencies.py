@@ -14,6 +14,8 @@ from app.core.db import get_db_session
 from app.core.queue import JobQueue
 from app.modules.auth.accounts import UserAccountService
 from app.modules.auth.dependencies import get_user_account_service
+from app.modules.consent.dependencies import get_consent_service
+from app.modules.consent.service import ConsentService
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.repository import PatientRepository
 from app.modules.records.errors import (
@@ -90,6 +92,15 @@ def parse_cursor(cursor: str | None) -> CursorKey | None:
         raise HTTPException(status_code=422, detail="Invalid pagination cursor.") from None
 
 
+def get_request_context(request: Request) -> str | None:
+    """The ``X-Request-Id`` correlation key that record-access audit events carry
+    (docs/API_GUIDELINES.md). Duplicated from the consent boundary rather than imported
+    across it — a four-line transport helper with no domain meaning; it belongs in
+    ``app/shared`` once a third module needs it."""
+    context: str | None = getattr(request.state, "request_id", None)
+    return context
+
+
 def get_object_storage(request: Request) -> ObjectStorage:
     """The storage chosen at startup (lifespan); tests override this dependency."""
     storage: ObjectStorage = request.app.state.object_storage
@@ -120,6 +131,7 @@ def get_record_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     storage: Annotated[ObjectStorage, Depends(get_object_storage)],
     queue: Annotated[JobQueue, Depends(get_job_queue)],
+    consent: Annotated[ConsentService, Depends(get_consent_service)],
 ) -> RecordService:
     settings = get_settings()
     return RecordService(
@@ -130,6 +142,9 @@ def get_record_service(
         patients=PatientDirectoryService(PatientRepository(session)),
         storage=storage,
         queue=queue,
+        # The ADR-013 layer-3 choke point. Same request session, so a read and the audit
+        # event recording it commit together or not at all.
+        consent=consent,
         presign_ttl_seconds=settings.s3_presign_ttl_seconds,
         max_upload_bytes=settings.records_max_upload_bytes,
     )
@@ -137,3 +152,4 @@ def get_record_service(
 
 HospitalServiceDep = Annotated[HospitalService, Depends(get_hospital_service)]
 RecordServiceDep = Annotated[RecordService, Depends(get_record_service)]
+RequestContextDep = Annotated[str | None, Depends(get_request_context)]

@@ -1,19 +1,29 @@
 """Record endpoints (M2): upload, relationship-scoped metadata reads, presigned downloads.
 
-M2 access model — deliberately narrow (module docstring of service.py): patients see their
-own records, hospital admins see their own hospital's uploads, doctors see NOTHING here
-until the consent module (M3) adds ``consent.enforce()`` + audit in front of these reads.
+Access model (module docstring of service.py): patients read their own records, hospital
+admins read their own hospital's uploads (ADR-013 layer 2, decided in this module), and
+clinicians read what an active consent grant covers (layer 3, decided by ``consent.enforce``
+and audited there). Uploading and listing stay narrower than reading — a clinician has no
+listing scope and no upload path here.
 """
 
 from datetime import date
+from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import JSONResponse
 
+from app.core.errors import problem_response
 from app.modules.auth.dependencies import CurrentUser, require_role
 from app.modules.auth.domain import AuthenticatedUser, Role
-from app.modules.records.dependencies import RecordServiceDep, parse_cursor, to_http_error
+from app.modules.records.dependencies import (
+    RecordServiceDep,
+    RequestContextDep,
+    parse_cursor,
+    to_http_error,
+)
 from app.modules.records.errors import RecordsError
 from app.modules.records.schemas import (
     DownloadUrlResponse,
@@ -28,9 +38,36 @@ from app.shared.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 records_router = APIRouter(prefix="/records", tags=["records"])
 categories_router = APIRouter(prefix="/record-categories", tags=["records"])
 
-# The two roles with a layer-2 relationship to records at M2 (see module docstring).
+# Writing and listing need a relationship this module can evaluate on its own.
 RequireRecordActor = require_role(Role.PATIENT, Role.HOSPITAL_ADMIN)
 RecordActor = Annotated[AuthenticatedUser, Depends(RequireRecordActor)]
+
+# Reading one known record additionally admits clinicians, whose access is decided by
+# consent rather than by any relationship records can see (ADR-013 layer 3). SYSTEM_ADMIN
+# is absent from both gates: no admin break-glass exists (docs/SECURITY.md).
+RequireRecordReader = require_role(Role.PATIENT, Role.HOSPITAL_ADMIN, Role.DOCTOR)
+RecordReader = Annotated[AuthenticatedUser, Depends(RequireRecordReader)]
+
+
+def _problem(request: Request, exc: RecordsError) -> JSONResponse:
+    """Build the RFC 7807 response for a failed read — to be **returned, never raised**.
+
+    A raised ``HTTPException`` unwinds the request's dependency stack, and the rollback in
+    ``get_db_session`` takes the audit row consent just wrote for the refusal with it. The
+    M3 gate requires attempted unauthorized reads to be denied *and logged*
+    (.claude/ROADMAP.md), so on these two paths the refusal has to commit. Returning the
+    identical problem+json body keeps the wire contract unchanged; only the unwinding
+    differs. Read paths mutate nothing else, so committing on refusal is safe: the audit
+    row is the whole of the transaction.
+    """
+    http_error = to_http_error(exc)
+    detail = http_error.detail if isinstance(http_error.detail, str) else None
+    return problem_response(
+        request,
+        status_code=http_error.status_code,
+        title=HTTPStatus(http_error.status_code).phrase,
+        detail=detail,
+    )
 
 
 @categories_router.get("", response_model=RecordCategoryListResponse)
@@ -138,37 +175,44 @@ async def list_records(
 
 @records_router.get("/{record_id}", response_model=RecordMetadataResponse)
 async def read_record_metadata(
+    request: Request,
     record_id: UUID,
-    user: RecordActor,
+    user: RecordReader,
     service: RecordServiceDep,
-) -> RecordMetadataResponse:
-    """Metadata of one record within the caller's relationship scope.
+    request_context: RequestContextDep,
+) -> RecordMetadataResponse | JSONResponse:
+    """Metadata of one record the caller is authorized to see.
 
-    Roles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload). A record outside the
-    caller's scope answers 404, never 403 (existence must not leak, API_GUIDELINES).
+    Roles: PATIENT (own), HOSPITAL_ADMIN (own hospital's upload), DOCTOR (an active consent
+    grant for the record's category). Consent requirement: enforced for patients and
+    clinicians at the single choke point; a hospital's own upload is a layer-2 relationship
+    instead. Every outcome, allowed or refused, is audited. A record the caller may not see
+    answers 404, never 403 (existence must not leak, API_GUIDELINES).
     Failure modes: 401, 403, 404.
     """
     try:
-        view = await service.get_for_caller(user, record_id)
+        view = await service.get_for_caller(user, record_id, request_context=request_context)
     except RecordsError as exc:
-        raise to_http_error(exc) from exc
+        return _problem(request, exc)  # returned, not raised — see _problem
     return RecordMetadataResponse.from_view(view)
 
 
 @records_router.post("/{record_id}/download-url", response_model=DownloadUrlResponse)
 async def create_download_url(
+    request: Request,
     record_id: UUID,
-    user: RecordActor,
+    user: RecordReader,
     service: RecordServiceDep,
-) -> DownloadUrlResponse:
+    request_context: RequestContextDep,
+) -> DownloadUrlResponse | JSONResponse:
     """Issue a short-lived presigned download URL for the record's file.
 
-    Roles: PATIENT (own) or HOSPITAL_ADMIN (own hospital's upload) — the URL is issued
-    only after the relationship check (docs/SECURITY.md). M3 adds the consent check +
-    audit-log write here for doctor access. Failure modes: 401, 403, 404, 503 (storage).
+    Roles: as for reading metadata. The URL is issued only after the same authorization
+    (docs/SECURITY.md), and the event is audited as a download rather than a view.
+    Failure modes: 401, 403, 404, 503 (storage).
     """
     try:
-        link = await service.create_download_link(user, record_id)
+        link = await service.create_download_link(user, record_id, request_context=request_context)
     except RecordsError as exc:
-        raise to_http_error(exc) from exc
+        return _problem(request, exc)  # returned, not raised — see _problem
     return DownloadUrlResponse(url=link.url, expires_in_seconds=link.expires_in_seconds)

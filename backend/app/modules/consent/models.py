@@ -100,10 +100,15 @@ class ConsentDecisionStatus(StrEnum):
 class AuditAction(StrEnum):
     """The audit action vocabulary of docs/DOMAIN_MODEL.md §1, verbatim.
 
+    ``ACCESS_DENIED`` extends that list. The M3 gate requires that "attempted unauthorized
+    reads are denied AND logged" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only
+    successes, so a refused read had no truthful action to write. Adding it costs nothing:
+    members are values in a VARCHAR(32) column, so the vocabulary extends without a
+    migration.
+
     ``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own
     ADR (.claude/TODO.md parking lot), and an unused member here would imply a capability
-    that docs/SECURITY.md's no-break-glass invariant denies. Members are values in a
-    VARCHAR column, so extending this vocabulary later needs no migration.
+    that docs/SECURITY.md's no-break-glass invariant denies.
     """
 
     RECORD_UPLOADED = "RECORD_UPLOADED"
@@ -114,6 +119,7 @@ class AuditAction(StrEnum):
     RECORD_VIEWED = "RECORD_VIEWED"
     RECORD_DOWNLOADED = "RECORD_DOWNLOADED"
     SUMMARY_GENERATED = "SUMMARY_GENERATED"
+    ACCESS_DENIED = "ACCESS_DENIED"
 
 
 class ConsentRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
