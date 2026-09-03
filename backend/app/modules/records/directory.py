@@ -12,13 +12,19 @@ the other way is ``records.service`` asking consent for permission to read — a
 file, a different concern, and no import cycle between them.
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.records.models import DoctorStatus
-from app.modules.records.repository import DoctorRepository, RecordCategoryRepository
+from app.modules.records.models import Doctor, DoctorStatus, Hospital
+from app.modules.records.repository import (
+    DoctorRepository,
+    HospitalAdminRepository,
+    HospitalRepository,
+    RecordCategoryRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +45,89 @@ class CategoryRef:
 
     id: UUID
     code: str
+
+
+@dataclass(frozen=True, slots=True)
+class StaffDisplay:
+    """A member of hospital staff as a *patient* may be shown them.
+
+    Three facts, chosen for one purpose: to let someone reading their own consent inbox or
+    audit trail recognise who is on the other side. Deliberately no ids, no registration
+    number, no email, no employment status — a patient decides whether to share records
+    with a named clinician at a named hospital, and nothing else on the staff row helps
+    with that decision (docs/SECURITY.md: expose the minimum that serves the use case).
+
+    ``specialty`` is whatever the row already carries and is often absent; ``hospital_name``
+    is never absent, because every staff row belongs to a hospital by schema.
+    """
+
+    full_name: str
+    specialty: str | None
+    hospital_name: str
+
+
+class StaffDirectoryService:
+    """Display names for the staff a patient-facing listing refers to.
+
+    Separate from ``ClinicianDirectoryService`` on purpose: that one answers "may this
+    person act", this one answers "what do we call them", and the two must not become one
+    object that leaks employment status into a patient's screen.
+
+    **Every method takes a collection and answers a mapping.** A page of consent requests
+    or audit entries names many people, and resolving them one row at a time is the N+1 this
+    service exists to prevent: one statement per kind of identity, per page, whatever the
+    page size. Ids that resolve to nothing are simply absent from the mapping — a caller
+    renders what it got and never has to distinguish "missing" from "failed".
+    """
+
+    def __init__(
+        self,
+        doctors: DoctorRepository,
+        admins: HospitalAdminRepository,
+        hospitals: HospitalRepository,
+    ) -> None:
+        self._doctors = doctors
+        self._admins = admins
+        self._hospitals = hospitals
+
+    async def clinicians_by_id(self, doctor_ids: Collection[UUID]) -> dict[UUID, StaffDisplay]:
+        """Practitioners keyed by their own id — how consent records a requester or grantee."""
+        rows = await self._doctors.list_with_hospital_by_ids(doctor_ids)
+        return {doctor.id: _clinician_display(doctor, hospital) for doctor, hospital in rows}
+
+    async def staff_by_user_id(self, user_ids: Collection[UUID]) -> dict[UUID, StaffDisplay]:
+        """Staff keyed by account id — how the audit trail records who acted.
+
+        Both kinds of staff are resolved because both appear in a patient's trail: a
+        clinician reading a record, and an administrator uploading one. Accounts that are
+        neither (the patient themselves, a platform administrator) resolve to nothing, which
+        is the truthful answer — this module knows no name for them.
+        """
+        clinicians = await self._doctors.list_with_hospital_by_user_ids(user_ids)
+        admins = await self._admins.list_with_hospital_by_user_ids(user_ids)
+        displays = {
+            doctor.user_id: _clinician_display(doctor, hospital) for doctor, hospital in clinicians
+        }
+        displays.update(
+            {
+                admin.user_id: StaffDisplay(
+                    full_name=admin.full_name, specialty=None, hospital_name=hospital.name
+                )
+                for admin, hospital in admins
+            }
+        )
+        return displays
+
+    async def hospital_names(self, hospital_ids: Collection[UUID]) -> dict[UUID, str]:
+        """Hospital display names by id — an organisation is public as its name alone."""
+        hospitals = await self._hospitals.list_by_ids(hospital_ids)
+        return {hospital.id: hospital.name for hospital in hospitals}
+
+
+def _clinician_display(doctor: Doctor, hospital: Hospital) -> StaffDisplay:
+    return StaffDisplay(
+        full_name=doctor.full_name, specialty=doctor.specialty, hospital_name=hospital.name
+    )
 
 
 class ClinicianDirectoryService:
@@ -96,3 +185,9 @@ def clinician_directory(session: AsyncSession) -> ClinicianDirectoryService:
 
 def record_category_directory(session: AsyncSession) -> RecordCategoryDirectoryService:
     return RecordCategoryDirectoryService(RecordCategoryRepository(session))
+
+
+def staff_directory(session: AsyncSession) -> StaffDirectoryService:
+    return StaffDirectoryService(
+        DoctorRepository(session), HospitalAdminRepository(session), HospitalRepository(session)
+    )

@@ -9,10 +9,8 @@ relationship checks (is this *your* request, *your* grant) are the service's, an
 answer 404 rather than 403 so existence never leaks.
 
 Routers stay thin: parse, translate category codes into ids, delegate, map domain errors
-through ``dependencies.to_http_error``. No handler queries anything or decides anything.
-
-Nothing here is mounted in ``app.main`` yet, and the records read path does not call
-``consent.enforce`` yet — both land with the integration task.
+through ``dependencies.to_http_error``. No handler queries anything or decides anything —
+including the state a grant is in, which the service reads from its own clock.
 """
 
 from collections.abc import Sequence
@@ -38,18 +36,36 @@ from app.modules.consent.errors import ConsentError
 from app.modules.consent.models import ConsentGrant
 from app.modules.consent.schemas import (
     AccessRequestCreateRequest,
+    AccessRequestListItemResponse,
     AccessRequestListResponse,
     AccessRequestResponse,
+    AuditEventListResponse,
+    AuditEventResponse,
     CategorySelectionRequest,
     ConsentDecisionResponse,
+    ConsentGrantListItemResponse,
+    ConsentGrantListResponse,
     ConsentGrantResponse,
     DecisionOutcomeResponse,
+    StaffDisplayResponse,
 )
-from app.modules.consent.service import DecisionOutcome, RequestPage, RequestView
+from app.modules.consent.service import (
+    AuditPage,
+    AuditView,
+    DecisionOutcome,
+    GrantPage,
+    GrantView,
+    PersonDisplay,
+    RequestPage,
+    RequestView,
+)
 from app.shared.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 
 access_requests_router = APIRouter(prefix="/access-requests", tags=["consent"])
 consent_grants_router = APIRouter(prefix="/consent-grants", tags=["consent"])
+# Plural kebab-case after the table it serves (docs/API_GUIDELINES.md), alongside its
+# siblings: the trail is consent-owned, so it is this module's surface, not a new one.
+audit_logs_router = APIRouter(prefix="/audit-logs", tags=["consent"])
 
 PatientUser = Annotated[AuthenticatedUser, Depends(RequirePatient)]
 DoctorUser = Annotated[AuthenticatedUser, Depends(RequireDoctor)]
@@ -62,6 +78,18 @@ _NO_PROFILE: ResponseSpec = {
     404: {"description": "No profile for this account", "content": PROBLEM}
 }
 _INVALID: ResponseSpec = {422: {"description": "Validation failed", "content": PROBLEM}}
+
+
+def _to_staff_display(person: PersonDisplay | None) -> StaffDisplayResponse | None:
+    """The single place a projected identity becomes wire shape. Every listing that names
+    somebody goes through here, so "what a patient may see of staff" is one decision."""
+    if person is None:
+        return None
+    return StaffDisplayResponse(
+        full_name=person.full_name,
+        specialty=person.specialty,
+        hospital_name=person.hospital_name,
+    )
 
 
 def _to_response(view: RequestView, vocabulary: CategoryVocabulary) -> AccessRequestResponse:
@@ -80,11 +108,23 @@ def _to_response(view: RequestView, vocabulary: CategoryVocabulary) -> AccessReq
     )
 
 
+def _to_request_list_item(
+    view: RequestView, vocabulary: CategoryVocabulary
+) -> AccessRequestListItemResponse:
+    """The same projection as a single request, plus who asked — built from that projection
+    rather than beside it, so the two cannot drift."""
+    return AccessRequestListItemResponse(
+        **_to_response(view, vocabulary).model_dump(),
+        requester=_to_staff_display(view.requester),
+        requester_hospital_name=view.requester_hospital_name,
+    )
+
+
 def _to_list_response(
     page: RequestPage, vocabulary: CategoryVocabulary
 ) -> AccessRequestListResponse:
     return AccessRequestListResponse(
-        items=[_to_response(view, vocabulary) for view in page.items],
+        items=[_to_request_list_item(view, vocabulary) for view in page.items],
         next_cursor=page.next_cursor,
     )
 
@@ -116,6 +156,56 @@ def _to_grant_response(grant: ConsentGrant, vocabulary: CategoryVocabulary) -> C
         granted_at=grant.created_at,
         expires_at=grant.expires_at,
         revoked_at=grant.revoked_at,
+    )
+
+
+def _to_grant_list_item(
+    view: GrantView, vocabulary: CategoryVocabulary
+) -> ConsentGrantListItemResponse:
+    """The same projection as a single grant, plus the state the service read for it —
+    built from that projection rather than beside it, so the two cannot drift."""
+    return ConsentGrantListItemResponse(
+        **_to_grant_response(view.grant, vocabulary).model_dump(),
+        status=view.state,
+        grantee=_to_staff_display(view.grantee),
+    )
+
+
+def _to_audit_response(view: AuditView, vocabulary: CategoryVocabulary) -> AuditEventResponse:
+    """Straight projection of the row, plus the actor's name where the service resolved one.
+    The one translation is the category, which the API addresses by code everywhere — the
+    same swap every other response here performs."""
+    entry = view.entry
+    category_id = entry.target_category_id
+    return AuditEventResponse(
+        id=entry.id,
+        action=entry.action,
+        actor_user_id=entry.actor_user_id,
+        actor_role=entry.actor_role,
+        target_record_id=entry.target_record_id,
+        target_category_code=None if category_id is None else vocabulary.by_id[category_id],
+        target_request_id=entry.target_request_id,
+        occurred_at=entry.occurred_at,
+        event_hash=entry.event_hash,
+        actor=_to_staff_display(view.actor),
+    )
+
+
+def _to_audit_list_response(
+    page: AuditPage, vocabulary: CategoryVocabulary
+) -> AuditEventListResponse:
+    return AuditEventListResponse(
+        items=[_to_audit_response(view, vocabulary) for view in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+def _to_grant_list_response(
+    page: GrantPage, vocabulary: CategoryVocabulary
+) -> ConsentGrantListResponse:
+    return ConsentGrantListResponse(
+        items=[_to_grant_list_item(view, vocabulary) for view in page.items],
+        next_cursor=page.next_cursor,
     )
 
 
@@ -305,6 +395,40 @@ async def _decide(
     return _to_outcome_response(outcome, vocabulary)
 
 
+@consent_grants_router.get(
+    "",
+    response_model=ConsentGrantListResponse,
+    responses={**_UNAUTHENTICATED, **_WRONG_ROLE, **_NO_PROFILE, **_INVALID},
+)
+async def list_grants(
+    user: PatientUser,
+    service: ConsentServiceDep,
+    vocabulary: CategoryVocabularyDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> ConsentGrantListResponse:
+    """Every grant ever derived for the patient, newest first, each with its current state.
+
+    The patient's own history, revoked and expired grants included: who may read their
+    records today is only half the question this page answers, and access that has been
+    withdrawn is a fact its owner is entitled to keep seeing. ``status`` distinguishes the
+    three cases, read from the server's clock with the predicate enforcement uses, so a
+    client never has to judge expiry itself.
+
+    Roles: PATIENT (own grants only — the scope comes from the token, never a parameter; a
+    grantee clinician has no listing here, by design). Consent requirement: none, a grant
+    is not record content. Reading one's own consent state is not an access event, so
+    nothing is audited — the trail records grants being created and revoked, which is where
+    a change to who can read anything actually happens.
+    Failure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).
+    """
+    try:
+        page = await service.list_grants(user, after=parse_cursor(cursor), limit=limit)
+    except ConsentError as exc:
+        raise to_http_error(exc) from exc
+    return _to_grant_list_response(page, vocabulary)
+
+
 @consent_grants_router.post(
     "/{grant_id}/revoke",
     response_model=ConsentGrantResponse,
@@ -332,3 +456,35 @@ async def revoke_grant(
     except ConsentError as exc:
         raise to_http_error(exc) from exc
     return _to_grant_response(grant, vocabulary)
+
+
+@audit_logs_router.get(
+    "",
+    response_model=AuditEventListResponse,
+    responses={**_UNAUTHENTICATED, **_WRONG_ROLE, **_NO_PROFILE, **_INVALID},
+)
+async def list_audit_events(
+    user: PatientUser,
+    service: ConsentServiceDep,
+    vocabulary: CategoryVocabularyDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> AuditEventListResponse:
+    """The patient's own audit trail, most recent event first.
+
+    Every consent decision, revocation and record access concerning this patient, refusals
+    included — the append-only log is what makes the platform's promise checkable by the
+    person it is about. Ordered and paginated on the application-assigned event time, which
+    is also the value the tamper-evidence hash covers.
+
+    Roles: PATIENT (own trail only — the scope comes from the token, never a parameter; no
+    clinician or administrator reads a patient's log through this API). Consent requirement:
+    none, an audit entry is not record content, and it names no file, date or description.
+    Reading the trail is not itself an audited event.
+    Failure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).
+    """
+    try:
+        page = await service.list_audit_events(user, after=parse_cursor(cursor), limit=limit)
+    except ConsentError as exc:
+        raise to_http_error(exc) from exc
+    return _to_audit_list_response(page, vocabulary)

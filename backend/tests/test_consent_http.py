@@ -45,7 +45,11 @@ from app.modules.consent.errors import (
     UnknownPatientError,
     UnrequestedCategoryError,
 )
-from app.modules.consent.router import access_requests_router, consent_grants_router
+from app.modules.consent.router import (
+    access_requests_router,
+    audit_logs_router,
+    consent_grants_router,
+)
 from app.modules.patients.models import Patient
 from app.modules.records.models import (
     Doctor,
@@ -68,6 +72,7 @@ from tests.support import (
 API = "/api/v1"
 REQUESTS = f"{API}/access-requests"
 GRANTS = f"{API}/consent-grants"
+AUDIT = f"{API}/audit-logs"
 HEALTH_ID = "PHI-IND-2026-1QE8DVR"
 PROBLEM_JSON = "application/problem+json"
 
@@ -92,6 +97,7 @@ def _consent_app() -> FastAPI:
     register_exception_handlers(application)
     application.include_router(access_requests_router, prefix=API)
     application.include_router(consent_grants_router, prefix=API)
+    application.include_router(audit_logs_router, prefix=API)
     return application
 
 
@@ -305,6 +311,80 @@ def test_revoke_is_idempotent(world: World) -> None:
     assert second.json()["id"] == first.json()["id"]
 
 
+def _grant_one(world: World, code: str = "CBC") -> dict[str, Any]:
+    """Raise a request and approve one category, returning the grant that produced."""
+    request_id = _create(world, code).json()["id"]
+    approved = world.client.post(
+        f"{REQUESTS}/{request_id}/approve", json={"categoryCodes": [code]}, headers=world.patient
+    )
+    grant: dict[str, Any] = approved.json()["grants"][0]
+    return grant
+
+
+def test_grant_listing_returns_the_patients_grants_with_their_state(world: World) -> None:
+    granted = _grant_one(world)
+
+    listed = world.client.get(GRANTS, headers=world.patient)
+
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["nextCursor"] is None
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert set(item) == {
+        "id",
+        "categoryCode",
+        "granteeDoctorId",
+        "grantedAt",
+        "expiresAt",
+        "revokedAt",
+        "status",
+        "grantee",
+    }
+    assert item["id"] == granted["id"]
+    assert item["categoryCode"] == "CBC"
+    assert item["revokedAt"] is None
+    assert item["status"] == "ACTIVE"
+    assert item["grantee"] == {
+        "fullName": "Dr Verma",
+        "specialty": None,
+        "hospitalName": "TMH",
+    }
+
+
+def test_a_revoked_grant_stays_in_the_listing_and_says_so(world: World) -> None:
+    """Withdrawn access is history the owner keeps seeing, not a row that disappears."""
+    granted = _grant_one(world)
+    revoked = world.client.post(f"{GRANTS}/{granted['id']}/revoke", headers=world.patient)
+    assert revoked.status_code == 200, revoked.text
+
+    item = world.client.get(GRANTS, headers=world.patient).json()["items"][0]
+
+    assert item["id"] == granted["id"]
+    assert item["status"] == "REVOKED"
+    assert item["revokedAt"] is not None
+
+
+def test_grant_listing_is_scoped_to_the_caller(world: World) -> None:
+    _grant_one(world)
+
+    assert world.client.get(GRANTS, headers=world.other_patient).json()["items"] == []
+
+
+def test_grant_listing_cursor_pagination_over_http(world: World) -> None:
+    created = {_grant_one(world)["id"] for _ in range(3)}
+
+    first = world.client.get(GRANTS, params={"limit": 2}, headers=world.patient)
+    assert len(first.json()["items"]) == 2
+    cursor = first.json()["nextCursor"]
+    assert cursor is not None
+    second = world.client.get(GRANTS, params={"limit": 2, "cursor": cursor}, headers=world.patient)
+    assert len(second.json()["items"]) == 1
+    assert second.json()["nextCursor"] is None
+    seen = {item["id"] for item in first.json()["items"] + second.json()["items"]}
+    assert seen == created
+
+
 def test_cursor_pagination_over_http(world: World) -> None:
     created = {_create(world, "CBC").json()["id"] for _ in range(3)}
     first = world.client.get(f"{REQUESTS}/inbox", params={"limit": 2}, headers=world.patient)
@@ -320,6 +400,103 @@ def test_cursor_pagination_over_http(world: World) -> None:
     assert seen == created
 
 
+def test_the_inbox_names_the_clinician_and_the_hospital_that_asked(world: World) -> None:
+    request_id = _create(world, "CBC").json()["id"]
+
+    inbox = world.client.get(f"{REQUESTS}/inbox", headers=world.patient)
+
+    assert inbox.status_code == 200, inbox.text
+    item = inbox.json()["items"][0]
+    assert item["id"] == request_id
+    assert item["requester"] == {
+        "fullName": "Dr Verma",
+        "specialty": None,
+        "hospitalName": "TMH",
+    }
+    assert item["requesterHospitalName"] == "TMH"
+    # The ids the projection was built from are still there, unchanged.
+    assert item["requesterDoctorId"] is not None
+    assert item["requesterHospitalId"] is not None
+
+
+def test_creating_a_request_is_unchanged_by_the_projection(world: World) -> None:
+    """The write path answers the requester themselves, so it stays free of the lookup."""
+    created = _create(world, "CBC")
+
+    assert created.status_code == 201
+    assert "requester" not in created.json()
+
+
+def test_the_trail_returns_the_patients_events_with_stored_identifiers(world: World) -> None:
+    request_id = _create(world, "CBC").json()["id"]
+    world.client.post(
+        f"{REQUESTS}/{request_id}/approve", json={"categoryCodes": ["CBC"]}, headers=world.patient
+    )
+
+    listed = world.client.get(AUDIT, headers=world.patient)
+
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["nextCursor"] is None
+    assert [item["action"] for item in body["items"]] == ["CONSENT_APPROVED", "ACCESS_REQUESTED"]
+
+    approval, asked = body["items"]
+    assert set(approval) == {
+        "id",
+        "action",
+        "actorUserId",
+        "actorRole",
+        "actor",
+        "targetRecordId",
+        "targetCategoryCode",
+        "targetRequestId",
+        "occurredAt",
+        "eventHash",
+    }
+    # The decision targets a category, by code; the request targets the request itself.
+    assert approval["actorRole"] == "PATIENT"
+    assert approval["targetCategoryCode"] == "CBC"
+    assert approval["targetRecordId"] is None
+    assert asked["actorRole"] == "DOCTOR"
+    assert asked["actorUserId"] == str(world.doctor_user_id)
+    assert asked["targetRequestId"] == request_id
+    assert len(asked["eventHash"]) == 64
+    # The clinician who asked is named; the patient's own decision is not — actorRole
+    # already says it was them, and this module knows no name for a patient.
+    assert asked["actor"] == {"fullName": "Dr Verma", "specialty": None, "hospitalName": "TMH"}
+    assert approval["actor"] is None
+
+
+def test_the_trail_is_scoped_to_the_caller(world: World) -> None:
+    _create(world, "CBC")
+
+    assert world.client.get(AUDIT, headers=world.other_patient).json()["items"] == []
+
+
+def test_trail_cursor_pagination_over_http(world: World) -> None:
+    for _ in range(3):
+        _create(world, "CBC")
+
+    first = world.client.get(AUDIT, params={"limit": 2}, headers=world.patient)
+    assert len(first.json()["items"]) == 2
+    cursor = first.json()["nextCursor"]
+    assert cursor is not None
+    second = world.client.get(AUDIT, params={"limit": 2, "cursor": cursor}, headers=world.patient)
+    assert len(second.json()["items"]) == 1
+    assert second.json()["nextCursor"] is None
+    seen = {item["id"] for item in first.json()["items"] + second.json()["items"]}
+    assert len(seen) == 3
+
+
+def test_reading_the_trail_leaves_it_unchanged(world: World) -> None:
+    _create(world, "CBC")
+    before = world.client.get(AUDIT, headers=world.patient).json()["items"]
+
+    after = world.client.get(AUDIT, headers=world.patient).json()["items"]
+
+    assert [item["id"] for item in after] == [item["id"] for item in before]
+
+
 # -- authn / authz ---------------------------------------------------------------------
 
 
@@ -330,9 +507,11 @@ def test_every_endpoint_requires_authentication(world: World) -> None:
         world.client.get(f"{REQUESTS}/sent"),
         world.client.post(f"{REQUESTS}/{uuid4()}/approve", json={"categoryCodes": ["CBC"]}),
         world.client.post(f"{REQUESTS}/{uuid4()}/reject", json={"categoryCodes": ["CBC"]}),
+        world.client.get(GRANTS),
         world.client.post(f"{GRANTS}/{uuid4()}/revoke"),
+        world.client.get(AUDIT),
     ]
-    assert [response.status_code for response in unauthenticated] == [401] * 6
+    assert [response.status_code for response in unauthenticated] == [401] * 8
     assert all(response.headers["WWW-Authenticate"] == "Bearer" for response in unauthenticated)
 
 
@@ -345,9 +524,11 @@ def test_role_gates_reject_the_wrong_role(world: World) -> None:
             json={"categoryCodes": ["CBC"]},
             headers=world.doctor,
         ),
+        world.client.get(GRANTS, headers=world.doctor),
         world.client.post(f"{GRANTS}/{uuid4()}/revoke", headers=world.doctor),
+        world.client.get(AUDIT, headers=world.doctor),
     ]
-    assert [response.status_code for response in patient_only] == [403] * 3
+    assert [response.status_code for response in patient_only] == [403] * 5
 
     doctor_only = [
         world.client.get(f"{REQUESTS}/sent", headers=world.patient),
@@ -437,6 +618,16 @@ def test_request_validation_rejects_unknown_fields_blanks_and_bad_paging(world: 
         ).status_code
         == 422
     )
+    assert (
+        world.client.get(GRANTS, params={"cursor": "garbage"}, headers=world.patient).status_code
+        == 422
+    )
+    assert world.client.get(GRANTS, params={"limit": 0}, headers=world.patient).status_code == 422
+    assert (
+        world.client.get(AUDIT, params={"cursor": "garbage"}, headers=world.patient).status_code
+        == 422
+    )
+    assert world.client.get(AUDIT, params={"limit": 101}, headers=world.patient).status_code == 422
 
 
 def test_error_responses_are_rfc7807_problem_json(world: World) -> None:
@@ -476,8 +667,12 @@ def test_openapi_declares_every_consent_path_and_its_failures(consent_app: FastA
         f"{REQUESTS}/sent",
         f"{REQUESTS}/{{request_id}}/approve",
         f"{REQUESTS}/{{request_id}}/reject",
+        GRANTS,
         f"{GRANTS}/{{grant_id}}/revoke",
+        AUDIT,
     }
+    assert set(paths[GRANTS]["get"]["responses"]) >= {"200", "401", "403", "404", "422"}
+    assert set(paths[AUDIT]["get"]["responses"]) >= {"200", "401", "403", "404", "422"}
     assert set(paths[REQUESTS]["post"]["responses"]) >= {"201", "401", "403", "404", "422"}
     approve = paths[f"{REQUESTS}/{{request_id}}/approve"]["post"]["responses"]
     assert set(approve) >= {"200", "401", "403", "404", "409", "422"}
@@ -503,6 +698,42 @@ def test_openapi_schemas_are_camel_case_and_paginated(consent_app: FastAPI) -> N
         "decisions",
         "grants",
     }
+    assert set(schemas["ConsentGrantListResponse"]["properties"]) == {"items", "nextCursor"}
+    # The listing item is the single-grant shape plus the derived state, so the two can
+    # never disagree about a grant's fields.
+    assert set(schemas["ConsentGrantListItemResponse"]["properties"]) == {
+        *schemas["ConsentGrantResponse"]["properties"],
+        "status",
+        "grantee",
+    }
+    assert "status" not in schemas["ConsentGrantResponse"]["properties"]
+    assert "grantee" not in schemas["ConsentGrantResponse"]["properties"]
+    # The listing item is the single-request shape plus who asked; the write path keeps its.
+    assert set(schemas["AccessRequestListItemResponse"]["properties"]) == {
+        *schemas["AccessRequestResponse"]["properties"],
+        "requester",
+        "requesterHospitalName",
+    }
+    assert "requester" not in schemas["AccessRequestResponse"]["properties"]
+    # One display shape serves all three listings, and it carries no identifier.
+    assert set(schemas["StaffDisplayResponse"]["properties"]) == {
+        "fullName",
+        "specialty",
+        "hospitalName",
+    }
+    assert set(schemas["AuditEventListResponse"]["properties"]) == {"items", "nextCursor"}
+    assert set(schemas["AuditEventResponse"]["properties"]) == {
+        "id",
+        "action",
+        "actorUserId",
+        "actorRole",
+        "actor",
+        "targetRecordId",
+        "targetCategoryCode",
+        "targetRequestId",
+        "occurredAt",
+        "eventHash",
+    }
     # Writes reject unknown fields (docs/API_GUIDELINES.md).
     assert schemas["AccessRequestCreateRequest"].get("additionalProperties") is False
     assert schemas["CategorySelectionRequest"].get("additionalProperties") is False
@@ -511,7 +742,16 @@ def test_openapi_schemas_are_camel_case_and_paginated(consent_app: FastAPI) -> N
 def test_openapi_never_exposes_internal_record_identifiers(consent_app: FastAPI) -> None:
     """Existence vs content: nothing on the consent surface carries record metadata."""
     schemas = consent_app.openapi()["components"]["schemas"]
-    leaked = {"s3Key", "originalFilename", "sizeBytes", "dateOfService", "contentType"}
+    leaked = {
+        "s3Key",
+        "originalFilename",
+        "sizeBytes",
+        "dateOfService",
+        "contentType",
+        # Categories are addressed by code on this surface; the internal id stays internal.
+        "targetCategoryId",
+        "categoryId",
+    }
     for schema in schemas.values():
         assert not leaked & set(schema.get("properties", {}))
 
@@ -556,9 +796,11 @@ def test_an_unmapped_error_is_a_logged_500(caplog: pytest.LogCaptureFixture) -> 
     )
 
 
-def test_a_token_without_a_profile_row_gets_404_on_both_listings(world: World) -> None:
+def test_a_token_without_a_profile_row_gets_404_on_every_listing(world: World) -> None:
     """Exercises the listing error paths: valid claims, no profile."""
     assert (
         world.client.get(f"{REQUESTS}/inbox", headers=_bearer("ghost-patient")).status_code == 404
     )
     assert world.client.get(f"{REQUESTS}/sent", headers=_bearer("ghost-doctor")).status_code == 404
+    assert world.client.get(GRANTS, headers=_bearer("ghost-patient")).status_code == 404
+    assert world.client.get(AUDIT, headers=_bearer("ghost-patient")).status_code == 404
