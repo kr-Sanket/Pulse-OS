@@ -7,7 +7,7 @@ import { Link } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ActivityEntry } from "@/data/dashboard";
+import type { ActivityEntry } from "@/dashboard/view";
 
 import { IconChip } from "./IconChip";
 import { SectionCard } from "./SectionCard";

@@ -4,7 +4,7 @@
 import { ShieldCheck } from "lucide-react";
 
 import { SectionCard } from "@/components/dashboard/SectionCard";
-import { PRIVACY_REMINDER } from "@/data/grants";
+import { PRIVACY_REMINDER } from "@/grants/view";
 
 export function PrivacyReminderCard() {
   return (

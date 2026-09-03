@@ -1,40 +1,26 @@
-// Who to reach if the patient cannot answer for themselves. Mock data — the backend does
-// not model an emergency contact yet.
+// Who to reach if the patient cannot answer for themselves.
+//
+// PulseOS does not model an emergency contact (docs/DOMAIN_MODEL.md §1), so this card
+// states its absence rather than showing a stand-in. The card and its section stay in
+// place: the gap is the backend's, and hiding it would hide that.
 
 import { UserRound } from "lucide-react";
 
-import { Detail } from "@/components/common/Detail";
 import { IconChip } from "@/components/dashboard/IconChip";
 import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { EMERGENCY_CONTACT } from "@/data/profile";
+import { EMERGENCY_CONTACT_EMPTY } from "@/profile/view";
 
 export function EmergencyContactCard() {
-  const { name, relationship, phone, secondaryPhone } = EMERGENCY_CONTACT;
-
   return (
     <Card className="h-full [--card-spacing:--spacing(6)]">
-      <CardContent className="space-y-5">
-        <div className="flex items-center gap-3.5">
-          <IconChip icon={UserRound} size="lg" />
-          <div className="min-w-0">
-            <p className="text-foreground truncate font-medium">{name}</p>
-            <p className="text-muted-foreground text-sm">{relationship}</p>
-          </div>
+      <CardContent className="flex items-start gap-3.5">
+        <IconChip icon={UserRound} size="lg" />
+        <div className="min-w-0 space-y-1">
+          <p className="text-foreground font-medium">{EMERGENCY_CONTACT_EMPTY.title}</p>
+          <p className="text-muted-foreground text-sm leading-relaxed">
+            {EMERGENCY_CONTACT_EMPTY.body}
+          </p>
         </div>
-
-        <Separator />
-
-        <dl className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
-          <Detail label="Phone Number">
-            <span className="tabular-nums">{phone}</span>
-          </Detail>
-          {secondaryPhone === null ? null : (
-            <Detail label="Secondary Phone">
-              <span className="tabular-nums">{secondaryPhone}</span>
-            </Detail>
-          )}
-        </dl>
       </CardContent>
     </Card>
   );

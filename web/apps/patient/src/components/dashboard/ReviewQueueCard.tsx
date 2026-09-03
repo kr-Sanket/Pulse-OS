@@ -5,7 +5,7 @@ import { ShieldQuestion } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import type { ReviewRequest } from "@/data/dashboard";
+import type { ReviewRequest } from "@/dashboard/view";
 
 import { SectionCard } from "./SectionCard";
 import { StatusBadge } from "./StatusBadge";

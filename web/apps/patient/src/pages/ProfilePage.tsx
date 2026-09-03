@@ -1,27 +1,35 @@
 // Profile: who the patient is, their Health ID, how to reach them, and how the account is
-// secured. Informational only — Edit Profile is visual per spec.
+// secured.
 //
-// Display name, email and photo come from useAuth(); everything else is mock data in
-// src/data/profile.ts. Nothing here calls the API.
+// Wired to the backend. The page runs the registration bootstrap through useProfile —
+// GET /patients/me, and on a 403 (an authentic Firebase subject with no PulseOS claims)
+// POST /patients/register, refresh the ID token, retry — so a first-time patient is issued
+// a Health ID by opening this page. That bootstrap had no caller after the M4 redesign
+// (.claude/TODO.md); this restores it.
 //
-// NOTE: the previous version of this page was the M0.3 walking skeleton and was the only
-// caller of profile/loadProfile.ts (GET /patients/me, registering the patient on first
-// login). That bootstrap therefore has no caller now — see .claude/TODO.md.
+// Two sources feed the cards: the profile response owns the health record, the identity
+// provider owns email and avatar. Facts neither one holds are shown as missing rather than
+// filled in — see profile/view.ts. Edit Profile stays visual: there is no write endpoint.
 
 import { Pencil } from "lucide-react";
+
+import type { PatientProfile } from "@pulseos/api-client";
 
 import { useAuth } from "@/auth/AuthContext";
 import { EmergencyContactCard } from "@/components/profile/EmergencyContactCard";
 import { PersonalInfoCard } from "@/components/profile/PersonalInfoCard";
+import { ProfileErrorState } from "@/components/profile/ProfileErrorState";
 import { ProfileInfoCard } from "@/components/profile/ProfileInfoCard";
+import { ProfileSkeleton } from "@/components/profile/ProfileSkeleton";
 import { ProfileSummaryCard } from "@/components/profile/ProfileSummaryCard";
 import { SecurityCard } from "@/components/profile/SecurityCard";
 import { Button } from "@/components/ui/button";
-import { resolveIdentity } from "@/data/profile";
+import { useProfile } from "@/profile/useProfile";
+import { accountFacts, resolveIdentity, type SignedInIdentity } from "@/profile/view";
 
 export function ProfilePage() {
   const { user } = useAuth();
-  const identity = resolveIdentity(user);
+  const { state, reload } = useProfile();
 
   return (
     <div className="space-y-10">
@@ -32,19 +40,42 @@ export function ProfilePage() {
             View your personal information and account details.
           </p>
         </div>
-        <Button className="gap-2">
+        <Button className="gap-2" disabled={state.status !== "ready"}>
           <Pencil className="size-4" aria-hidden />
           Edit Profile
         </Button>
       </div>
 
-      <ProfileSummaryCard identity={identity} />
+      {state.status === "loading" ? (
+        <ProfileSkeleton />
+      ) : state.status === "error" ? (
+        <ProfileErrorState message={state.message} onRetry={reload} />
+      ) : (
+        <ProfileContent profile={state.profile} user={user} />
+      )}
+    </div>
+  );
+}
+
+/** The account view itself, once there is a profile to render it from. */
+interface ProfileContentProps {
+  profile: PatientProfile;
+  /** Structurally an AuthUser — email and avatar come from nowhere else. */
+  user: SignedInIdentity | null;
+}
+
+function ProfileContent({ profile, user }: ProfileContentProps) {
+  const identity = resolveIdentity(profile, user);
+
+  return (
+    <div className="space-y-10">
+      <ProfileSummaryCard identity={identity} account={accountFacts(profile)} />
 
       <section aria-labelledby="personal-heading" className="space-y-4">
         <h3 id="personal-heading" className="text-sm font-semibold">
           Personal Information
         </h3>
-        <PersonalInfoCard identity={identity} />
+        <PersonalInfoCard profile={profile} identity={identity} />
       </section>
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
@@ -59,7 +90,7 @@ export function ProfilePage() {
           <h3 id="security-heading" className="text-sm font-semibold">
             Account Security
           </h3>
-          <SecurityCard />
+          <SecurityCard identity={identity} />
         </section>
       </div>
 

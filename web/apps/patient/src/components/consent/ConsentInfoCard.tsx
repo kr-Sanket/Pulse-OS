@@ -4,7 +4,7 @@
 import { Info } from "lucide-react";
 
 import { SectionCard } from "@/components/dashboard/SectionCard";
-import { CONSENT_GUIDANCE } from "@/data/consents";
+import { CONSENT_GUIDANCE } from "@/consent/view";
 
 export function ConsentInfoCard() {
   return (

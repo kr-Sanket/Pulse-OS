@@ -4,7 +4,7 @@
 import { ShieldCheck } from "lucide-react";
 
 import { SectionCard } from "@/components/dashboard/SectionCard";
-import { PROFILE_PRIVACY } from "@/data/profile";
+import { PROFILE_PRIVACY } from "@/profile/view";
 
 export function ProfileInfoCard() {
   return (

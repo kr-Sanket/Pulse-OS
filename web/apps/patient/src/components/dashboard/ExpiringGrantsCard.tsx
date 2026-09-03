@@ -3,7 +3,7 @@
 
 import { CalendarClock } from "lucide-react";
 
-import type { ExpiringGrant } from "@/data/dashboard";
+import type { ExpiringGrant } from "@/dashboard/view";
 
 import { IconChip } from "./IconChip";
 import { SectionCard } from "./SectionCard";

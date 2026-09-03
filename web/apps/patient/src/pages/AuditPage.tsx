@@ -1,20 +1,26 @@
 // Audit History: the append-only trail of every access to the patient's records, a summary
-// of the figures behind it, and a standing note on what the log guarantees.
+// of the events on this page, and a standing note on what the log guarantees.
 //
-// Presentation only — everything comes from src/data/audit.ts and nothing here calls the API
-// or holds state. Export Log is visual per spec.
+// Wired to the backend: GET /audit-logs. All state lives in useAudit; all mapping — the
+// action vocabulary, who acted, the summary figures — lives in audit/view.ts. This file
+// chooses sections and renders.
+//
+// Export Log is presentational: there is no export endpoint.
 
 import { Download } from "lucide-react";
 
 import { AuditInfoCard } from "@/components/audit/AuditInfoCard";
 import { AuditSummaryCard } from "@/components/audit/AuditSummaryCard";
 import { AuditTimelineItem } from "@/components/audit/AuditTimelineItem";
+import { AuditTimelineSkeleton } from "@/components/audit/AuditTimelineSkeleton";
+import { ErrorState } from "@/components/common/ErrorState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AUDIT_EVENTS } from "@/data/audit";
+import { useAudit } from "@/audit/useAudit";
 
 export function AuditPage() {
-  const lastIndex = AUDIT_EVENTS.length - 1;
+  const trail = useAudit();
+  const lastIndex = trail.events.length - 1;
 
   return (
     <div className="space-y-10">
@@ -31,32 +37,49 @@ export function AuditPage() {
         </Button>
       </div>
 
-      <section aria-labelledby="history-heading" className="space-y-4">
-        <div className="flex items-center gap-2.5">
-          <h3 id="history-heading" className="text-sm font-semibold">
-            Recent Access History
-          </h3>
-          <Badge variant="info">{AUDIT_EVENTS.length}</Badge>
-        </div>
-        {AUDIT_EVENTS.length === 0 ? (
-          <p className="text-muted-foreground text-sm">
-            No one has accessed your records yet. Every access will appear here.
-          </p>
-        ) : (
-          <ol>
-            {AUDIT_EVENTS.map((event, index) => (
-              <AuditTimelineItem key={event.id} event={event} isLast={index === lastIndex} />
-            ))}
-          </ol>
-        )}
-      </section>
+      {trail.status === "loading" ? (
+        <AuditTimelineSkeleton />
+      ) : trail.status === "error" ? (
+        <ErrorState
+          title="Could not load your audit history."
+          message={trail.message ?? "Something went wrong."}
+          onRetry={trail.reload}
+        />
+      ) : (
+        <>
+          <section aria-labelledby="history-heading" className="space-y-4">
+            <div className="flex items-center gap-2.5">
+              <h3 id="history-heading" className="text-sm font-semibold">
+                Recent Access History
+              </h3>
+              <Badge variant="info">{trail.events.length}</Badge>
+            </div>
+            {trail.events.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No one has accessed your records yet. Every access will appear here.
+              </p>
+            ) : (
+              <ol>
+                {trail.events.map((event, index) => (
+                  <AuditTimelineItem key={event.id} event={event} isLast={index === lastIndex} />
+                ))}
+              </ol>
+            )}
+            {trail.truncated ? (
+              <p className="text-muted-foreground text-xs">
+                Showing the {trail.pageSize} most recent events. Older ones are not listed yet.
+              </p>
+            ) : null}
+          </section>
 
-      <section aria-labelledby="summary-heading" className="space-y-4">
-        <h3 id="summary-heading" className="text-sm font-semibold">
-          Summary
-        </h3>
-        <AuditSummaryCard />
-      </section>
+          <section aria-labelledby="summary-heading" className="space-y-4">
+            <h3 id="summary-heading" className="text-sm font-semibold">
+              Summary of the Events Shown
+            </h3>
+            <AuditSummaryCard summary={trail.summary} />
+          </section>
+        </>
+      )}
 
       <AuditInfoCard />
     </div>

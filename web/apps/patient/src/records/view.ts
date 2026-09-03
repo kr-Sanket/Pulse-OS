@@ -1,0 +1,95 @@
+// Backend record metadata → what the cards and the details panel actually render.
+//
+// Pure functions, no React: the API speaks codes, bytes and ISO dates, the UI speaks
+// icons, "2.4 MB" and "24 Aug 2026". Keeping the translation here is what lets the
+// presentation components stay dumb, and makes every rule below unit-testable.
+
+import { FileText, FlaskConical, Pill, ScanLine, Syringe, type LucideIcon } from "lucide-react";
+
+import type { Tone } from "@/components/dashboard/StatusBadge";
+
+import type { RecordMetadata } from "./api";
+
+export interface CategoryStyle {
+  icon: LucideIcon;
+  tone: Tone;
+}
+
+/** Keyed by the codes GET /record-categories publishes. Unknown codes fall back rather
+ * than throwing, so a category added server-side renders without a frontend release. */
+const CATEGORY_STYLES: Readonly<Record<string, CategoryStyle>> = {
+  CBC: { icon: FlaskConical, tone: "info" },
+  LAB_REPORT: { icon: FlaskConical, tone: "info" },
+  MRI: { icon: ScanLine, tone: "primary" },
+  XRAY: { icon: ScanLine, tone: "primary" },
+  CT_SCAN: { icon: ScanLine, tone: "primary" },
+  ULTRASOUND: { icon: ScanLine, tone: "primary" },
+  PRESCRIPTION: { icon: Pill, tone: "success" },
+  DISCHARGE_SUMMARY: { icon: FileText, tone: "warning" },
+  VACCINATION: { icon: Syringe, tone: "success" },
+  OTHER: { icon: FileText, tone: "neutral" },
+};
+
+const FALLBACK_STYLE: CategoryStyle = { icon: FileText, tone: "neutral" };
+
+export function categoryStyle(code: string): CategoryStyle {
+  return CATEGORY_STYLES[code] ?? FALLBACK_STYLE;
+}
+
+// Date formatting is portal-wide and lives in lib/dates.ts; re-exported here because the
+// records components and their tests import everything they render through this module.
+export { formatCalendarDate, formatInstantDate } from "@/lib/dates";
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const kilobytes = bytes / 1024;
+  if (kilobytes < 1024) {
+    return `${Math.round(kilobytes)} KB`;
+  }
+  return `${(kilobytes / 1024).toFixed(1)} MB`;
+}
+
+/** Who the record came from. A locker upload has no hospital — the patient added it. */
+export function providerLabel(record: RecordMetadata): string {
+  return record.uploadedByHospital?.name ?? "Your locker";
+}
+
+/** The heading on the card and the panel. The API models no title: a document is named by
+ * its file, and `description` is the sentence underneath it. */
+export function recordTitle(record: RecordMetadata): string {
+  return record.originalFilename;
+}
+
+export const NO_DESCRIPTION = "No description was recorded for this document.";
+
+export function recordDescription(record: RecordMetadata): string {
+  const description = record.description?.trim();
+  return description === undefined || description.length === 0 ? NO_DESCRIPTION : description;
+}
+
+/** Client-side search over the loaded page — the API has no search parameter. */
+export function matchesQuery(record: RecordMetadata, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) {
+    return true;
+  }
+  return [
+    record.originalFilename,
+    record.description ?? "",
+    record.categoryDisplayName,
+    providerLabel(record),
+  ].some((field) => field.toLowerCase().includes(needle));
+}
+
+/** Today as yyyy-mm-dd in the reader's own time zone — the upload form's default and its
+ * ceiling. Deriving it from an ISO string would use UTC and, west of Greenwich in the
+ * evening, offer a "today" the API would reject as being in the future. */
+export function todayIsoDate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = `${now.getMonth() + 1}`.padStart(2, "0");
+  const day = `${now.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}

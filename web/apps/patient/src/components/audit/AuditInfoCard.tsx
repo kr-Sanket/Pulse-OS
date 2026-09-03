@@ -4,7 +4,7 @@
 import { ShieldCheck } from "lucide-react";
 
 import { SectionCard } from "@/components/dashboard/SectionCard";
-import { AUDIT_PRIVACY } from "@/data/audit";
+import { AUDIT_PRIVACY } from "@/audit/view";
 
 export function AuditInfoCard() {
   return (

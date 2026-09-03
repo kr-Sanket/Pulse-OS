@@ -15,8 +15,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { REVIEW_REQUESTS } from "@/data/dashboard";
-
 export interface NavItem {
   /** Route path, matched exactly for "/" and by prefix otherwise. */
   to: string;
@@ -46,13 +44,10 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   {
     title: "Data Sharing",
     items: [
-      {
-        to: "/consent",
-        label: "Consent Requests",
-        title: "Access requests",
-        icon: ShieldCheck,
-        badge: REVIEW_REQUESTS.length,
-      },
+      // No badge: the count was mock-derived, and a live one would mean the layout
+      // fetching the consent inbox on every route. The Dashboard and the Consent page
+      // both show the real number.
+      { to: "/consent", label: "Consent Requests", title: "Access requests", icon: ShieldCheck },
       { to: "/grants", label: "Active Grants", title: "Active grants", icon: KeyRound },
       { to: "/audit", label: "Audit History", title: "Audit log", icon: ScrollText },
     ],
