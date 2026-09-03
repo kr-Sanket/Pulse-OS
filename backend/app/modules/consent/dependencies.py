@@ -11,6 +11,8 @@ module may not query (docs/SYSTEM_ARCHITECTURE.md rule 1). Both arrive through
 its projections into the shapes consent declares:
 
 - ``ClinicianDirectory`` — resolves a caller to a practitioner (declared in ``service``).
+- ``StaffDirectory`` — display names for the staff a listing refers to, so a patient reads
+  people rather than UUIDs. Batched by construction; see ``service.StaffDirectory``.
 - ``CategoryVocabularySource`` — the record-category vocabulary in both directions, because
   the API speaks codes and the domain speaks UUIDs.
 
@@ -21,7 +23,7 @@ ordinary overridable providers, so tests substitute fakes without touching app s
 """
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Protocol
 from uuid import UUID
@@ -53,7 +55,13 @@ from app.modules.consent.repository import (
     ConsentRequestCategoryRepository,
     ConsentRequestRepository,
 )
-from app.modules.consent.service import Clinician, ClinicianDirectory, ConsentService
+from app.modules.consent.service import (
+    Clinician,
+    ClinicianDirectory,
+    ConsentService,
+    PersonDisplay,
+    StaffDirectory,
+)
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.repository import PatientRepository
 from app.modules.records import directory as records_directory
@@ -199,6 +207,48 @@ class RecordsCategoryVocabulary:
         )
 
 
+class RecordsStaffDirectory:
+    """Adapts ``records``' published display projection to the shape consent declares.
+
+    The same ten-line translation ``RecordsClinicianDirectory`` performs, for the same
+    reason: records answers "what is this person called", consent decides where that may
+    appear. Batching is preserved end to end — a collection in, a mapping out, one
+    statement per kind of identity per page.
+    """
+
+    def __init__(self, directory: records_directory.StaffDirectoryService) -> None:
+        self._directory = directory
+
+    async def clinicians_by_id(self, doctor_ids: Collection[UUID]) -> Mapping[UUID, PersonDisplay]:
+        return _to_person_displays(await self._directory.clinicians_by_id(doctor_ids))
+
+    async def staff_by_user_id(self, user_ids: Collection[UUID]) -> Mapping[UUID, PersonDisplay]:
+        return _to_person_displays(await self._directory.staff_by_user_id(user_ids))
+
+    async def hospital_names(self, hospital_ids: Collection[UUID]) -> Mapping[UUID, str]:
+        return await self._directory.hospital_names(hospital_ids)
+
+
+def _to_person_displays(
+    displays: Mapping[UUID, records_directory.StaffDisplay],
+) -> dict[UUID, PersonDisplay]:
+    return {
+        key: PersonDisplay(
+            full_name=display.full_name,
+            specialty=display.specialty,
+            hospital_name=display.hospital_name,
+        )
+        for key, display in displays.items()
+    }
+
+
+def get_staff_directory(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> StaffDirectory:
+    """Display names for staff, backed by records; tests override this dependency."""
+    return RecordsStaffDirectory(records_directory.staff_directory(session))
+
+
 def get_clinician_directory(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ClinicianDirectory:
@@ -222,6 +272,7 @@ async def get_category_vocabulary(
 def get_consent_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     clinicians: Annotated[ClinicianDirectory, Depends(get_clinician_directory)],
+    staff: Annotated[StaffDirectory, Depends(get_staff_directory)],
 ) -> ConsentService:
     # All repositories share the request's single session/transaction (get_db_session is
     # cached per request by FastAPI), so a use case and its audit rows commit together.
@@ -233,6 +284,7 @@ def get_consent_service(
         audit=AuditLogRepository(session),
         patients=PatientDirectoryService(PatientRepository(session)),
         clinicians=clinicians,
+        staff=staff,
     )
 
 

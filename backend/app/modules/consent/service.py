@@ -30,9 +30,10 @@ the request actually asked for.
 import hashlib
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Final, Protocol
 from uuid import UUID, uuid4
 
@@ -140,19 +141,158 @@ class ClinicianDirectory(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class PersonDisplay:
+    """A member of hospital staff as the patient may see them: a name, where they work,
+    and a specialty when the row has one. The projection consent needs in order to render
+    a requester, a grantee or an actor — nothing more."""
+
+    full_name: str
+    specialty: str | None
+    hospital_name: str
+
+
+class StaffDirectory(Protocol):
+    """How consent turns the ids it stores into something a patient can read.
+
+    A second protocol beside ``ClinicianDirectory`` rather than more methods on it, because
+    the two answer different questions: that one decides whether someone may act, this one
+    only says what to call them. Keeping them apart is what stops an authorization lookup
+    from acquiring display fields, or a display lookup from acquiring employment status.
+
+    Every method is **batched by construction** — a collection in, a mapping out. A listing
+    resolves one page of identities in a fixed number of statements no matter how many rows
+    it holds, and an id that resolves to nothing is simply absent from the mapping.
+    """
+
+    async def clinicians_by_id(
+        self, doctor_ids: Collection[UUID]
+    ) -> Mapping[UUID, PersonDisplay]: ...
+
+    async def staff_by_user_id(
+        self, user_ids: Collection[UUID]
+    ) -> Mapping[UUID, PersonDisplay]: ...
+
+    async def hospital_names(self, hospital_ids: Collection[UUID]) -> Mapping[UUID, str]: ...
+
+
+@dataclass(frozen=True, slots=True)
 class RequestView:
     """An access request with the categories it asked for. Decisions are deliberately not
     included: a listing shows status, and what a clinician may actually read is answered
-    by ``enforce``, never by reading a list."""
+    by ``enforce``, never by reading a list.
+
+    The two display fields are populated by the listings and left empty by
+    ``create_request``, whose caller is the requester and already knows who they are. Both
+    are optional for the same reason every projection here is: an id that no longer
+    resolves must degrade to a missing name, never to a failed request.
+    """
 
     request: ConsentRequest
     requested_category_ids: tuple[UUID, ...]
+    requester: PersonDisplay | None = None
+    #: The hospital the request was raised under, which is not necessarily where the
+    #: requester practises today — the request row records the affiliation at the time.
+    requester_hospital_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class RequestPage:
     items: list[RequestView]
     next_cursor: str | None
+
+
+class ConsentGrantState(StrEnum):
+    """Whether a grant still permits a read, and if not, why not.
+
+    **Derived, never stored.** ``ConsentRequestStatus`` and ``ConsentDecisionStatus`` are
+    columns; this is a reading of the two columns enforcement itself consults, taken at a
+    given instant. There is no state transition to EXPIRED — a grant simply stops being
+    active when its deadline passes, which is why nothing writes this value anywhere.
+    """
+
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"
+    EXPIRED = "EXPIRED"
+
+
+def grant_state(grant: ConsentGrant, now: datetime) -> ConsentGrantState:
+    """The same predicate ``ConsentGrantRepository.get_active`` applies, spelled out.
+
+    Kept deliberately identical to that query (``revoked_at IS NULL AND expires_at > at``)
+    so a grant this reports ACTIVE is exactly one enforcement would honour. Revocation is
+    checked first because it outranks a deadline that has not yet passed.
+    """
+    if grant.revoked_at is not None:
+        return ConsentGrantState.REVOKED
+    if as_utc(grant.expires_at) <= now:
+        return ConsentGrantState.EXPIRED
+    return ConsentGrantState.ACTIVE
+
+
+@dataclass(frozen=True, slots=True)
+class GrantView:
+    """A grant with the state the service read for it, so the boundary never has to
+    consult a clock of its own to describe one, and the clinician it was granted to."""
+
+    grant: ConsentGrant
+    state: ConsentGrantState
+    grantee: PersonDisplay | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GrantPage:
+    items: list[GrantView]
+    next_cursor: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AuditView:
+    """One trail entry with the actor's name, where this module knows one.
+
+    ``actor`` is empty for the patient's own actions and for any account that is not
+    hospital staff: the role on the entry already says who acted, and inventing a label for
+    "you" is the reader's job, not the API's.
+    """
+
+    entry: AuditLog
+    actor: PersonDisplay | None
+
+
+@dataclass(frozen=True, slots=True)
+class AuditPage:
+    items: list[AuditView]
+    next_cursor: str | None
+
+
+def _row_created_at(row: ConsentRequest | ConsentGrant) -> CursorKey:
+    """Keyset position for the listings ordered by when the row was written."""
+    return CursorKey(created_at=row.created_at, item_id=row.id)
+
+
+def _row_occurred_at(row: AuditLog) -> CursorKey:
+    """Keyset position for the trail, which is ordered by the application-assigned event
+    time rather than the row's storage timestamp — the column
+    ``ix_audit_logs_patient_id_occurred_at_id`` covers and the one the hash protects.
+    ``CursorKey`` names its first member ``created_at``; the cursor is opaque, and the
+    repository applies it to whichever column that listing sorts on."""
+    return CursorKey(created_at=row.occurred_at, item_id=row.id)
+
+
+def _split_page[Row](
+    rows: list[Row], *, limit: int, key: Callable[[Row], CursorKey]
+) -> tuple[list[Row], str | None]:
+    """Turn a ``limit + 1`` fetch into one page and the cursor that continues it.
+
+    Every keyset listing asks its repository for one row more than the caller wanted; this
+    is the single place that extra row is interpreted, so "is there a next page" and "what
+    does its cursor say" cannot drift apart between them. ``key`` is what varies: which
+    column a listing is ordered by is the caller's fact, not this helper's.
+    """
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    if not has_more:
+        return page, None
+    return page, encode_cursor(key(page[-1]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +314,7 @@ class ConsentService:
         audit: AuditLogRepository,
         patients: PatientDirectoryService,
         clinicians: ClinicianDirectory,
+        staff: StaffDirectory,
         *,
         request_ttl: timedelta = DEFAULT_REQUEST_TTL,
         grant_ttl: timedelta = DEFAULT_GRANT_TTL,
@@ -187,6 +328,7 @@ class ConsentService:
         self._audit = audit
         self._patients = patients
         self._clinicians = clinicians
+        self._staff = staff
         self._request_ttl = request_ttl
         self._grant_ttl = grant_ttl
         self._now = clock
@@ -260,6 +402,69 @@ class ConsentService:
             clinician.id, after=after, limit=limit + 1
         )
         return await self._to_page(rows, limit=limit)
+
+    # -- grants ------------------------------------------------------------------------
+
+    async def list_grants(
+        self, caller: AuthenticatedUser, *, after: CursorKey | None, limit: int
+    ) -> GrantPage:
+        """Every grant ever derived for this patient, newest first, with its current state.
+
+        The patient's history, not the enforcement view: revoked and expired grants stay in
+        the list because withdrawing access is a fact the owner is entitled to see, and
+        because "who could read this last month" is the question the page exists to answer.
+        The repository already draws that distinction, so this method adds only the scope
+        (the caller's own patient row, taken from the token) and the state reading.
+
+        Each state is read once, from this service's clock, so every row in a page is
+        described as of the same instant.
+        """
+        patient = await self._patients.get_by_user_id(caller.user_id)
+        if patient is None:
+            raise PatientProfileNotFoundError()
+        rows = await self._grants.list_page_by_patient(patient.id, after=after, limit=limit + 1)
+        page, next_cursor = _split_page(rows, limit=limit, key=_row_created_at)
+        now = self._now()
+        grantees = await self._staff.clinicians_by_id({row.grantee_doctor_id for row in page})
+        return GrantPage(
+            items=[
+                GrantView(
+                    grant=row,
+                    state=grant_state(row, now),
+                    grantee=grantees.get(row.grantee_doctor_id),
+                )
+                for row in page
+            ],
+            next_cursor=next_cursor,
+        )
+
+    # -- the trail ---------------------------------------------------------------------
+
+    async def list_audit_events(
+        self, caller: AuthenticatedUser, *, after: CursorKey | None, limit: int
+    ) -> AuditPage:
+        """The patient's own audit trail, most recent event first.
+
+        The subject's view of an append-only log: every consent decision, every revocation,
+        every read of their records — including the refusals, which is the property the M3
+        gate exists to guarantee (.claude/ROADMAP.md). Scope comes from the token; the
+        ``patient_id`` column is what makes the log patient-visible in the first place
+        (docs/DOMAIN_MODEL.md §1), and no caller can widen it.
+
+        Reading the trail writes nothing to it. An audit log that recorded its own reads
+        would grow without bound and would say nothing about access to records, which is
+        what it is for.
+        """
+        patient = await self._patients.get_by_user_id(caller.user_id)
+        if patient is None:
+            raise PatientProfileNotFoundError()
+        rows = await self._audit.list_page_by_patient(patient.id, after=after, limit=limit + 1)
+        page, next_cursor = _split_page(rows, limit=limit, key=_row_occurred_at)
+        actors = await self._staff.staff_by_user_id({row.actor_user_id for row in page})
+        return AuditPage(
+            items=[AuditView(entry=row, actor=actors.get(row.actor_user_id)) for row in page],
+            next_cursor=next_cursor,
+        )
 
     # -- decisions ---------------------------------------------------------------------
 
@@ -507,12 +712,10 @@ class ConsentService:
         return tuple(seen)
 
     async def _to_page(self, rows: list[ConsentRequest], *, limit: int) -> RequestPage:
-        has_more = len(rows) > limit
-        page = rows[:limit]
-        next_cursor = None
-        if has_more:
-            last = page[-1]
-            next_cursor = encode_cursor(CursorKey(created_at=last.created_at, item_id=last.id))
+        page, next_cursor = _split_page(rows, limit=limit, key=_row_created_at)
+        # Two statements for the whole page, whatever its size — see StaffDirectory.
+        requesters = await self._staff.clinicians_by_id({row.requester_doctor_id for row in page})
+        hospitals = await self._staff.hospital_names({row.requester_hospital_id for row in page})
         items = [
             RequestView(
                 request=row,
@@ -520,6 +723,8 @@ class ConsentService:
                     entry.category_id
                     for entry in await self._request_categories.list_by_request(row.id)
                 ),
+                requester=requesters.get(row.requester_doctor_id),
+                requester_hospital_name=hospitals.get(row.requester_hospital_id),
             )
             for row in page
         ]

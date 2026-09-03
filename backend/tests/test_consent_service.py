@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 import pytest
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.models import User
+from app.modules.consent.dependencies import RecordsStaffDirectory
 from app.modules.consent.errors import (
     AccessDeniedError,
     ClinicianNotActiveError,
@@ -34,10 +35,11 @@ from app.modules.consent.repository import (
     ConsentRequestCategoryRepository,
     ConsentRequestRepository,
 )
-from app.modules.consent.service import ConsentService
+from app.modules.consent.service import ConsentGrantState, ConsentService
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
+from app.modules.records.directory import staff_directory
 from app.modules.records.models import (
     Doctor,
     DoctorStatus,
@@ -150,6 +152,9 @@ async def _harness(session: AsyncSession) -> Harness:
             audit=AuditLogRepository(session),
             patients=PatientDirectoryService(PatientRepository(session)),
             clinicians=clinicians,
+            # The real adapter, against the same SQLite session: the projection's joins
+            # are worth exercising here rather than faking away.
+            staff=RecordsStaffDirectory(staff_directory(session)),
             clock=clock,
         ),
         audit=AuditLogRepository(session),
@@ -502,6 +507,287 @@ def test_a_denied_read_is_audited_before_the_error_is_raised() -> None:
             rows = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=10)
             assert [row.action for row in rows] == [AuditAction.ACCESS_DENIED]
             assert rows[0].target_record_id == h.record_id
+
+    asyncio.run(scenario())
+
+
+# -- listing grants --------------------------------------------------------------------
+
+
+def test_grant_listing_returns_every_grant_the_patient_has_ever_been_given() -> None:
+    """Set equality, not order: ``created_at`` is DB-assigned and SQLite resolves it to the
+    second, so grants made inside one test tick are genuinely simultaneous. Newest-first is
+    the repository's contract and is asserted where the timestamps differ
+    (test_consent_repositories.py)."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            created = {await _granted(h), await _granted(h)}
+
+            page = await h.service.list_grants(h.patient, after=None, limit=10)
+
+            assert {view.grant.id for view in page.items} == created
+            assert page.next_cursor is None
+
+    asyncio.run(scenario())
+
+
+def test_each_listed_grant_carries_the_state_enforcement_would_apply() -> None:
+    """ACTIVE, REVOKED and EXPIRED, read from the service's own clock."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            revoked = await _granted(h)
+            h.clock.advance(dt.timedelta(minutes=1))
+            active = await _granted(h)
+            await h.service.revoke_grant(h.patient, revoked)
+
+            states = {
+                view.grant.id: view.state
+                for view in (await h.service.list_grants(h.patient, after=None, limit=10)).items
+            }
+            assert states == {
+                active: ConsentGrantState.ACTIVE,
+                revoked: ConsentGrantState.REVOKED,
+            }
+
+            # Past the 90-day default TTL the unrevoked grant lapses on its own; the
+            # revoked one is still reported as revoked, which outranks the deadline.
+            h.clock.advance(dt.timedelta(days=91))
+            lapsed = {
+                view.grant.id: view.state
+                for view in (await h.service.list_grants(h.patient, after=None, limit=10)).items
+            }
+            assert lapsed == {
+                active: ConsentGrantState.EXPIRED,
+                revoked: ConsentGrantState.REVOKED,
+            }
+
+    asyncio.run(scenario())
+
+
+def test_a_listed_state_agrees_with_what_enforcement_does() -> None:
+    """The listing must never claim a grant is ACTIVE that a read would be refused on."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _granted(h)
+            assert await _reads(h, "CBC") is True
+
+            h.clock.advance(dt.timedelta(days=91))
+
+            page = await h.service.list_grants(h.patient, after=None, limit=10)
+            assert [view.state for view in page.items] == [ConsentGrantState.EXPIRED]
+            assert await _reads(h, "CBC") is False
+
+    asyncio.run(scenario())
+
+
+def test_grant_listing_is_scoped_to_the_calling_patient() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _granted(h)
+
+            page = await h.service.list_grants(h.other_patient, after=None, limit=10)
+
+            assert page.items == []
+
+    asyncio.run(scenario())
+
+
+def test_grant_listing_needs_a_patient_profile() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            ghost = AuthenticatedUser(user_id=uuid4(), firebase_uid="fb-g", role=Role.PATIENT)
+            with pytest.raises(PatientProfileNotFoundError):
+                await h.service.list_grants(ghost, after=None, limit=10)
+
+    asyncio.run(scenario())
+
+
+def test_grant_pagination_walks_every_grant_without_overlap() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            created = set()
+            for _ in range(5):
+                created.add(await _granted(h))
+                h.clock.advance(dt.timedelta(minutes=1))
+
+            seen: set[UUID] = set()
+            after: CursorKey | None = None
+            pages = 0
+            while True:
+                page = await h.service.list_grants(h.patient, after=after, limit=2)
+                seen.update(view.grant.id for view in page.items)
+                pages += 1
+                if page.next_cursor is None:
+                    break
+                after = decode_cursor(page.next_cursor)
+            assert seen == created
+            assert pages == 3
+
+    asyncio.run(scenario())
+
+
+def test_every_listing_names_the_people_behind_the_ids() -> None:
+    """One projection, three listings: the inbox names the requester, the grants listing
+    names the grantee, and the trail names the actor — all from the same directory."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _granted(h)
+
+            inbox = await h.service.list_inbox(h.patient, after=None, limit=10)
+            requester = inbox.items[0].requester
+            assert requester is not None
+            assert requester.full_name == "Dr Verma"
+            assert requester.hospital_name == "TMH"
+            assert inbox.items[0].requester_hospital_name == "TMH"
+
+            grants = await h.service.list_grants(h.patient, after=None, limit=10)
+            grantee = grants.items[0].grantee
+            assert grantee is not None
+            assert grantee.full_name == "Dr Verma"
+
+            trail = await h.service.list_audit_events(h.patient, after=None, limit=10)
+            by_action = {view.entry.action: view.actor for view in trail.items}
+            asked = by_action[AuditAction.ACCESS_REQUESTED]
+            assert asked is not None and asked.full_name == "Dr Verma"
+            # The patient's own approval is not named: the role already says it was them.
+            assert by_action[AuditAction.CONSENT_APPROVED] is None
+
+    asyncio.run(scenario())
+
+
+# -- listing the trail -----------------------------------------------------------------
+
+
+def test_the_trail_lists_the_patients_events_most_recent_first() -> None:
+    """Ordering is deterministic here because ``occurred_at`` is application-assigned: the
+    harness clock moves between events, so they are genuinely sequential."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+            h.clock.advance(dt.timedelta(seconds=1))
+            outcome = await h.service.approve_categories(
+                h.patient, request_id, [h.categories["CBC"]]
+            )
+            h.clock.advance(dt.timedelta(seconds=1))
+            await h.service.revoke_grant(h.patient, outcome.grants[0].id)
+
+            page = await h.service.list_audit_events(h.patient, after=None, limit=10)
+
+            assert [view.entry.action for view in page.items] == [
+                AuditAction.CONSENT_REVOKED,
+                AuditAction.CONSENT_APPROVED,
+                AuditAction.ACCESS_REQUESTED,
+            ]
+            assert page.next_cursor is None
+
+    asyncio.run(scenario())
+
+
+def test_the_trail_carries_the_actor_and_the_role_they_held() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC")
+
+            page = await h.service.list_audit_events(h.patient, after=None, limit=10)
+
+            entry = page.items[0].entry
+            assert entry.action is AuditAction.ACCESS_REQUESTED
+            assert entry.actor_user_id == h.doctor.user_id
+            assert entry.actor_role is Role.DOCTOR
+            assert entry.target_request_id is not None
+            assert entry.event_hash != ""
+
+    asyncio.run(scenario())
+
+
+def test_a_refused_read_is_visible_to_the_patient_it_concerns() -> None:
+    """The point of the log: denials are in it, and the subject can see them."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            assert await _reads(h, "CBC") is False
+
+            page = await h.service.list_audit_events(h.patient, after=None, limit=10)
+
+            assert [view.entry.action for view in page.items] == [AuditAction.ACCESS_DENIED]
+            assert page.items[0].entry.target_record_id == h.record_id
+
+    asyncio.run(scenario())
+
+
+def test_the_trail_is_scoped_to_the_calling_patient() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC")
+
+            page = await h.service.list_audit_events(h.other_patient, after=None, limit=10)
+
+            assert page.items == []
+
+    asyncio.run(scenario())
+
+
+def test_the_trail_needs_a_patient_profile() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            ghost = AuthenticatedUser(user_id=uuid4(), firebase_uid="fb-g", role=Role.PATIENT)
+            with pytest.raises(PatientProfileNotFoundError):
+                await h.service.list_audit_events(ghost, after=None, limit=10)
+
+    asyncio.run(scenario())
+
+
+def test_reading_the_trail_does_not_append_to_it() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC")
+            before = await h.actions()
+
+            await h.service.list_audit_events(h.patient, after=None, limit=10)
+
+            assert await h.actions() == before
+
+    asyncio.run(scenario())
+
+
+def test_trail_pagination_walks_every_event_without_overlap() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            for _ in range(5):
+                await _request(h, "CBC")
+                h.clock.advance(dt.timedelta(seconds=1))
+
+            seen: set[UUID] = set()
+            after: CursorKey | None = None
+            pages = 0
+            while True:
+                page = await h.service.list_audit_events(h.patient, after=after, limit=2)
+                seen.update(view.entry.id for view in page.items)
+                pages += 1
+                if page.next_cursor is None:
+                    break
+                after = decode_cursor(page.next_cursor)
+            assert len(seen) == 5
+            assert pages == 3
 
     asyncio.run(scenario())
 

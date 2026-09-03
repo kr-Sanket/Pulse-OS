@@ -6,6 +6,7 @@ services never touch SQLAlchemy session details. Paginated listings use keyset c
 over ``(created_at DESC, id DESC)`` (app/shared/pagination.py) — never OFFSET.
 """
 
+from collections.abc import Collection
 from datetime import datetime
 from uuid import UUID
 
@@ -26,6 +27,12 @@ from app.shared.pagination import CursorKey
 
 #: A record with its display context: category always, uploading hospital when present.
 RecordRow = tuple[MedicalRecord, RecordCategory, Hospital | None]
+
+#: A member of hospital staff with the hospital they belong to — the row the display
+#: projection is built from (app/modules/records/directory.py). Joined rather than fetched
+#: per person: these listings resolve a whole page of identities at once.
+ClinicianRow = tuple[Doctor, Hospital]
+AdminRow = tuple[HospitalAdmin, Hospital]
 
 
 def _keyset_filter(
@@ -53,6 +60,17 @@ class HospitalRepository:
     async def get_by_hid(self, hid: str) -> Hospital | None:
         result = await self._session.execute(select(Hospital).where(Hospital.hid == hid))
         return result.scalar_one_or_none()
+
+    async def list_by_ids(self, hospital_ids: Collection[UUID]) -> list[Hospital]:
+        """Batch read for the display projection: one statement per page of results.
+
+        The empty case short-circuits rather than emitting ``IN ()`` — a page that refers
+        to no hospital should cost no round trip.
+        """
+        if not hospital_ids:
+            return []
+        result = await self._session.execute(select(Hospital).where(Hospital.id.in_(hospital_ids)))
+        return list(result.scalars())
 
     async def add(self, hospital: Hospital) -> Hospital:
         """Flush a new hospital; an ``hid`` collision becomes ``DuplicateHidError`` so the
@@ -97,6 +115,28 @@ class DoctorRepository:
         result = await self._session.execute(select(Doctor).where(Doctor.user_id == user_id))
         return result.scalar_one_or_none()
 
+    async def list_with_hospital_by_ids(self, doctor_ids: Collection[UUID]) -> list[ClinicianRow]:
+        """Practitioners by their own id, each with the hospital they practise at."""
+        return await self._joined(Doctor.id, doctor_ids)
+
+    async def list_with_hospital_by_user_ids(
+        self, user_ids: Collection[UUID]
+    ) -> list[ClinicianRow]:
+        """The same rows addressed by account id — what an audit entry records its actor as."""
+        return await self._joined(Doctor.user_id, user_ids)
+
+    async def _joined(
+        self, column: InstrumentedAttribute[UUID], values: Collection[UUID]
+    ) -> list[ClinicianRow]:
+        if not values:
+            return []
+        result = await self._session.execute(
+            select(Doctor, Hospital)
+            .join(Hospital, Doctor.hospital_id == Hospital.id)
+            .where(column.in_(values))
+        )
+        return [(doctor, hospital) for doctor, hospital in result.all()]
+
     async def add(self, doctor: Doctor) -> Doctor:
         """Flush a new doctor; the unique ``user_id`` makes the 1:1 profile rule a
         constraint, not a hope (concurrent-registration races surface as a domain error).
@@ -135,6 +175,18 @@ class HospitalAdminRepository:
             select(HospitalAdmin).where(HospitalAdmin.user_id == user_id)
         )
         return result.scalar_one_or_none()
+
+    async def list_with_hospital_by_user_ids(self, user_ids: Collection[UUID]) -> list[AdminRow]:
+        """Administrators by account id, each with their hospital — the other kind of actor
+        an audit entry can name (a hospital upload is theirs, not a clinician's)."""
+        if not user_ids:
+            return []
+        result = await self._session.execute(
+            select(HospitalAdmin, Hospital)
+            .join(Hospital, HospitalAdmin.hospital_id == Hospital.id)
+            .where(HospitalAdmin.user_id.in_(user_ids))
+        )
+        return [(admin, hospital) for admin, hospital in result.all()]
 
     async def add(self, admin: HospitalAdmin) -> HospitalAdmin:
         try:

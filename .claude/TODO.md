@@ -61,6 +61,13 @@
       enforced against consent reads (M3-C).
 - [ ] ANY: **commit branch `feature/consent`** — only the schema (`a893611`) is committed; the
       repository, service, HTTP, integration, tests and these docs are not.
+- [ ] FE: **the patient-registration bootstrap has no caller.** The redesigned Profile page
+      (mock-data account view) replaced the M0.3 walking-skeleton page, which was the only
+      caller of `web/apps/patient/src/profile/loadProfile.ts` (GET /patients/me → on 403
+      POST /patients/register → force-refresh token → retry). The module and its 6 tests are
+      retained, but `src/api.ts` now has zero importers and `@pulseos/api-client` no longer
+      appears in the patient bundle, so a first-time patient is never registered by the web
+      app. Needs a home in the post-login path before any live demo.
 
 ### Deferred M3 review findings (backend)
 

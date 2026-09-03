@@ -1,20 +1,17 @@
-// Centralized Firebase auth state: one listener, one sign-in/out surface.
-// Components read auth via useAuth(); nothing else touches firebase/auth directly.
+// Centralized auth state: one subscription, one sign-in/out surface.
+// Components read auth via useAuth(); nothing else touches the auth provider directly.
+//
+// This file is deliberately implementation-agnostic — it consumes the AuthProvider
+// interface from ./provider, so it is identical whether Firebase or the development mock
+// is behind it.
 
-import {
-  GoogleAuthProvider,
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  type User,
-} from "firebase/auth";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { firebaseAuth } from "../firebase";
+import { authProvider, type AuthUser } from "./provider";
 
 export interface AuthContextValue {
-  /** The signed-in Firebase user, or null. */
-  user: User | null;
+  /** The signed-in user, or null. */
+  user: AuthUser | null;
   /** True until the first auth-state event arrives (show a loading screen, not login). */
   initializing: boolean;
   signIn: () => Promise<void>;
@@ -24,11 +21,11 @@ export interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    return onAuthStateChanged(firebaseAuth, (nextUser) => {
+    return authProvider.subscribe((nextUser) => {
       setUser(nextUser);
       setInitializing(false);
     });
@@ -38,12 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       initializing,
-      signIn: async () => {
-        // Google sign-in is the documented dev/demo flow (ADR-011: phone-OTP costs are
-        // controlled with test numbers and a Google-login fallback).
-        await signInWithPopup(firebaseAuth, new GoogleAuthProvider());
-      },
-      signOutUser: () => signOut(firebaseAuth),
+      signIn: () => authProvider.signIn(),
+      signOutUser: () => authProvider.signOut(),
     }),
     [user, initializing],
   );

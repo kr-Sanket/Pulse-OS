@@ -14,6 +14,7 @@ import pytest
 from app.core.queue import InMemoryJobQueue, QueueUnavailableError
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.models import User
+from app.modules.consent.dependencies import RecordsStaffDirectory
 from app.modules.consent.repository import (
     AuditLogRepository,
     ConsentDecisionRepository,
@@ -25,6 +26,7 @@ from app.modules.consent.service import ConsentService
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
+from app.modules.records.directory import staff_directory
 from app.modules.records.errors import (
     EmptyFileError,
     FileTooLargeError,
@@ -112,6 +114,7 @@ async def _harness(
         audit=AuditLogRepository(session),
         patients=PatientDirectoryService(PatientRepository(session)),
         clinicians=FakeClinicianDirectory(),
+        staff=RecordsStaffDirectory(staff_directory(session)),
     )
     service = RecordService(
         records=MedicalRecordRepository(session),

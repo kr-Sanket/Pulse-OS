@@ -34,11 +34,90 @@
         "title": "AccessRequestCreateRequest",
         "type": "object"
       },
+      "AccessRequestListItemResponse": {
+        "description": "A request in a listing: everything above, plus who asked.\n\nOnly the listings carry the names. ``POST /access-requests`` answers the clinician who\njust raised the request, where naming them back would be noise, and resolving it would\nadd a lookup to a write path. Both fields are nullable so a row whose requester can no\nlonger be resolved still lists, with its ids intact.",
+        "properties": {
+          "categoryCodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categorycodes",
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          },
+          "requester": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffDisplayResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requesterDoctorId": {
+            "format": "uuid",
+            "title": "Requesterdoctorid",
+            "type": "string"
+          },
+          "requesterHospitalId": {
+            "format": "uuid",
+            "title": "Requesterhospitalid",
+            "type": "string"
+          },
+          "requesterHospitalName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requesterhospitalname"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConsentRequestStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "purpose",
+          "categoryCodes",
+          "requesterDoctorId",
+          "requesterHospitalId",
+          "expiresAt",
+          "createdAt",
+          "requester",
+          "requesterHospitalName"
+        ],
+        "title": "AccessRequestListItemResponse",
+        "type": "object"
+      },
       "AccessRequestListResponse": {
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/AccessRequestResponse"
+              "$ref": "#/components/schemas/AccessRequestListItemResponse"
             },
             "title": "Items",
             "type": "array"
@@ -116,6 +195,139 @@
           "createdAt"
         ],
         "title": "AccessRequestResponse",
+        "type": "object"
+      },
+      "AuditAction": {
+        "description": "The audit action vocabulary of docs/DOMAIN_MODEL.md \u00a71, verbatim.\n\n``ACCESS_DENIED`` extends that list. The M3 gate requires that \"attempted unauthorized\nreads are denied AND logged\" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only\nsuccesses, so a refused read had no truthful action to write. Adding it costs nothing:\nmembers are values in a VARCHAR(32) column, so the vocabulary extends without a\nmigration.\n\n``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own\nADR (.claude/TODO.md parking lot), and an unused member here would imply a capability\nthat docs/SECURITY.md's no-break-glass invariant denies.",
+        "enum": [
+          "RECORD_UPLOADED",
+          "ACCESS_REQUESTED",
+          "CONSENT_APPROVED",
+          "CONSENT_REJECTED",
+          "CONSENT_REVOKED",
+          "RECORD_VIEWED",
+          "RECORD_DOWNLOADED",
+          "SUMMARY_GENERATED",
+          "ACCESS_DENIED"
+        ],
+        "title": "AuditAction",
+        "type": "string"
+      },
+      "AuditEventListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEventResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "AuditEventListResponse",
+        "type": "object"
+      },
+      "AuditEventResponse": {
+        "description": "One entry in the patient's append-only trail, as its subject sees it.\n\nCarries what the row carries and nothing else \u2014 no clinician or hospital name, because\n``AuditLog`` stores neither and this module may not query the tables that do. The actor\nis the opaque user id recorded at the time, alongside the role they *then* held: roles\nchange, and the trail must show the authority someone acted under, not today's.\n\nThree fields are deliberately absent. ``patientId`` is the caller, constant for every\nrow in the listing and never part of this API's public vocabulary (a patient is public\nas their Health ID). ``requestContext`` is the ``X-Request-Id`` correlation key, which\nis client-supplied diagnostics rather than a fact about the patient's care. ``createdAt``\nis the row's storage instant, which exists to be compared with ``occurredAt`` during a\ntamper investigation, not to be shown twice in a timeline.\n\nExactly one target is set per action \u2014 a record for a read, a category for a consent\ndecision, a request for one being raised \u2014 so all three are nullable. The category is\ngiven as its code, never its internal id: that is the vocabulary the whole API speaks.\n\n``eventHash`` is the tamper-evidence digest ADR-004 anchors on-chain (hashes only, never\nidentifiers or PHI), published here so the owner of the trail can verify it. The digest\nalgorithm changes to keccak256 at M6 (ADR-019), so it identifies an event's *content*,\nnot the event: do not treat it as a stable key.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffDisplayResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actorRole": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "actorUserId": {
+            "format": "uuid",
+            "title": "Actoruserid",
+            "type": "string"
+          },
+          "eventHash": {
+            "title": "Eventhash",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "title": "Occurredat",
+            "type": "string"
+          },
+          "targetCategoryCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetcategorycode"
+          },
+          "targetRecordId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetrecordid"
+          },
+          "targetRequestId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetrequestid"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "actorUserId",
+          "actorRole",
+          "actor",
+          "targetRecordId",
+          "targetCategoryCode",
+          "targetRequestId",
+          "occurredAt",
+          "eventHash"
+        ],
+        "title": "AuditEventResponse",
         "type": "object"
       },
       "AuthenticatedUserResponse": {
@@ -252,6 +464,100 @@
         "title": "ConsentDecisionStatus",
         "type": "string"
       },
+      "ConsentGrantListItemResponse": {
+        "description": "A grant in the patient's own listing: everything above, plus how it stands right now.\n\n``status`` is derived by the service from ``revokedAt`` and ``expiresAt`` at the moment\nthe page is built, using the same predicate enforcement applies \u2014 so a client never has\nto decide from its own clock whether a grant would still be honoured. The field is named\nfor the wire convention the other listings follow, but it is a reading rather than a\nstored column (``ConsentGrantState`` says so in the domain).\n\nOnly the listing carries it. The single-grant responses answer a change the caller has\njust made, where the resulting state is not in question, and leaving their shape alone\nkeeps this addition free of breaking changes.",
+        "properties": {
+          "categoryCode": {
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "grantedAt": {
+            "format": "date-time",
+            "title": "Grantedat",
+            "type": "string"
+          },
+          "grantee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffDisplayResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "granteeDoctorId": {
+            "format": "uuid",
+            "title": "Granteedoctorid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "revokedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revokedat"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConsentGrantState"
+          }
+        },
+        "required": [
+          "id",
+          "categoryCode",
+          "granteeDoctorId",
+          "grantedAt",
+          "expiresAt",
+          "revokedAt",
+          "status",
+          "grantee"
+        ],
+        "title": "ConsentGrantListItemResponse",
+        "type": "object"
+      },
+      "ConsentGrantListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConsentGrantListItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "ConsentGrantListResponse",
+        "type": "object"
+      },
       "ConsentGrantResponse": {
         "description": "An active permission derived from an approval. ``revokedAt`` is null while the\ngrant stands; once set, the next read is refused immediately.",
         "properties": {
@@ -302,6 +608,16 @@
         ],
         "title": "ConsentGrantResponse",
         "type": "object"
+      },
+      "ConsentGrantState": {
+        "description": "Whether a grant still permits a read, and if not, why not.\n\n**Derived, never stored.** ``ConsentRequestStatus`` and ``ConsentDecisionStatus`` are\ncolumns; this is a reading of the two columns enforcement itself consults, taken at a\ngiven instant. There is no state transition to EXPIRED \u2014 a grant simply stops being\nactive when its deadline passes, which is why nothing writes this value anywhere.",
+        "enum": [
+          "ACTIVE",
+          "REVOKED",
+          "EXPIRED"
+        ],
+        "title": "ConsentGrantState",
+        "type": "string"
       },
       "ConsentRequestStatus": {
         "description": "Lifecycle of a clinician's petition (docs/DOMAIN_MODEL.md \u00a71).\n\n``DECIDED`` means the patient answered every requested category \u2014 approving some and\nrejecting others is still a decided request. ``EXPIRED`` is reached by the sweep when\n``expires_at`` passes with the request still ``PENDING``; ``CANCELLED`` is the\nrequester withdrawing.",
@@ -925,6 +1241,37 @@
         "title": "Role",
         "type": "string"
       },
+      "StaffDisplayResponse": {
+        "description": "A member of hospital staff as the patient sees them, wherever this API names one.\n\nOne shape for requesters, grantees and audit actors, because a patient is asking the\nsame question in all three places: who is this, and where do they work. It carries no\nidentifier \u2014 the id it was projected from is already on the row beside it \u2014 and no\nregistration number, contact detail or employment status.\n\n``specialty`` is null when the staff row does not carry one, and always for an\nadministrator; ``hospitalName`` is always present, because staff belong to a hospital\nby schema.",
+        "properties": {
+          "fullName": {
+            "title": "Fullname",
+            "type": "string"
+          },
+          "hospitalName": {
+            "title": "Hospitalname",
+            "type": "string"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialty"
+          }
+        },
+        "required": [
+          "fullName",
+          "specialty",
+          "hospitalName"
+        ],
+        "title": "StaffDisplayResponse",
+        "type": "object"
+      },
       "UploadingHospitalResponse": {
         "properties": {
           "hid": {
@@ -1347,6 +1694,82 @@
         ]
       }
     },
+    "/api/v1/audit-logs": {
+      "get": {
+        "description": "The patient's own audit trail, most recent event first.\n\nEvery consent decision, revocation and record access concerning this patient, refusals\nincluded \u2014 the append-only log is what makes the platform's promise checkable by the\nperson it is about. Ordered and paginated on the application-assigned event time, which\nis also the value the tamper-evidence hash covers.\n\nRoles: PATIENT (own trail only \u2014 the scope comes from the token, never a parameter; no\nclinician or administrator reads a patient's log through this API). Consent requirement:\nnone, an audit entry is not record content, and it names no file, date or description.\nReading the trail is not itself an audited event.\nFailure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).",
+        "operationId": "list_audit_events_api_v1_audit_logs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No profile for this account"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          }
+        },
+        "summary": "List Audit Events",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
     "/api/v1/auth/me": {
       "get": {
         "description": "Return the caller's authenticated identity.\n\nRoles: any authenticated, provisioned user. Failure modes: 401 (missing/malformed/\ninvalid/expired token), 403 (unprovisioned account), 503 (provider unavailable).",
@@ -1366,6 +1789,82 @@
         "summary": "Read Current User",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/consent-grants": {
+      "get": {
+        "description": "Every grant ever derived for the patient, newest first, each with its current state.\n\nThe patient's own history, revoked and expired grants included: who may read their\nrecords today is only half the question this page answers, and access that has been\nwithdrawn is a fact its owner is entitled to keep seeing. ``status`` distinguishes the\nthree cases, read from the server's clock with the predicate enforcement uses, so a\nclient never has to judge expiry itself.\n\nRoles: PATIENT (own grants only \u2014 the scope comes from the token, never a parameter; a\ngrantee clinician has no listing here, by design). Consent requirement: none, a grant\nis not record content. Reading one's own consent state is not an access event, so\nnothing is audited \u2014 the trail records grants being created and revoked, which is where\na change to who can read anything actually happens.\nFailure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).",
+        "operationId": "list_grants_api_v1_consent_grants_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentGrantListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No profile for this account"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          }
+        },
+        "summary": "List Grants",
+        "tags": [
+          "consent"
         ]
       }
     },

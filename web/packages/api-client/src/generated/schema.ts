@@ -128,6 +128,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Audit Events
+         * @description The patient's own audit trail, most recent event first.
+         *
+         *     Every consent decision, revocation and record access concerning this patient, refusals
+         *     included — the append-only log is what makes the platform's promise checkable by the
+         *     person it is about. Ordered and paginated on the application-assigned event time, which
+         *     is also the value the tamper-evidence hash covers.
+         *
+         *     Roles: PATIENT (own trail only — the scope comes from the token, never a parameter; no
+         *     clinician or administrator reads a patient's log through this API). Consent requirement:
+         *     none, an audit entry is not record content, and it names no file, date or description.
+         *     Reading the trail is not itself an audited event.
+         *     Failure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).
+         */
+        get: operations["list_audit_events_api_v1_audit_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/me": {
         parameters: {
             query?: never;
@@ -143,6 +174,39 @@ export interface paths {
          *     invalid/expired token), 403 (unprovisioned account), 503 (provider unavailable).
          */
         get: operations["read_current_user_api_v1_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/consent-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Grants
+         * @description Every grant ever derived for the patient, newest first, each with its current state.
+         *
+         *     The patient's own history, revoked and expired grants included: who may read their
+         *     records today is only half the question this page answers, and access that has been
+         *     withdrawn is a fact its owner is entitled to keep seeing. ``status`` distinguishes the
+         *     three cases, read from the server's clock with the predicate enforcement uses, so a
+         *     client never has to judge expiry itself.
+         *
+         *     Roles: PATIENT (own grants only — the scope comes from the token, never a parameter; a
+         *     grantee clinician has no listing here, by design). Consent requirement: none, a grant
+         *     is not record content. Reading one's own consent state is not an access event, so
+         *     nothing is audited — the trail records grants being created and revoked, which is where
+         *     a change to who can read anything actually happens.
+         *     Failure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).
+         */
+        get: operations["list_grants_api_v1_consent_grants_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -571,10 +635,54 @@ export interface components {
             /** Purpose */
             purpose: string;
         };
+        /**
+         * AccessRequestListItemResponse
+         * @description A request in a listing: everything above, plus who asked.
+         *
+         *     Only the listings carry the names. ``POST /access-requests`` answers the clinician who
+         *     just raised the request, where naming them back would be noise, and resolving it would
+         *     add a lookup to a write path. Both fields are nullable so a row whose requester can no
+         *     longer be resolved still lists, with its ids intact.
+         */
+        AccessRequestListItemResponse: {
+            /** Categorycodes */
+            categoryCodes: string[];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Purpose */
+            purpose: string;
+            requester: components["schemas"]["StaffDisplayResponse"] | null;
+            /**
+             * Requesterdoctorid
+             * Format: uuid
+             */
+            requesterDoctorId: string;
+            /**
+             * Requesterhospitalid
+             * Format: uuid
+             */
+            requesterHospitalId: string;
+            /** Requesterhospitalname */
+            requesterHospitalName: string | null;
+            status: components["schemas"]["ConsentRequestStatus"];
+        };
         /** AccessRequestListResponse */
         AccessRequestListResponse: {
             /** Items */
-            items: components["schemas"]["AccessRequestResponse"][];
+            items: components["schemas"]["AccessRequestListItemResponse"][];
             /** Nextcursor */
             nextCursor: string | null;
         };
@@ -615,6 +723,82 @@ export interface components {
              */
             requesterHospitalId: string;
             status: components["schemas"]["ConsentRequestStatus"];
+        };
+        /**
+         * AuditAction
+         * @description The audit action vocabulary of docs/DOMAIN_MODEL.md §1, verbatim.
+         *
+         *     ``ACCESS_DENIED`` extends that list. The M3 gate requires that "attempted unauthorized
+         *     reads are denied AND logged" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only
+         *     successes, so a refused read had no truthful action to write. Adding it costs nothing:
+         *     members are values in a VARCHAR(32) column, so the vocabulary extends without a
+         *     migration.
+         *
+         *     ``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own
+         *     ADR (.claude/TODO.md parking lot), and an unused member here would imply a capability
+         *     that docs/SECURITY.md's no-break-glass invariant denies.
+         * @enum {string}
+         */
+        AuditAction: "RECORD_UPLOADED" | "ACCESS_REQUESTED" | "CONSENT_APPROVED" | "CONSENT_REJECTED" | "CONSENT_REVOKED" | "RECORD_VIEWED" | "RECORD_DOWNLOADED" | "SUMMARY_GENERATED" | "ACCESS_DENIED";
+        /** AuditEventListResponse */
+        AuditEventListResponse: {
+            /** Items */
+            items: components["schemas"]["AuditEventResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /**
+         * AuditEventResponse
+         * @description One entry in the patient's append-only trail, as its subject sees it.
+         *
+         *     Carries what the row carries and nothing else — no clinician or hospital name, because
+         *     ``AuditLog`` stores neither and this module may not query the tables that do. The actor
+         *     is the opaque user id recorded at the time, alongside the role they *then* held: roles
+         *     change, and the trail must show the authority someone acted under, not today's.
+         *
+         *     Three fields are deliberately absent. ``patientId`` is the caller, constant for every
+         *     row in the listing and never part of this API's public vocabulary (a patient is public
+         *     as their Health ID). ``requestContext`` is the ``X-Request-Id`` correlation key, which
+         *     is client-supplied diagnostics rather than a fact about the patient's care. ``createdAt``
+         *     is the row's storage instant, which exists to be compared with ``occurredAt`` during a
+         *     tamper investigation, not to be shown twice in a timeline.
+         *
+         *     Exactly one target is set per action — a record for a read, a category for a consent
+         *     decision, a request for one being raised — so all three are nullable. The category is
+         *     given as its code, never its internal id: that is the vocabulary the whole API speaks.
+         *
+         *     ``eventHash`` is the tamper-evidence digest ADR-004 anchors on-chain (hashes only, never
+         *     identifiers or PHI), published here so the owner of the trail can verify it. The digest
+         *     algorithm changes to keccak256 at M6 (ADR-019), so it identifies an event's *content*,
+         *     not the event: do not treat it as a stable key.
+         */
+        AuditEventResponse: {
+            action: components["schemas"]["AuditAction"];
+            actor: components["schemas"]["StaffDisplayResponse"] | null;
+            actorRole: components["schemas"]["Role"];
+            /**
+             * Actoruserid
+             * Format: uuid
+             */
+            actorUserId: string;
+            /** Eventhash */
+            eventHash: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Occurredat
+             * Format: date-time
+             */
+            occurredAt: string;
+            /** Targetcategorycode */
+            targetCategoryCode: string | null;
+            /** Targetrecordid */
+            targetRecordId: string | null;
+            /** Targetrequestid */
+            targetRequestId: string | null;
         };
         /** AuthenticatedUserResponse */
         AuthenticatedUserResponse: {
@@ -681,6 +865,55 @@ export interface components {
          */
         ConsentDecisionStatus: "APPROVED" | "REJECTED";
         /**
+         * ConsentGrantListItemResponse
+         * @description A grant in the patient's own listing: everything above, plus how it stands right now.
+         *
+         *     ``status`` is derived by the service from ``revokedAt`` and ``expiresAt`` at the moment
+         *     the page is built, using the same predicate enforcement applies — so a client never has
+         *     to decide from its own clock whether a grant would still be honoured. The field is named
+         *     for the wire convention the other listings follow, but it is a reading rather than a
+         *     stored column (``ConsentGrantState`` says so in the domain).
+         *
+         *     Only the listing carries it. The single-grant responses answer a change the caller has
+         *     just made, where the resulting state is not in question, and leaving their shape alone
+         *     keeps this addition free of breaking changes.
+         */
+        ConsentGrantListItemResponse: {
+            /** Categorycode */
+            categoryCode: string;
+            /**
+             * Expiresat
+             * Format: date-time
+             */
+            expiresAt: string;
+            /**
+             * Grantedat
+             * Format: date-time
+             */
+            grantedAt: string;
+            grantee: components["schemas"]["StaffDisplayResponse"] | null;
+            /**
+             * Granteedoctorid
+             * Format: uuid
+             */
+            granteeDoctorId: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Revokedat */
+            revokedAt: string | null;
+            status: components["schemas"]["ConsentGrantState"];
+        };
+        /** ConsentGrantListResponse */
+        ConsentGrantListResponse: {
+            /** Items */
+            items: components["schemas"]["ConsentGrantListItemResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /**
          * ConsentGrantResponse
          * @description An active permission derived from an approval. ``revokedAt`` is null while the
          *     grant stands; once set, the next read is refused immediately.
@@ -711,6 +944,17 @@ export interface components {
             /** Revokedat */
             revokedAt: string | null;
         };
+        /**
+         * ConsentGrantState
+         * @description Whether a grant still permits a read, and if not, why not.
+         *
+         *     **Derived, never stored.** ``ConsentRequestStatus`` and ``ConsentDecisionStatus`` are
+         *     columns; this is a reading of the two columns enforcement itself consults, taken at a
+         *     given instant. There is no state transition to EXPIRED — a grant simply stops being
+         *     active when its deadline passes, which is why nothing writes this value anywhere.
+         * @enum {string}
+         */
+        ConsentGrantState: "ACTIVE" | "REVOKED" | "EXPIRED";
         /**
          * ConsentRequestStatus
          * @description Lifecycle of a clinician's petition (docs/DOMAIN_MODEL.md §1).
@@ -959,6 +1203,27 @@ export interface components {
          * @enum {string}
          */
         Role: "PATIENT" | "DOCTOR" | "HOSPITAL_ADMIN" | "SYSTEM_ADMIN";
+        /**
+         * StaffDisplayResponse
+         * @description A member of hospital staff as the patient sees them, wherever this API names one.
+         *
+         *     One shape for requesters, grantees and audit actors, because a patient is asking the
+         *     same question in all three places: who is this, and where do they work. It carries no
+         *     identifier — the id it was projected from is already on the row beside it — and no
+         *     registration number, contact detail or employment status.
+         *
+         *     ``specialty`` is null when the staff row does not carry one, and always for an
+         *     administrator; ``hospitalName`` is always present, because staff belong to a hospital
+         *     by schema.
+         */
+        StaffDisplayResponse: {
+            /** Fullname */
+            fullName: string;
+            /** Hospitalname */
+            hospitalName: string;
+            /** Specialty */
+            specialty: string | null;
+        };
         /** UploadingHospitalResponse */
         UploadingHospitalResponse: {
             /** Hid */
@@ -1308,6 +1573,65 @@ export interface operations {
             };
         };
     };
+    list_audit_events_api_v1_audit_logs_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventListResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No profile for this account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     read_current_user_api_v1_auth_me_get: {
         parameters: {
             query?: never;
@@ -1324,6 +1648,65 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthenticatedUserResponse"];
+                };
+            };
+        };
+    };
+    list_grants_api_v1_consent_grants_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentGrantListResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No profile for this account */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
                 };
             };
         };
