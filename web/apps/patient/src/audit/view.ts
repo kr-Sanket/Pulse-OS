@@ -9,6 +9,13 @@
 // and the digest that makes the row tamper-evident. **Nothing is assumed**: the action
 // vocabulary can grow server-side without a frontend release, so an unrecognised action
 // degrades to its own humanised name rather than breaking the timeline.
+//
+// A third rule governs the default view. The page exists to answer "who else touched my
+// records?", and a patient's own reading of their own records drowns that answer out — it
+// is the one kind of entry they already know about. So those rows are hidden by default and
+// one toggle brings them back. **The filter is presentation and nothing else**: the request
+// is unchanged, every row is still fetched, and nothing is dropped from the log — see
+// `filterAuditEntries`.
 
 import { Building2, Clock, Eye, FlaskConical, UserRound, type LucideIcon } from "lucide-react";
 
@@ -144,6 +151,56 @@ export function toEventViews(
   return events.map((event) => toEventView(event, labels));
 }
 
+// -- the default view ------------------------------------------------------------------
+//
+// Hiding is decided per row by one predicate, so what the page shows and what the summary
+// counts can never disagree: both are computed from the same filtered list.
+
+/**
+ * True when the row is the patient reading their own records.
+ *
+ * Deliberately narrow. Only a *read* by the *patient themselves* is noise — the patient
+ * already knows they opened their own file, and every other row is someone else's action
+ * or a change to who may act. A hospital's upload, a clinician's view or download, a
+ * consent decision, a refusal, and a clinician listing what a grant covers are all kept,
+ * including the patient's own consent decisions: approving access is not the same kind of
+ * event as reading a page, and it is exactly what this trail exists to evidence.
+ */
+export function isOwnRecordAccess(event: AuditEvent): boolean {
+  return (
+    event.actorRole === "PATIENT" &&
+    (event.action === "RECORD_VIEWED" || event.action === "RECORD_DOWNLOADED")
+  );
+}
+
+/**
+ * The rows the timeline shows, in the order the API returned them (newest first).
+ *
+ * A presentation filter over an already-fetched page: nothing is requested differently,
+ * nothing is deleted, and turning the toggle on returns the page byte-for-byte as the API
+ * sent it. `Array.filter` preserves order, so the trail's chronology survives untouched —
+ * which matters, because a reordered audit log would be a different document.
+ */
+export function filterAuditEntries(
+  events: readonly AuditEvent[],
+  showOwnActivity: boolean,
+): readonly AuditEvent[] {
+  return showOwnActivity ? events : events.filter((event) => !isOwnRecordAccess(event));
+}
+
+/** How many rows the default view is holding back — what the toggle offers to reveal, and
+ * the difference between "nothing has happened" and "nothing has happened *to you*". */
+export function countOwnRecordAccess(events: readonly AuditEvent[]): number {
+  return events.filter(isOwnRecordAccess).length;
+}
+
+/** Copy for the state where the filter leaves the timeline empty. */
+export const NO_EXTERNAL_ACCESS = {
+  title: "No external access yet",
+  body: "No doctors, hospitals or other users have accessed your records yet.",
+  action: "Show my activity",
+} as const;
+
 export interface SummaryStat {
   id: string;
   label: string;
@@ -154,18 +211,29 @@ export interface SummaryStat {
   icon: LucideIcon;
 }
 
+export interface SummaryOptions {
+  /** Whether the caller is describing the full trail or the default, others-only view. */
+  showOwnActivity?: boolean;
+  now?: number;
+}
+
 /**
- * The four figures above the trail, computed over the events on this page and nothing else.
+ * The four figures above the trail, computed over the events **currently visible** and
+ * nothing else.
  *
- * The API exposes no aggregate endpoint, so a lifetime total is not available — and quietly
- * presenting a page total as one would misrepresent a compliance record. Every label and
- * note below therefore says which events it counted.
+ * Two limits are stated rather than papered over. The API exposes no aggregate endpoint, so
+ * a lifetime total is not available — quietly presenting a page total as one would
+ * misrepresent a compliance record. And when the default filter is on these figures describe
+ * other people's activity, not everything that happened, so the first note says so. A
+ * summary that counted rows the timeline beneath it does not show would be worse than no
+ * summary at all.
  */
-export function summarize(
+export function summarizeAuditEntries(
   events: readonly AuditEvent[],
   views: readonly AuditEventView[],
-  now: number = Date.now(),
+  options: SummaryOptions = {},
 ): readonly SummaryStat[] {
+  const { showOwnActivity = true, now = Date.now() } = options;
   const origins = new Set(
     views.filter((view) => view.origin !== SELF_ACTOR).map((view) => view.origin),
   );
@@ -177,7 +245,7 @@ export function summarize(
       id: "loaded",
       label: "Events shown",
       value: `${events.length}`,
-      note: "On this page only",
+      note: showOwnActivity ? "On this page only" : "Excluding your own reads",
       tone: "info",
       icon: Eye,
     },

@@ -3,16 +3,22 @@ import { expect, test } from "vitest";
 import type { AuditEvent } from "./api";
 import {
   actionPresentation,
+  countOwnRecordAccess,
+  filterAuditEntries,
   humanizeAction,
+  isOwnRecordAccess,
   NO_CATEGORY,
+  NO_EXTERNAL_ACCESS,
   originOf,
   SELF_ACTOR,
-  summarize,
+  summarizeAuditEntries,
   toEventView,
   toEventViews,
 } from "./view";
 
 const NOW = Date.parse("2026-09-03T12:00:00Z");
+/** Newer than every other fixture instant, for the "most recent" assertions. */
+const NEWEST = "2026-09-03T11:30:00Z";
 
 const EVENT: AuditEvent = {
   id: "evt-1",
@@ -106,7 +112,10 @@ test("the summary counts only the events on this page and says so", () => {
     }),
   ];
 
-  const summary = summarize(events, toEventViews(events, LABELS), NOW);
+  const summary = summarizeAuditEntries(events, toEventViews(events, LABELS), {
+    showOwnActivity: true,
+    now: NOW,
+  });
   const byId = new Map(summary.map((stat) => [stat.id, stat]));
 
   expect(byId.get("loaded")?.value).toBe("3");
@@ -121,7 +130,7 @@ test("the summary counts only the events on this page and says so", () => {
 });
 
 test("an empty page summarises to nothing rather than to zeroes that look like totals", () => {
-  const summary = summarize([], [], NOW);
+  const summary = summarizeAuditEntries([], [], { showOwnActivity: true, now: NOW });
   const byId = new Map(summary.map((stat) => [stat.id, stat]));
 
   expect(byId.get("loaded")?.value).toBe("0");
@@ -134,7 +143,181 @@ test("an empty page summarises to nothing rather than to zeroes that look like t
 test("events with no category at all leave the busiest figure empty", () => {
   const events = [withEvent({ targetCategoryCode: null })];
 
-  const summary = summarize(events, toEventViews(events, LABELS), NOW);
+  const summary = summarizeAuditEntries(events, toEventViews(events, LABELS), {
+    showOwnActivity: true,
+    now: NOW,
+  });
 
   expect(summary.find((stat) => stat.id === "busiest")?.value).toBe("—");
+});
+
+// -- the default view: who else touched my records? ------------------------------------------
+
+const MINE = { actorRole: "PATIENT", actor: null } as const;
+
+test("the patient's own reads and downloads are hidden by default", () => {
+  const events = [
+    withEvent({ id: "own-view", ...MINE, action: "RECORD_VIEWED" }),
+    withEvent({ id: "own-download", ...MINE, action: "RECORD_DOWNLOADED" }),
+  ];
+
+  expect(events.map(isOwnRecordAccess)).toEqual([true, true]);
+  expect(filterAuditEntries(events, false)).toEqual([]);
+});
+
+test("the same actions by a clinician are exactly what the page is for", () => {
+  const events = [
+    withEvent({ id: "doc-view", actorRole: "DOCTOR", action: "RECORD_VIEWED" }),
+    withEvent({ id: "doc-download", actorRole: "DOCTOR", action: "RECORD_DOWNLOADED" }),
+    withEvent({ id: "doc-listed", actorRole: "DOCTOR", action: "RECORDS_LISTED" }),
+  ];
+
+  expect(events.map(isOwnRecordAccess)).toEqual([false, false, false]);
+  expect(filterAuditEntries(events, false).map((event) => event.id)).toEqual([
+    "doc-view",
+    "doc-download",
+    "doc-listed",
+  ]);
+});
+
+test("hospital activity is never hidden", () => {
+  const events = [
+    withEvent({ id: "upload", actorRole: "HOSPITAL_ADMIN", action: "RECORD_UPLOADED" }),
+    withEvent({ id: "admin-view", actorRole: "HOSPITAL_ADMIN", action: "RECORD_VIEWED" }),
+  ];
+
+  expect(filterAuditEntries(events, false).map((event) => event.id)).toEqual([
+    "upload",
+    "admin-view",
+  ]);
+});
+
+test("consent events stay visible even when the patient is the one who acted", () => {
+  // Approving access is not the same kind of event as reading a page: it is precisely what
+  // this trail exists to evidence, so it survives the filter that hides the patient's reads.
+  const events = [
+    withEvent({ id: "approved", ...MINE, action: "CONSENT_APPROVED" }),
+    withEvent({ id: "rejected", ...MINE, action: "CONSENT_REJECTED" }),
+    withEvent({ id: "revoked", ...MINE, action: "CONSENT_REVOKED" }),
+    withEvent({ id: "requested", actorRole: "DOCTOR", action: "ACCESS_REQUESTED" }),
+    withEvent({ id: "denied", actorRole: "DOCTOR", action: "ACCESS_DENIED" }),
+  ];
+
+  expect(filterAuditEntries(events, false).map((event) => event.id)).toEqual([
+    "approved",
+    "rejected",
+    "revoked",
+    "requested",
+    "denied",
+  ]);
+});
+
+test("turning the switch on returns the page exactly as the API sent it", () => {
+  const events = [
+    withEvent({ id: "doc-view", actorRole: "DOCTOR" }),
+    withEvent({ id: "own-view", ...MINE, action: "RECORD_VIEWED" }),
+    withEvent({ id: "own-download", ...MINE, action: "RECORD_DOWNLOADED" }),
+  ];
+
+  expect(filterAuditEntries(events, true)).toEqual(events);
+});
+
+test("filtering preserves the trail's order — a reordered audit log is a different document", () => {
+  const events = [
+    withEvent({ id: "a", actorRole: "DOCTOR", occurredAt: "2026-09-03T11:00:00Z" }),
+    withEvent({ id: "own", ...MINE, action: "RECORD_VIEWED", occurredAt: "2026-09-03T10:30:00Z" }),
+    withEvent({ id: "b", actorRole: "HOSPITAL_ADMIN", occurredAt: "2026-09-03T10:00:00Z" }),
+    withEvent({ id: "own-2", ...MINE, action: "RECORD_DOWNLOADED" }),
+    withEvent({ id: "c", actorRole: "DOCTOR", occurredAt: "2026-09-03T09:00:00Z" }),
+  ];
+
+  expect(filterAuditEntries(events, false).map((event) => event.id)).toEqual(["a", "b", "c"]);
+});
+
+test("the hidden count is what the switch offers to reveal", () => {
+  const events = [
+    withEvent({ id: "a", actorRole: "DOCTOR" }),
+    withEvent({ id: "own", ...MINE, action: "RECORD_VIEWED" }),
+    withEvent({ id: "own-2", ...MINE, action: "RECORD_DOWNLOADED" }),
+    withEvent({ id: "consent", ...MINE, action: "CONSENT_APPROVED" }),
+  ];
+
+  expect(countOwnRecordAccess(events)).toBe(2);
+  expect(countOwnRecordAccess([])).toBe(0);
+  // Nothing hidden means an empty timeline is genuinely empty, not filtered.
+  expect(countOwnRecordAccess([withEvent({ actorRole: "DOCTOR" })])).toBe(0);
+});
+
+test("the summary counts the rows on screen, not the ones the filter removed", () => {
+  const events = [
+    withEvent({
+      id: "doc-view",
+      actorRole: "DOCTOR",
+      targetCategoryCode: "CBC",
+      occurredAt: "2026-09-03T10:00:00Z",
+    }),
+    withEvent({ id: "own-1", ...MINE, action: "RECORD_VIEWED", targetCategoryCode: "CBC" }),
+    withEvent({ id: "own-2", ...MINE, action: "RECORD_DOWNLOADED", targetCategoryCode: "CBC" }),
+  ];
+
+  const visible = filterAuditEntries(events, false);
+  const filtered = new Map(
+    summarizeAuditEntries(visible, toEventViews(visible, LABELS), {
+      showOwnActivity: false,
+      now: NOW,
+    }).map((stat) => [stat.id, stat]),
+  );
+
+  expect(filtered.get("loaded")?.value).toBe("1");
+  expect(filtered.get("loaded")?.note).toBe("Excluding your own reads");
+  // Three CBC events were fetched; only the visible one is counted.
+  expect(filtered.get("busiest")?.value).toBe("1");
+  expect(filtered.get("organisations")?.value).toBe("1");
+
+  const all = new Map(
+    summarizeAuditEntries(events, toEventViews(events, LABELS), {
+      showOwnActivity: true,
+      now: NOW,
+    }).map((stat) => [stat.id, stat]),
+  );
+
+  expect(all.get("loaded")?.value).toBe("3");
+  expect(all.get("loaded")?.note).toBe("On this page only");
+  expect(all.get("busiest")?.value).toBe("3");
+});
+
+test("the most recent event follows the filter rather than the fetch", () => {
+  const events = [
+    withEvent({ id: "own", ...MINE, action: "RECORD_DOWNLOADED", occurredAt: NEWEST }),
+    withEvent({ id: "doc", actorRole: "DOCTOR", occurredAt: "2026-09-03T10:00:00Z" }),
+  ];
+
+  const visible = filterAuditEntries(events, false);
+  const summary = summarizeAuditEntries(visible, toEventViews(visible, LABELS), {
+    showOwnActivity: false,
+    now: NOW,
+  });
+
+  // The patient's own download is newer, but it is not on screen, so it is not "most recent".
+  expect(summary.find((stat) => stat.id === "latest")?.note).toBe("Viewed");
+});
+
+test("an empty timeline is detectable, and its copy names the question the page answers", () => {
+  const onlyMine = [
+    withEvent({ id: "own", ...MINE, action: "RECORD_VIEWED" }),
+    withEvent({ id: "own-2", ...MINE, action: "RECORD_DOWNLOADED" }),
+  ];
+
+  // Filtered to nothing, but with something to reveal.
+  expect(filterAuditEntries(onlyMine, false)).toHaveLength(0);
+  expect(countOwnRecordAccess(onlyMine)).toBe(2);
+  // Genuinely nothing recorded: the same empty state, with nothing to reveal.
+  expect(filterAuditEntries([], false)).toHaveLength(0);
+  expect(countOwnRecordAccess([])).toBe(0);
+
+  expect(NO_EXTERNAL_ACCESS.title).toBe("No external access yet");
+  expect(NO_EXTERNAL_ACCESS.body).toBe(
+    "No doctors, hospitals or other users have accessed your records yet.",
+  );
+  expect(NO_EXTERNAL_ACCESS.action).toBe("Show my activity");
 });

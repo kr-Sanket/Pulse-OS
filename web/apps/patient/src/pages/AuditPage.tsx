@@ -1,14 +1,20 @@
 // Audit History: the append-only trail of every access to the patient's records, a summary
-// of the events on this page, and a standing note on what the log guarantees.
+// of the events shown, and a standing note on what the log guarantees.
 //
 // Wired to the backend: GET /audit-logs. All state lives in useAudit; all mapping — the
-// action vocabulary, who acted, the summary figures — lives in audit/view.ts. This file
-// chooses sections and renders.
+// action vocabulary, who acted, which rows the default view shows, the summary figures —
+// lives in audit/view.ts. This file chooses sections and renders; it filters nothing.
+//
+// The page opens on other people's activity, because "who else used my records?" is the
+// question it exists to answer and a patient's own reads bury it. One switch restores the
+// whole trail. Nothing is removed from the log by either view.
 //
 // Export Log is presentational: there is no export endpoint.
 
 import { Download } from "lucide-react";
 
+import { AuditActivityToggle } from "@/components/audit/AuditActivityToggle";
+import { AuditEmptyState } from "@/components/audit/AuditEmptyState";
 import { AuditInfoCard } from "@/components/audit/AuditInfoCard";
 import { AuditSummaryCard } from "@/components/audit/AuditSummaryCard";
 import { AuditTimelineItem } from "@/components/audit/AuditTimelineItem";
@@ -28,7 +34,7 @@ export function AuditPage() {
         <div className="space-y-1.5">
           <h2 className="text-foreground text-2xl font-semibold tracking-tight">Audit History</h2>
           <p className="text-muted-foreground max-w-2xl text-sm leading-relaxed">
-            Review every access made to your health records.
+            See who else has accessed your health records, and when.
           </p>
         </div>
         <Button variant="outline" className="gap-2">
@@ -47,6 +53,12 @@ export function AuditPage() {
         />
       ) : (
         <>
+          <AuditActivityToggle
+            checked={trail.showOwnActivity}
+            onCheckedChange={trail.setShowOwnActivity}
+            hiddenCount={trail.hiddenOwnActivity}
+          />
+
           <section aria-labelledby="history-heading" className="space-y-4">
             <div className="flex items-center gap-2.5">
               <h3 id="history-heading" className="text-sm font-semibold">
@@ -55,9 +67,10 @@ export function AuditPage() {
               <Badge variant="info">{trail.events.length}</Badge>
             </div>
             {trail.events.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No one has accessed your records yet. Every access will appear here.
-              </p>
+              <AuditEmptyState
+                hiddenCount={trail.hiddenOwnActivity}
+                onShowOwnActivity={() => trail.setShowOwnActivity(true)}
+              />
             ) : (
               <ol>
                 {trail.events.map((event, index) => (
