@@ -300,6 +300,43 @@ def test_listings_require_the_caller_to_have_a_profile() -> None:
     asyncio.run(scenario())
 
 
+def test_the_sent_listing_names_the_patient_each_request_is_about() -> None:
+    """A clinician cannot tell one patient's request from another's without this; the
+    inbox needs no such field, because every row there is about the reader."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC")
+
+            sent = await h.service.list_sent_requests(h.doctor, after=None, limit=10)
+            inbox = await h.service.list_inbox(h.patient, after=None, limit=10)
+
+            assert sent.items[0].patient_health_id == HEALTH_ID
+            # Unchanged: the inbox projection carries no subject.
+            assert inbox.items[0].patient_health_id is None
+
+    asyncio.run(scenario())
+
+
+def test_creating_a_request_carries_no_subject_projection() -> None:
+    """The write path answers the requester, who just supplied the Health ID."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            view = await h.service.create_request(
+                h.doctor,
+                patient_health_id=HEALTH_ID,
+                category_ids=[h.categories["CBC"]],
+                purpose="follow-up",
+            )
+
+            assert view.patient_health_id is None
+
+    asyncio.run(scenario())
+
+
 def test_a_suspended_clinician_may_still_read_their_own_sent_requests() -> None:
     """Seeing what you asked for is not a clinical capability."""
 
@@ -965,5 +1002,177 @@ def test_a_caller_without_a_patient_profile_cannot_decide_or_revoke() -> None:
                 await h.service.approve_categories(ghost, request_id, [h.categories["CBC"]])
             with pytest.raises(PatientProfileNotFoundError):
                 await h.service.revoke_grant(ghost, uuid4())
+
+    asyncio.run(scenario())
+
+
+# -- scope resolution and listing audit (ADR-020) ---------------------------------------
+
+
+async def _approve(h: Harness, *codes: str) -> UUID:
+    request_id = await _request(h, *codes)
+    outcome = await h.service.approve_categories(
+        h.patient, request_id, [h.categories[code] for code in codes]
+    )
+    return outcome.grants[0].id
+
+
+def test_scope_reports_exactly_the_categories_enforce_would_admit() -> None:
+    """``granted_category_ids`` and ``enforce`` must never disagree — a listing that
+    offered a record the next read refuses would make the choke point a lie."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC", "MRI")
+            await h.service.approve_categories(h.patient, request_id, [h.categories["CBC"]])
+            await h.service.reject_categories(h.patient, request_id, [h.categories["MRI"]])
+
+            scope = await h.service.granted_category_ids(
+                h.doctor, patient_id=h.patient_id, at=h.clock.now
+            )
+
+            assert scope == {h.categories["CBC"]}
+            await h.service.enforce(
+                h.doctor,
+                patient_id=h.patient_id,
+                category_id=h.categories["CBC"],
+                action=AuditAction.RECORD_VIEWED,
+            )
+            with pytest.raises(AccessDeniedError):
+                await h.service.enforce(
+                    h.doctor,
+                    patient_id=h.patient_id,
+                    category_id=h.categories["MRI"],
+                    action=AuditAction.RECORD_VIEWED,
+                )
+
+    asyncio.run(scenario())
+
+
+def test_scope_is_empty_for_a_suspended_clinician_and_for_everyone_else() -> None:
+    """ADR-015 applies to the scope query as much as to the verdict; and a scope is a
+    clinician's notion, so no other role can obtain one for another person's data."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _approve(h, "CBC")
+
+            async def scope(caller: AuthenticatedUser) -> frozenset[UUID]:
+                return await h.service.granted_category_ids(
+                    caller, patient_id=h.patient_id, at=h.clock.now
+                )
+
+            assert await scope(h.doctor) == {h.categories["CBC"]}
+            # The patient's own records are reached by ownership, never by a grant.
+            assert await scope(h.patient) == frozenset()
+            assert await scope(h.other_patient) == frozenset()
+
+            h.clinicians.suspend(h.doctor.user_id)
+            assert await scope(h.doctor) == frozenset()
+
+    asyncio.run(scenario())
+
+
+def test_scope_is_empty_for_an_unknown_clinician_and_writes_nothing() -> None:
+    """The query is side-effect free: it is safe to ask before knowing whether a listing
+    will be served, which is why it can be reused wherever consent-scoped retrieval is
+    needed."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _approve(h, "CBC")
+            before = await h.actions()
+            stranger = AuthenticatedUser(
+                user_id=uuid4(), firebase_uid="fb-nobody", role=Role.DOCTOR
+            )
+
+            assert (
+                await h.service.granted_category_ids(
+                    stranger, patient_id=h.patient_id, at=h.clock.now
+                )
+                == frozenset()
+            )
+            assert await h.service.granted_category_ids(
+                h.doctor, patient_id=h.patient_id, at=h.clock.now
+            ) == {h.categories["CBC"]}
+            assert await h.actions() == before  # neither call touched the trail
+
+    asyncio.run(scenario())
+
+
+def test_scope_expires_with_the_grant_behind_it() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            grant_id = await _approve(h, "CBC")
+
+            h.clock.advance(dt.timedelta(days=91))
+            assert (
+                await h.service.granted_category_ids(
+                    h.doctor, patient_id=h.patient_id, at=h.clock.now
+                )
+                == frozenset()
+            )
+
+            h.clock.advance(-dt.timedelta(days=91))
+            await h.service.revoke_grant(h.patient, grant_id)
+            assert (
+                await h.service.granted_category_ids(
+                    h.doctor, patient_id=h.patient_id, at=h.clock.now
+                )
+                == frozenset()
+            )
+
+    asyncio.run(scenario())
+
+
+def test_a_served_listing_is_recorded_as_records_listed_with_no_target() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            await h.service.record_listing(
+                h.doctor,
+                patient_id=h.patient_id,
+                granted_category_ids=frozenset({h.categories["CBC"]}),
+                at=h.clock.now,
+                request_context="req-42",
+            )
+
+            (event,) = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            assert event.action is AuditAction.RECORDS_LISTED
+            assert event.actor_user_id == h.doctor.user_id
+            assert event.actor_role is Role.DOCTOR
+            assert event.patient_id == h.patient_id
+            assert event.request_context == "req-42"
+            # A scope-level event fills none of the three target columns (ADR-020).
+            assert (
+                event.target_record_id is None
+                and event.target_category_id is None
+                and event.target_request_id is None
+            )
+            assert event.event_hash  # hashed like every other event
+
+    asyncio.run(scenario())
+
+
+def test_a_listing_with_nothing_in_scope_is_recorded_as_a_refusal() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            await h.service.record_listing(
+                h.doctor,
+                patient_id=h.patient_id,
+                granted_category_ids=frozenset(),
+                at=h.clock.now,
+            )
+
+            (event,) = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            assert event.action is AuditAction.ACCESS_DENIED
+            assert event.target_record_id is None
 
     asyncio.run(scenario())

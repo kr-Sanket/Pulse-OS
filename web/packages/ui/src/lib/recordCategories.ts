@@ -1,13 +1,12 @@
 // The record-category controlled vocabulary (GET /api/v1/record-categories).
 //
-// Shared rather than owned by one feature: Records draws its filter chips and upload form
-// from it, and Consent needs it to render the categories a request asks for as words
-// instead of wire codes. One implementation, so the two can never disagree about what
-// "DISCHARGE_SUMMARY" is called.
+// Shared across portals, not owned by one feature: the patient portal draws its filter chips
+// and upload form from it, and both portals render stored category codes as words. One
+// implementation, so no two screens can disagree about what "DISCHARGE_SUMMARY" is called.
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
 
-import { attempt, failure, type ApiResult } from "@pulseos/ui";
+import { attempt, failure, type ApiResult } from "./apiResult";
 
 export type RecordCategory = components["schemas"]["RecordCategoryResponse"];
 

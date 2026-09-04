@@ -8,7 +8,7 @@
 import { useCallback, useMemo } from "react";
 
 import { api } from "@/api";
-import { categoryLabels, listCategories } from "@/lib/recordCategories";
+import { categoryLabels, listCategories } from "@pulseos/ui";
 import { useApiResource } from "@pulseos/ui";
 
 import { listAuditEvents, MAX_PAGE_SIZE } from "./api";

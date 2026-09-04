@@ -30,7 +30,11 @@ from app.modules.consent.router import (
 )
 from app.modules.patients.router import router as patients_router
 from app.modules.records.organizations_router import doctors_router, hospitals_router
-from app.modules.records.router import categories_router, records_router
+from app.modules.records.router import (
+    categories_router,
+    granted_records_router,
+    records_router,
+)
 from app.modules.records.storage import S3ObjectStorage
 
 API_V1_PREFIX = "/api/v1"
@@ -82,6 +86,7 @@ def create_app() -> FastAPI:
     application.include_router(doctors_router, prefix=API_V1_PREFIX)
     application.include_router(records_router, prefix=API_V1_PREFIX)
     application.include_router(categories_router, prefix=API_V1_PREFIX)
+    application.include_router(granted_records_router, prefix=API_V1_PREFIX)
     application.include_router(access_requests_router, prefix=API_V1_PREFIX)
     application.include_router(consent_grants_router, prefix=API_V1_PREFIX)
     application.include_router(audit_logs_router, prefix=API_V1_PREFIX)

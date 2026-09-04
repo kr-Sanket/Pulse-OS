@@ -402,6 +402,77 @@ RC-2 experiment would have nothing to demonstrate against).
 
 ---
 
+## ADR-020 — Clinician-scoped record listing: a dedicated resource, pre-filtered by grant scope
+**Date:** 2026-09-04 · **Status:** Accepted (M4) · **Extends:** ADR-013, ADR-016, ADR-018
+
+**Context:** The consent flow terminated at step 3. A clinician holding a valid, unrevoked,
+unexpired grant could read a record **only if they already knew its UUID**, and no endpoint
+would ever give them one: `GET /records` is gated to PATIENT and HOSPITAL_ADMIN (and its
+service fails closed for every other role), `GET /records/existence` returns category presence
+with no identifiers, `GET /consent-grants` is patient-only by design, and record ids are random
+(ADR-012's no-enumeration rule). `GET /records/{id}` and the download URL admitted DOCTOR and
+passed `consent.enforce`, but had no reachable input. The consent journey could be demonstrated
+up to approval and no further.
+
+**Decision:** a new resource, `GET /api/v1/granted-records?patientHealthId=&cursor=&limit=`,
+owned by the `records` module, DOCTOR-only, requiring an ACTIVE clinician (ADR-015). Four parts:
+
+1. **Authorization is a filter, not a verdict.** The page is narrowed to the categories consent
+   reports as granted. `consent.enforce` is **not** called per record; every record opened from
+   the page still crosses it exactly once, so an id learned here is refused the moment its grant
+   is revoked.
+2. **Three seams, not one.** `records/service.py` now declares `GrantScope`
+   (`granted_category_ids`) and `ListingAuditor` (`record_listing`) beside the existing
+   `ConsentEnforcer`, all implemented by `ConsentService` and wired to the same instance.
+   `records` never restates a consent predicate and never touches `consent_grants`.
+3. **A dedicated response schema.** `GrantedRecordResponse` exposes id, category code and
+   display name, origin, date of service, uploading hospital and creation time — enough to
+   *choose* a record. Filename, description, size, content type and processing status are
+   withheld and remain available on the single authorized read. `grantedCategories` reports the
+   scope beside the page.
+4. **One audit event per request** — `RECORDS_LISTED`, or `ACCESS_DENIED` when nothing is in
+   scope, written before the empty page is returned.
+
+**Why not the alternatives:**
+
+- *Reuse `GET /records` with role-aware behaviour* (smallest diff): one route would carry three
+  different authorization bases, `patientHealthId` would be load-bearing for one role and
+  ignored by two, and the response type would either fork by role — breaking a generated client
+  — or be shared, so every field added later for patients silently reaches clinicians. It would
+  also inherit finding M3-B: `GET /records` writes no audit event at all.
+- *`GET /consent-grants/{grantId}/records`*: conceptually purest, but inverts ADR-016 direction 2
+  (consent would serve records-owned data), requires a grantee-visible grant listing that does
+  not exist, and turns one patient into N listings with N cursors for the client to merge.
+- *Deepen `/records/existence` when a grant exists*: an endpoint whose disclosure level depends
+  on data cannot be reviewed by reading it, and it would make a deliberately unaudited step
+  sometimes-audited. Disclosure level must be a property of the route, not of the data.
+- *Call `enforce` per record*: it writes an audit row per call and raises rather than returning a
+  boolean, so filtering a page with it would record a `RECORD_VIEWED` for every record merely
+  listed and an `ACCESS_DENIED` for every one filtered out — a trail of reads that never
+  happened — at 2N + N queries.
+
+**Consequences:**
+
+- `AuditAction` gains `RECORDS_LISTED` (values in a `VARCHAR(32)` column, so no migration —
+  ADR-018 precedent). Clients with an exhaustive action map must add an entry.
+- **The `audit_logs` target-column rule relaxes from "exactly one" to "at most one."** A listing
+  is an event about a *scope*: it spans every granted category and every record inside them, so
+  no single target column can be filled truthfully, and filling one per row would multiply one
+  action into a page-sized burst. Such an event sets none; `patient_id`, never nullable, carries
+  its subject. "Never more than one" still holds without exception.
+- SYSTEM_ARCHITECTURE rule 3 is now satisfiable in its precise form for clinicians: *every
+  non-owner read of metadata-beyond-existence is audited*. Finding M3-B (owner and
+  hospital-admin listings, still unaudited) is untouched and remains open on its own merits.
+- `utc_now` moved to `app/shared/time.py`: a third module needed it, which is the condition
+  `records/dependencies.py` already set for promoting a helper out of a module.
+- The module graph keeps the one cycle ADR-016 accepted; this widens that edge from one seam to
+  three, each one method wide and each answering a different question.
+- **Not addressed:** rate limiting. `/granted-records` requires a live grant, so it is not a
+  Health-ID oracle the way `/access-requests` and `/records/existence` are (finding M3-D), but
+  the bucket those two need should cover it too.
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.

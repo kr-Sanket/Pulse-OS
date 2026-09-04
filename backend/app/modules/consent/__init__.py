@@ -23,12 +23,11 @@ enforcement dependency wired into every record-read path; the append-only audit 
 ``AuditAnchor`` interface with a DB-backed implementation only (ADR-004 — the Polygon
 anchor is M6); notification fan-out for requests.
 
-**Status: schema only.** ``models`` and migration 0004 define the five consent tables;
-every other file in this package is still a documented placeholder — no domain logic, no
-routes, and nothing mounted in ``app.main``. Behaviour waits on Product-Owner sign-off of
-OD-1…3 (docs/DOMAIN_MODEL.md §5), which fix unclaimed-patient handling, the grant-expiry
-default written to ``ConsentGrant.expires_at``, and whether a grant exposes the health
-profile.
+**Status: implemented (M3, extended at M4).** The lifecycle, ``enforce``, the audit log and
+the three routers are live and mounted in ``app.main``. OD-1…3 (docs/DOMAIN_MODEL.md §5)
+remain open Product-Owner questions — unclaimed-patient handling, the grant-expiry default
+written to ``ConsentGrant.expires_at``, and whether a grant exposes the health profile —
+but none of them blocks the implemented surface.
 
 Obligations the schema records but cannot enforce — each belongs to the service and is
 listed here so it is inherited deliberately rather than discovered:
@@ -44,6 +43,7 @@ listed here so it is inherited deliberately rather than discovered:
   ``audit_logs``. Those tables have no ``updated_at`` and no mutable column, but
   docs/DATABASE_DESIGN.md principle 3 also expects DB privileges to back the rule in a
   deployed environment — an ops task, not a schema one.
-- **Uphold the target-column pairing** in ``audit_logs``: exactly one of the three target
-  references is set for any given action.
+- **Uphold the target-column pairing** in ``audit_logs``: at most one of the three target
+  references is set for any given action, and a scope-level event such as
+  ``RECORDS_LISTED`` sets none (ADR-020).
 """

@@ -311,3 +311,86 @@ def test_category_existence_is_empty_for_a_patient_with_no_records() -> None:
             )
 
     asyncio.run(scenario())
+
+
+def test_grantee_listing_is_scoped_to_patient_categories_and_visible_records() -> None:
+    """``list_page_for_grantee``: the three filters that make a clinician listing safe, and
+    the keyset pagination it shares with every other listing (ADR-020)."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            hospital = await _hospital(session)
+            patient = await _patient(session)
+            other_patient = await _patient(session)
+            categories = RecordCategoryRepository(session)
+            cbc = await categories.add(RecordCategory(code="CBC", display_name="CBC"))
+            mri = await categories.add(RecordCategory(code="MRI", display_name="MRI"))
+            records = MedicalRecordRepository(session)
+
+            for second, category in enumerate([cbc, cbc, cbc, mri]):
+                await _record(
+                    session,
+                    patient_id=patient.id,
+                    category=category,
+                    hospital_id=hospital.id,
+                    created_at=datetime(2026, 2, 1, 10, 0, second),
+                )
+            hidden = await _record(
+                session,
+                patient_id=patient.id,
+                category=cbc,
+                hospital_id=hospital.id,
+                created_at=datetime(2026, 2, 1, 10, 0, 9),
+            )
+            hidden.is_hidden = True
+            await _record(
+                session,
+                patient_id=other_patient.id,
+                category=cbc,
+                hospital_id=hospital.id,
+                created_at=datetime(2026, 2, 1, 11, 0, 0),
+            )
+            await session.flush()
+
+            granted = await records.list_page_for_grantee(
+                patient_id=patient.id, category_ids=[cbc.id], limit=10
+            )
+            assert [row[1].code for row in granted] == ["CBC", "CBC", "CBC"]
+            assert all(row[0].patient_id == patient.id for row in granted)
+            assert hidden.id not in {row[0].id for row in granted}
+            # Joined context arrives on the same row — no per-record lookup.
+            assert all(row[2] is not None and row[2].hid == hospital.hid for row in granted)
+
+            both = await records.list_page_for_grantee(
+                patient_id=patient.id, category_ids=[cbc.id, mri.id], limit=10
+            )
+            assert [row[1].code for row in both] == ["MRI", "CBC", "CBC", "CBC"]
+
+            first_page = await records.list_page_for_grantee(
+                patient_id=patient.id, category_ids=[cbc.id], limit=2
+            )
+            last = first_page[-1][0]
+            second_page = await records.list_page_for_grantee(
+                patient_id=patient.id,
+                category_ids=[cbc.id],
+                after=CursorKey(created_at=last.created_at, item_id=last.id),
+                limit=2,
+            )
+            assert len(second_page) == 1
+            ids = {row[0].id for row in first_page} | {row[0].id for row in second_page}
+            assert len(ids) == 3  # no overlap, no loss
+
+    asyncio.run(scenario())
+
+
+def test_a_grantee_listing_without_a_granted_category_is_not_expressible() -> None:
+    """The empty set is refused rather than silently matching nothing: a listing with no
+    scope is a bug in the caller, and the service short-circuits before it can happen."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            records = MedicalRecordRepository(session)
+            with pytest.raises(ValueError, match="non-empty"):
+                await records.list_page_for_grantee(patient_id=uuid4(), category_ids=[], limit=10)
+
+    asyncio.run(scenario())

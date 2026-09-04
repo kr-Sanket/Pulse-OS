@@ -6,10 +6,10 @@ import { useApiResource, type Resource } from "@pulseos/ui";
 
 import { api } from "@/api";
 
-import { loadDoctorProfile, type DoctorProfile } from "./api";
+import { loadDoctorProfile, type ClinicianIdentity } from "./api";
 
 export interface DoctorProfileResource {
-  resource: Resource<DoctorProfile>;
+  resource: Resource<ClinicianIdentity>;
   reload: () => void;
 }
 

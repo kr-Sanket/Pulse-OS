@@ -9,10 +9,9 @@ a whole page of ids.
 
 import asyncio
 import dataclasses
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID, uuid4
 
 from app.core.db import Base
@@ -26,11 +25,9 @@ from app.modules.records.models import (
     HospitalAdmin,
     HospitalVerificationStatus,
 )
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from tests.support import create_sqlite_test_engine
+from tests.support import counting_statements, create_sqlite_test_engine
 
 
 @dataclass
@@ -99,22 +96,6 @@ async def _arrange(session: AsyncSession, *, doctors: int) -> Fixture:
         hospital_id=hospital.id,
         other_hospital_id=other.id,
     )
-
-
-@contextmanager
-def _counting(engine: AsyncEngine) -> Iterator[list[str]]:
-    """Record every SQL statement the engine emits while the block runs."""
-    statements: list[str] = []
-
-    def _record(_conn: Any, _cursor: Any, statement: str, *_rest: Any, **_kwargs: Any) -> None:
-        statements.append(statement)
-
-    sync_engine: Engine = engine.sync_engine
-    event.listen(sync_engine, "before_cursor_execute", _record)
-    try:
-        yield statements
-    finally:
-        event.remove(sync_engine, "before_cursor_execute", _record)
 
 
 def test_the_projection_carries_display_fields_and_nothing_else() -> None:
@@ -187,15 +168,15 @@ def test_resolving_a_page_costs_one_statement_per_kind_not_one_per_row() -> None
 
     async def scenario() -> None:
         async with _fixture(doctors=10) as (f, engine):
-            with _counting(engine) as statements:
+            with counting_statements(engine) as statements:
                 await f.directory.clinicians_by_id(f.doctor_ids)
             assert len(statements) == 1
 
-            with _counting(engine) as statements:
+            with counting_statements(engine) as statements:
                 await f.directory.staff_by_user_id([*f.doctor_user_ids, f.admin_user_id])
             assert len(statements) == 2
 
-            with _counting(engine) as statements:
+            with counting_statements(engine) as statements:
                 await f.directory.hospital_names([f.hospital_id, f.other_hospital_id])
             assert len(statements) == 1
 
@@ -205,7 +186,7 @@ def test_resolving_a_page_costs_one_statement_per_kind_not_one_per_row() -> None
 def test_resolving_nothing_touches_the_database_at_all() -> None:
     async def scenario() -> None:
         async with _fixture() as (f, engine):
-            with _counting(engine) as statements:
+            with counting_statements(engine) as statements:
                 assert await f.directory.clinicians_by_id([]) == {}
                 assert await f.directory.staff_by_user_id([]) == {}
                 assert await f.directory.hospital_names([]) == {}

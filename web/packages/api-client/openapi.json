@@ -198,7 +198,7 @@
         "type": "object"
       },
       "AuditAction": {
-        "description": "The audit action vocabulary of docs/DOMAIN_MODEL.md \u00a71, verbatim.\n\n``ACCESS_DENIED`` extends that list. The M3 gate requires that \"attempted unauthorized\nreads are denied AND logged\" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only\nsuccesses, so a refused read had no truthful action to write. Adding it costs nothing:\nmembers are values in a VARCHAR(32) column, so the vocabulary extends without a\nmigration.\n\n``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own\nADR (.claude/TODO.md parking lot), and an unused member here would imply a capability\nthat docs/SECURITY.md's no-break-glass invariant denies.",
+        "description": "The audit action vocabulary of docs/DOMAIN_MODEL.md \u00a71, verbatim.\n\n``ACCESS_DENIED`` extends that list. The M3 gate requires that \"attempted unauthorized\nreads are denied AND logged\" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only\nsuccesses, so a refused read had no truthful action to write. Adding it costs nothing:\nmembers are values in a VARCHAR(32) column, so the vocabulary extends without a\nmigration.\n\n``RECORDS_LISTED`` extends it again, for the same reason and by the same precedent\n(ADR-020). A clinician asking which of a patient's records they may read is a real\naccess event \u2014 SYSTEM_ARCHITECTURE rule 3 covers \"metadata-beyond-existence\" \u2014 and no\nexisting member states it truthfully: ``RECORD_VIEWED`` means one document was read and\nis paired with a record id, so reusing it would either invent views that never happened\nor leave that pairing unfilled. It is the one member whose event has **no** target at\nall: its subject is a scope, which ``patient_id`` already carries. See the target-column\nnote on ``AuditLog``.\n\n``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own\nADR (.claude/TODO.md parking lot), and an unused member here would imply a capability\nthat docs/SECURITY.md's no-break-glass invariant denies.",
         "enum": [
           "RECORD_UPLOADED",
           "ACCESS_REQUESTED",
@@ -208,7 +208,8 @@
           "RECORD_VIEWED",
           "RECORD_DOWNLOADED",
           "SUMMARY_GENERATED",
-          "ACCESS_DENIED"
+          "ACCESS_DENIED",
+          "RECORDS_LISTED"
         ],
         "title": "AuditAction",
         "type": "string"
@@ -866,6 +867,95 @@
         "title": "Gender",
         "type": "string"
       },
+      "GrantedRecordListResponse": {
+        "description": "A page of consented records, plus the scope that produced it.\n\n``grantedCategories`` is what makes an empty ``items`` readable: with a live grant it\nmeans the patient holds nothing in what was approved, without one it means nothing was\napproved. It also answers a question no other endpoint does \u2014 a clinician can see that\na request was ``DECIDED`` but not which categories survived it \u2014 so it is the scope, not\na convenience.",
+        "properties": {
+          "grantedCategories": {
+            "items": {
+              "$ref": "#/components/schemas/RecordCategoryResponse"
+            },
+            "title": "Grantedcategories",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GrantedRecordResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "grantedCategories",
+          "items",
+          "nextCursor"
+        ],
+        "title": "GrantedRecordListResponse",
+        "type": "object"
+      },
+      "GrantedRecordResponse": {
+        "description": "One record as its *grantee* sees it before opening it (ADR-020).\n\nA separate model from ``RecordMetadataResponse``, not a subset of it, and that is the\npoint: reuse would mean every field ever added for a patient's own view becomes visible\nto clinicians with no review step. What a doctor may see here is an allow-list, and\nwidening it has to be a deliberate edit to this class.\n\nEnough to *choose* a record \u2014 which category, when the care happened, who issued it,\nwhether it came from a hospital or the patient's own locker \u2014 and nothing that describes\nthe document itself. Three fields are withheld on purpose:\n\n- ``originalFilename``: user-supplied text that routinely carries a diagnosis\n  (\"hiv-panel-positive.pdf\"). The upload path already refuses to put it in the storage\n  key for exactly this reason (see ``RecordService._store``); a field unsafe to place in\n  an object key is unsafe to broadcast across a page. It is disclosed at download time,\n  where it is needed and where a single authorized read has already been audited.\n- ``description``: free text with no vocabulary, able to say far more about a patient\n  than the category the grant was given for.\n- ``sizeBytes`` / ``contentType`` / ``processingStatus``: a page-count proxy, an icon,\n  and an M5 pipeline state \u2014 none of them help a clinician pick a document.\n\nAll of them remain available on ``GET /records/{id}``, which authorizes and audits that\ndisclosure one record at a time. The listing's job is to choose; the read's job is to\ndisclose.",
+        "properties": {
+          "categoryCode": {
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "categoryDisplayName": {
+            "title": "Categorydisplayname",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "dateOfService": {
+            "format": "date",
+            "title": "Dateofservice",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/RecordOrigin"
+          },
+          "uploadedByHospital": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UploadingHospitalResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "categoryCode",
+          "categoryDisplayName",
+          "origin",
+          "dateOfService",
+          "uploadedByHospital",
+          "createdAt"
+        ],
+        "title": "GrantedRecordResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1258,6 +1348,118 @@
         "title": "Role",
         "type": "string"
       },
+      "SentAccessRequestListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SentAccessRequestResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "SentAccessRequestListResponse",
+        "type": "object"
+      },
+      "SentAccessRequestResponse": {
+        "description": "A request in the *requester's* own listing: everything above, plus who it is about.\n\nThe subject is the one fact a clinician cannot recover from context. A patient reading\ntheir inbox knows every row concerns them; a doctor reading their outgoing list has no\nway to tell one patient's request from another's, which makes the listing unusable\nwithout this field. It carries the Health ID \u2014 the patient's public business identifier\n(ADR-012), and the exact value the clinician typed to raise the request \u2014 and nothing\nelse off the patient row: no name, no date of birth, no internal id.\n\nA separate model from the inbox's item rather than a nullable field on it, so the\npatient's response shape does not change and no endpoint gains a field it has no use\nfor.",
+        "properties": {
+          "categoryCodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Categorycodes",
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "patientHealthId": {
+            "title": "Patienthealthid",
+            "type": "string"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
+          },
+          "requester": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffDisplayResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requesterDoctorId": {
+            "format": "uuid",
+            "title": "Requesterdoctorid",
+            "type": "string"
+          },
+          "requesterHospitalId": {
+            "format": "uuid",
+            "title": "Requesterhospitalid",
+            "type": "string"
+          },
+          "requesterHospitalName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requesterhospitalname"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConsentRequestStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "purpose",
+          "categoryCodes",
+          "requesterDoctorId",
+          "requesterHospitalId",
+          "expiresAt",
+          "createdAt",
+          "requester",
+          "requesterHospitalName",
+          "patientHealthId"
+        ],
+        "title": "SentAccessRequestResponse",
+        "type": "object"
+      },
       "StaffDisplayResponse": {
         "description": "A member of hospital staff as the patient sees them, wherever this API names one.\n\nOne shape for requesters, grantees and audit actors, because a patient is asking the\nsame question in all three places: who is this, and where do they work. It carries no\nidentifier \u2014 the id it was projected from is already on the row beside it \u2014 and no\nregistration number, contact detail or employment status.\n\n``specialty`` is null when the staff row does not carry one, and always for an\nadministrator; ``hospitalName`` is always present, because staff belong to a hospital\nby schema.",
         "properties": {
@@ -1489,7 +1691,7 @@
     },
     "/api/v1/access-requests/sent": {
       "get": {
-        "description": "The clinician's own outgoing requests, newest first.\n\nRoles: DOCTOR (own requests only). A non-ACTIVE clinician may still read this: seeing\nwhat you asked for is not a clinical capability. The response reports status only \u2014\nwhat may actually be read is answered per read by the enforcement check, never by a\nlisting. Consent requirement: none.\nFailure modes: 401, 403, 404 (no clinician profile), 422 (bad cursor or limit).",
+        "description": "The clinician's own outgoing requests, newest first.\n\nEach row names its subject by Health ID \u2014 the identifier the clinician supplied to raise\nthe request \u2014 because a listing of one's own requests is unreadable without knowing who\neach one is about. Nothing else off the patient row is exposed.\n\nRoles: DOCTOR (own requests only). A non-ACTIVE clinician may still read this: seeing\nwhat you asked for is not a clinical capability. The response reports status only \u2014\nwhat may actually be read is answered per read by the enforcement check, never by a\nlisting. Consent requirement: none.\nFailure modes: 401, 403, 404 (no clinician profile), 422 (bad cursor or limit).",
         "operationId": "list_sent_requests_api_v1_access_requests_sent_get",
         "parameters": [
           {
@@ -1526,7 +1728,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccessRequestListResponse"
+                  "$ref": "#/components/schemas/SentAccessRequestListResponse"
                 }
               }
             },
@@ -2018,6 +2220,79 @@
         "summary": "Register Doctor",
         "tags": [
           "doctors"
+        ]
+      }
+    },
+    "/api/v1/granted-records": {
+      "get": {
+        "description": "The records one patient's consent currently lets this clinician read, newest first.\n\nStep 4 of the consent flow (docs/SYSTEM_ARCHITECTURE.md) and the step that closes it:\nafter ``/records/existence`` says a category holds something and the patient approves a\nrequest for it, this is where the clinician learns the record ids. Each item is the\nnarrow chooser projection of ``GrantedRecordResponse`` \u2014 no filename, description, size\nor content type; those are disclosed by ``GET /records/{record_id}``, one authorized and\naudited read at a time.\n\n``grantedCategories`` reports the scope the page was drawn from, so an empty list under\na live grant is distinguishable from having no grant at all.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE (ADR-015). Consent requirement:\nthe page is filtered by the categories consent reports as granted \u2014 a filter, never a\nverdict. Nothing here permits a read: every record opened from this page still passes\n``consent.enforce``, so an id learned here is refused the moment its grant is revoked.\nA clinician with no live grant receives an empty page rather than a 403: they already\nknow this patient exists, having searched the Health ID, so there is no existence left\nto protect.\n\nAudited: exactly one event per request \u2014 ``RECORDS_LISTED``, or ``ACCESS_DENIED`` when\nnothing is in scope. Unlike the single-record reads, this handler *raises* its failures\n(ADR-017 does not apply): every ``RecordsError`` below is raised while resolving the\nclinician or the patient, which happens before the audit row is written, so no unwind\ncan discard a trail entry.\n\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n422 (missing/oversized Health ID, unknown Health ID, bad cursor or limit).",
+        "operationId": "list_granted_records_api_v1_granted_records_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "patientHealthId",
+            "required": true,
+            "schema": {
+              "maxLength": 20,
+              "minLength": 1,
+              "title": "Patienthealthid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantedRecordListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Granted Records",
+        "tags": [
+          "records"
         ]
       }
     },

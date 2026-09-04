@@ -126,6 +126,29 @@ class AccessRequestListResponse(ApiModel):
     next_cursor: str | None
 
 
+class SentAccessRequestResponse(AccessRequestListItemResponse):
+    """A request in the *requester's* own listing: everything above, plus who it is about.
+
+    The subject is the one fact a clinician cannot recover from context. A patient reading
+    their inbox knows every row concerns them; a doctor reading their outgoing list has no
+    way to tell one patient's request from another's, which makes the listing unusable
+    without this field. It carries the Health ID — the patient's public business identifier
+    (ADR-012), and the exact value the clinician typed to raise the request — and nothing
+    else off the patient row: no name, no date of birth, no internal id.
+
+    A separate model from the inbox's item rather than a nullable field on it, so the
+    patient's response shape does not change and no endpoint gains a field it has no use
+    for.
+    """
+
+    patient_health_id: str
+
+
+class SentAccessRequestListResponse(ApiModel):
+    items: list[SentAccessRequestResponse]
+    next_cursor: str | None
+
+
 class ConsentDecisionResponse(ApiModel):
     """One immutable per-category answer. ``decidedAt`` is the row's creation instant —
     for an append-only record they are the same moment by design."""

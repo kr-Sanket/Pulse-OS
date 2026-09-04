@@ -261,6 +261,46 @@ class MedicalRecordRepository:
         result = await self._session.execute(query)
         return [(row[0], row[1], row[2]) for row in result.all()]
 
+    async def list_page_for_grantee(
+        self,
+        *,
+        patient_id: UUID,
+        category_ids: Collection[UUID],
+        after: CursorKey | None = None,
+        limit: int,
+    ) -> list[RecordRow]:
+        """One page of the records a consented clinician may read, newest first (ADR-020).
+
+        Separate from ``list_page`` rather than a pair of extra arguments on it, for the
+        reason ``list_category_ids_with_records`` is separate: the safety of this listing
+        is in what its signature cannot express. ``category_ids`` is required and must be
+        non-empty, so a scope-free clinician listing is not constructible; hidden records
+        are filtered unconditionally, with no flag to turn it off. ``list_page`` needs the
+        opposite defaults — its owner and its uploading hospital are entitled to see a
+        hidden record (app/modules/records/service.py) — and any argument that reconciled
+        both would have to default to one of them, which is how the unsafe default gets
+        chosen by accident.
+
+        The caller supplies the granted set; deciding what is in it belongs to ``consent``,
+        never here. Category and uploading hospital arrive on the joined row, so a page
+        costs one statement no matter how many records it holds.
+        """
+        if not category_ids:
+            raise ValueError("category_ids must be non-empty: a listing is always grant-scoped")
+        query = (
+            self._context_query()
+            .where(
+                MedicalRecord.patient_id == patient_id,
+                MedicalRecord.category_id.in_(category_ids),
+                MedicalRecord.is_hidden.is_(False),
+            )
+            .limit(limit)
+        )
+        if after is not None:
+            query = query.where(_keyset_filter(MedicalRecord.created_at, MedicalRecord.id, after))
+        result = await self._session.execute(query)
+        return [(row[0], row[1], row[2]) for row in result.all()]
+
     def _context_query(self) -> Select[tuple[MedicalRecord, RecordCategory, Hospital]]:
         # The Hospital column is NULL for locker uploads (outer join) — SQLAlchemy's
         # Select typing cannot express that, so RecordRow carries the honest type.

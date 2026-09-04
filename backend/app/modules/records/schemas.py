@@ -187,6 +187,74 @@ class RecordListResponse(ApiModel):
     next_cursor: str | None
 
 
+class GrantedRecordResponse(ApiModel):
+    """One record as its *grantee* sees it before opening it (ADR-020).
+
+    A separate model from ``RecordMetadataResponse``, not a subset of it, and that is the
+    point: reuse would mean every field ever added for a patient's own view becomes visible
+    to clinicians with no review step. What a doctor may see here is an allow-list, and
+    widening it has to be a deliberate edit to this class.
+
+    Enough to *choose* a record — which category, when the care happened, who issued it,
+    whether it came from a hospital or the patient's own locker — and nothing that describes
+    the document itself. Three fields are withheld on purpose:
+
+    - ``originalFilename``: user-supplied text that routinely carries a diagnosis
+      ("hiv-panel-positive.pdf"). The upload path already refuses to put it in the storage
+      key for exactly this reason (see ``RecordService._store``); a field unsafe to place in
+      an object key is unsafe to broadcast across a page. It is disclosed at download time,
+      where it is needed and where a single authorized read has already been audited.
+    - ``description``: free text with no vocabulary, able to say far more about a patient
+      than the category the grant was given for.
+    - ``sizeBytes`` / ``contentType`` / ``processingStatus``: a page-count proxy, an icon,
+      and an M5 pipeline state — none of them help a clinician pick a document.
+
+    All of them remain available on ``GET /records/{id}``, which authorizes and audits that
+    disclosure one record at a time. The listing's job is to choose; the read's job is to
+    disclose.
+    """
+
+    id: UUID
+    category_code: str
+    category_display_name: str
+    origin: RecordOrigin
+    date_of_service: date
+    uploaded_by_hospital: UploadingHospitalResponse | None
+    created_at: datetime
+
+    @classmethod
+    def from_view(cls, view: RecordView) -> "GrantedRecordResponse":
+        hospital = (
+            UploadingHospitalResponse(hid=view.hospital.hid, name=view.hospital.name)
+            if view.hospital is not None
+            else None
+        )
+        return cls(
+            id=view.record.id,
+            category_code=view.category.code,
+            category_display_name=view.category.display_name,
+            origin=view.record.origin,
+            date_of_service=view.record.date_of_service,
+            uploaded_by_hospital=hospital,
+            created_at=view.record.created_at,
+        )
+
+
+class GrantedRecordListResponse(ApiModel):
+    """A page of consented records, plus the scope that produced it.
+
+    ``grantedCategories`` is what makes an empty ``items`` readable: with a live grant it
+    means the patient holds nothing in what was approved, without one it means nothing was
+    approved. It also answers a question no other endpoint does — a clinician can see that
+    a request was ``DECIDED`` but not which categories survived it — so it is the scope, not
+    a convenience.
+    """
+
+    granted_categories: list[RecordCategoryResponse]
+    items: list[GrantedRecordResponse]
+    next_cursor: str | None
+
+
 class DownloadUrlResponse(ApiModel):
     url: str
     expires_in_seconds: int

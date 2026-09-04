@@ -29,6 +29,7 @@ from tests.support import run_with_session
 
 RECORDS = "/api/v1/records"
 EXISTENCE = f"{RECORDS}/existence"
+GRANTED = "/api/v1/granted-records"
 CATEGORIES = "/api/v1/record-categories"
 
 #: A pinned, valid synthetic Health ID (app/modules/patients/seed.py).
@@ -498,3 +499,74 @@ def test_existence_does_not_collide_with_the_record_id_route(
     response = client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.doctor)
 
     assert response.status_code == 200
+
+
+# -- granted-record listing (M4.3, ADR-020) ----------------------------------------------
+
+
+def _granted(client: TestClient, headers: dict[str, str], **params: str) -> httpx.Response:
+    query = {"patientHealthId": HEALTH_ID, **params}
+    response: httpx.Response = client.get(GRANTED, params=query, headers=headers)
+    return response
+
+
+def test_granted_records_is_doctor_only(client: TestClient, actors: Actors) -> None:
+    forbidden = [
+        _granted(client, actors.patient),
+        _granted(client, actors.admin_a),
+        _granted(client, actors.system_admin),
+    ]
+
+    assert [response.status_code for response in forbidden] == [403] * 3
+
+
+def test_granted_records_requires_authentication(client: TestClient) -> None:
+    response = client.get(GRANTED, params={"patientHealthId": HEALTH_ID})
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_a_suspended_clinician_cannot_list_granted_records(
+    client: TestClient, actors: Actors
+) -> None:
+    """ADR-015 — refused outright, not handed an empty page: the answer to a suspended
+    clinician is about their standing, not about this patient."""
+    response = _granted(client, actors.suspended_doctor)
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+def test_granted_records_rejects_an_unknown_or_missing_health_id(
+    client: TestClient, actors: Actors
+) -> None:
+    unknown = _granted(client, actors.doctor, patientHealthId="PHI-IND-2026-0000000")
+    missing = client.get(GRANTED, headers=actors.doctor)
+    blank = _granted(client, actors.doctor, patientHealthId="")
+
+    assert [unknown.status_code, missing.status_code, blank.status_code] == [422, 422, 422]
+
+
+def test_granted_records_rejects_a_forged_cursor_and_an_oversized_limit(
+    client: TestClient, actors: Actors
+) -> None:
+    forged = _granted(client, actors.doctor, cursor="not-a-cursor")
+    too_many = _granted(client, actors.doctor, limit="101")
+
+    assert forged.status_code == 422
+    assert forged.json()["detail"] == "Invalid pagination cursor."
+    assert too_many.status_code == 422
+
+
+def test_a_clinician_with_no_grant_gets_an_empty_page_rather_than_a_refusal(
+    client: TestClient, actors: Actors
+) -> None:
+    """They already know this patient exists — they searched the Health ID — so there is no
+    existence left to protect, and an empty list is the honest answer to "what may I read"."""
+    _upload(client, actors.admin_a, categoryCode="CBC")
+
+    response = _granted(client, actors.doctor)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"grantedCategories": [], "items": [], "nextCursor": None}

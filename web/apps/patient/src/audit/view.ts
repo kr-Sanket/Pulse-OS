@@ -13,8 +13,8 @@
 import { Building2, Clock, Eye, FlaskConical, UserRound, type LucideIcon } from "lucide-react";
 
 import type { Tone } from "@/components/dashboard/StatusBadge";
-import { formatInstantDate, formatInstantTime, formatRelativeTime } from "@/lib/dates";
-import { categoryLabel } from "@/lib/recordCategories";
+import { formatInstantDate, formatInstantTime, formatRelativeTime } from "@pulseos/ui";
+import { categoryLabel } from "@pulseos/ui";
 
 import type { ActorRole, AuditAction, AuditEvent } from "./api";
 
@@ -38,7 +38,7 @@ interface ActionPresentation {
   tone: Tone;
 }
 
-/** The nine actions the backend defines (AuditAction), and nothing more. */
+/** The ten actions the backend defines (AuditAction), and nothing more. */
 const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   RECORD_VIEWED: { label: "Viewed", tone: "info" },
   RECORD_DOWNLOADED: { label: "Downloaded", tone: "primary" },
@@ -49,6 +49,10 @@ const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   CONSENT_REVOKED: { label: "Access withdrawn", tone: "destructive" },
   SUMMARY_GENERATED: { label: "Summary generated", tone: "neutral" },
   ACCESS_DENIED: { label: "Access denied", tone: "destructive" },
+  // A clinician asked which of your records their consent lets them read. One entry per
+  // request, never one per record — and it is not a read: opening any of those records
+  // still appears separately as "Viewed".
+  RECORDS_LISTED: { label: "Records listed", tone: "info" },
 };
 
 /** "SOMETHING_NEW" → "Something new". The graceful path for an action added server-side

@@ -15,7 +15,7 @@ import { listAuditEvents } from "@/audit/api";
 import { listInbox } from "@/consent/api";
 import { listGrants } from "@/grants/api";
 import type { ApiResult } from "@pulseos/ui";
-import { listCategories, type RecordCategory } from "@/lib/recordCategories";
+import { listCategories, type RecordCategory } from "@pulseos/ui";
 import { listRecords, type RecordPage } from "@/records/api";
 
 /** Recent records list + the records figure. Unfiltered: the dashboard shows everything. */

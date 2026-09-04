@@ -1,15 +1,15 @@
 """Test helpers shared across unit tests (no fixtures here — those live in conftest)."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 from uuid import UUID
 
 from app.core.db import Base
 from app.modules.consent.dependencies import CategoryVocabulary
 from app.modules.consent.service import Clinician
-from sqlalchemy import event
+from sqlalchemy import Engine, event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -65,18 +65,50 @@ def run_with_session[T](engine: AsyncEngine, action: Callable[[AsyncSession], Aw
     return asyncio.run(scenario())
 
 
+@contextmanager
+def counting_statements(engine: AsyncEngine) -> Iterator[list[str]]:
+    """Record every SQL statement the engine emits while the block runs.
+
+    The N+1 guard used by more than one suite: an assertion about *how many* statements a
+    page costs is the only kind that catches a per-row lookup creeping back in, because the
+    result is identical either way.
+    """
+    statements: list[str] = []
+
+    def _record(_conn: Any, _cursor: Any, statement: str, *_rest: Any, **_kwargs: Any) -> None:
+        statements.append(statement)
+
+    sync_engine: Engine = engine.sync_engine
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        yield statements
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+
+
 @asynccontextmanager
-async def sqlite_session() -> AsyncIterator[AsyncSession]:
-    """One in-memory SQLite session inside a transaction, schema created from metadata."""
+async def sqlite_session_with_engine() -> AsyncIterator[tuple[AsyncSession, AsyncEngine]]:
+    """As ``sqlite_session``, but also handing back the engine.
+
+    Only tests that instrument SQL need it — a statement counter listens on the engine, not
+    on the session (see the N+1 guards in test_staff_directory.py).
+    """
     engine = create_sqlite_test_engine()
     try:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session, session.begin():
-            yield session
+            yield session, engine
     finally:
         await engine.dispose()
+
+
+@asynccontextmanager
+async def sqlite_session() -> AsyncIterator[AsyncSession]:
+    """One in-memory SQLite session inside a transaction, schema created from metadata."""
+    async with sqlite_session_with_engine() as (session, _engine):
+        yield session
 
 
 class FakeClinicianDirectory:

@@ -6,6 +6,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ## [Unreleased]
 
 ### Added
+- **M4.3 `GET /api/v1/granted-records` (ADR-020)** — the step the consent flow was missing: a
+  clinician holding a grant could not obtain a single `record_id`, because `GET /records` is
+  patient/hospital-only, `/records/existence` returns no identifiers, `/consent-grants` is
+  patient-only, and record ids are random. DOCTOR-only and ACTIVE-only; the page is *filtered*
+  by the categories consent reports as granted and returns a chooser projection — id, category,
+  origin, date of service, uploading hospital, created at — with `grantedCategories` beside it so
+  "nothing was approved" is distinguishable from "what was approved is empty". Filename,
+  description, size, content type and processing status are withheld and stay on the single
+  authorized read. Hidden records never appear. **The listing permits nothing:** every record
+  opened from it still crosses `consent.enforce` once, so an id survives revocation by exactly
+  zero seconds. Audited as **one** event per request — `RECORDS_LISTED`, or `ACCESS_DENIED` when
+  nothing is in scope — never one per row. Backend tests 328 → 368.
 - **M4.2 Doctor portal — first vertical slice:** login → dashboard → patient search. The
   dashboard renders the clinician's own profile from `GET /doctors/me` (name, hospital,
   ACTIVE/PENDING/SUSPENDED badge, registration number) and a search card; `/patients` searches by

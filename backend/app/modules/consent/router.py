@@ -47,6 +47,8 @@ from app.modules.consent.schemas import (
     ConsentGrantListResponse,
     ConsentGrantResponse,
     DecisionOutcomeResponse,
+    SentAccessRequestListResponse,
+    SentAccessRequestResponse,
     StaffDisplayResponse,
 )
 from app.modules.consent.service import (
@@ -118,6 +120,35 @@ def _to_request_list_item(
         requester=_to_staff_display(view.requester),
         requester_hospital_name=view.requester_hospital_name,
     )
+
+
+def _to_sent_list_response(
+    page: RequestPage, vocabulary: CategoryVocabulary
+) -> SentAccessRequestListResponse:
+    """The requester's own listing: the shared item projection plus the subject.
+
+    ``patient_health_id`` is indexed rather than defaulted — the service populates it for
+    every row of this listing, and ``consent_requests.patient_id`` is a NOT NULL foreign
+    key to a table whose rows are never deleted, so a missing entry is a corrupt database,
+    not a case to paper over. The category vocabulary is indexed the same way above.
+    """
+    return SentAccessRequestListResponse(
+        items=[
+            SentAccessRequestResponse(
+                **_to_request_list_item(view, vocabulary).model_dump(),
+                patient_health_id=_required_health_id(view),
+            )
+            for view in page.items
+        ],
+        next_cursor=page.next_cursor,
+    )
+
+
+def _required_health_id(view: RequestView) -> str:
+    health_id = view.patient_health_id
+    if health_id is None:
+        raise KeyError("sent listing built without a patient Health ID")
+    return health_id
 
 
 def _to_list_response(
@@ -274,7 +305,7 @@ async def list_inbox(
 
 @access_requests_router.get(
     "/sent",
-    response_model=AccessRequestListResponse,
+    response_model=SentAccessRequestListResponse,
     responses={**_UNAUTHENTICATED, **_WRONG_ROLE, **_NO_PROFILE, **_INVALID},
 )
 async def list_sent_requests(
@@ -283,8 +314,12 @@ async def list_sent_requests(
     vocabulary: CategoryVocabularyDep,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
-) -> AccessRequestListResponse:
+) -> SentAccessRequestListResponse:
     """The clinician's own outgoing requests, newest first.
+
+    Each row names its subject by Health ID — the identifier the clinician supplied to raise
+    the request — because a listing of one's own requests is unreadable without knowing who
+    each one is about. Nothing else off the patient row is exposed.
 
     Roles: DOCTOR (own requests only). A non-ACTIVE clinician may still read this: seeing
     what you asked for is not a clinical capability. The response reports status only —
@@ -296,7 +331,7 @@ async def list_sent_requests(
         page = await service.list_sent_requests(user, after=parse_cursor(cursor), limit=limit)
     except ConsentError as exc:
         raise to_http_error(exc) from exc
-    return _to_list_response(page, vocabulary)
+    return _to_sent_list_response(page, vocabulary)
 
 
 @access_requests_router.post(

@@ -226,6 +226,39 @@ class ConsentGrantRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_active_category_ids(
+        self, *, patient_id: UUID, grantee_doctor_id: UUID, at: datetime
+    ) -> list[UUID]:
+        """Every category this grantee may currently read for this patient — ids only.
+
+        ``get_active`` asked the same question about one category and answered with a row;
+        this asks it about all of them and answers with the set. **The predicate is
+        deliberately identical** — unrevoked, and ``expires_at`` strictly greater than
+        ``at`` — so a listing filtered by this method and a read authorized by
+        ``get_active`` can never disagree about what is in scope (ADR-020). A grant whose
+        ``expires_at`` equals ``at`` is excluded by both.
+
+        Served by the same
+        ``ix_consent_grants_patient_id_grantee_doctor_id_category_id`` index, on its two
+        leading columns. Grouped rather than DISTINCT-ed in Python because several grants
+        can cover one category over time (a re-approval after an expiry), and the caller
+        wants the category, not its history.
+
+        ``at`` is the caller's, for the reason ``get_active`` gives: reading the clock is a
+        decision, not persistence.
+        """
+        result = await self._session.execute(
+            select(ConsentGrant.category_id)
+            .where(
+                ConsentGrant.patient_id == patient_id,
+                ConsentGrant.grantee_doctor_id == grantee_doctor_id,
+                ConsentGrant.revoked_at.is_(None),
+                ConsentGrant.expires_at > at,
+            )
+            .group_by(ConsentGrant.category_id)
+        )
+        return list(result.scalars())
+
     async def list_page_by_patient(
         self, patient_id: UUID, *, after: CursorKey | None, limit: int
     ) -> list[ConsentGrant]:

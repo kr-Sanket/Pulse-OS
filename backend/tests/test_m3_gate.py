@@ -34,6 +34,7 @@ from tests.support import run_with_session
 RECORDS = "/api/v1/records"
 REQUESTS = "/api/v1/access-requests"
 GRANTS = "/api/v1/consent-grants"
+GRANTED_RECORDS = "/api/v1/granted-records"
 HEALTH_ID = "PHI-IND-2026-1QE8DVR"
 PDF = ("cbc.pdf", b"%PDF-1.7 fake", "application/pdf")
 
@@ -354,3 +355,147 @@ def test_a_hidden_record_stays_visible_to_the_hospital_that_uploaded_it(
     assert [item["id"] for item in client.get(RECORDS, headers=cast.admin_tmh).json()["items"]] == [
         record_id
     ]
+
+
+# -- the discovery step the flow was missing (M4.3, ADR-020) -----------------------------
+
+
+def _granted_records(client: TestClient, cast: Cast, **params: str) -> dict[str, Any]:
+    response: httpx.Response = client.get(
+        GRANTED_RECORDS,
+        params={"patientHealthId": HEALTH_ID, **params},
+        headers=cast.doctor_cmc,
+    )
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def test_a_clinician_can_reach_a_record_id_only_through_consent(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    """The end-to-end capability ADR-020 adds, and the whole point of it: before the
+    approval the clinician cannot name a single record; after it they can name exactly the
+    ones the patient approved, and nothing else."""
+    cbc_record = _upload(client, cast, "CBC")
+    mri_record = _upload(client, cast, "MRI")
+
+    before = _granted_records(client, cast)
+    assert before == {"grantedCategories": [], "items": [], "nextCursor": None}
+
+    _grant_cbc(client, cast)
+
+    after = _granted_records(client, cast)
+    assert [item["id"] for item in after["items"]] == [cbc_record]
+    assert [category["code"] for category in after["grantedCategories"]] == ["CBC"]
+    assert mri_record not in {item["id"] for item in after["items"]}
+
+    # The id is not merely displayed — it opens the record, and its file.
+    assert client.get(f"{RECORDS}/{cbc_record}", headers=cast.doctor_cmc).status_code == 200
+    assert (
+        client.post(f"{RECORDS}/{cbc_record}/download-url", headers=cast.doctor_cmc).status_code
+        == 200
+    )
+
+
+def test_a_listed_record_id_is_worthless_once_the_grant_is_revoked(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    """The property that makes it safe to hand out ids at all: the listing is a filter, not
+    a permission. Every read still crosses ``enforce``, so a saved id dies with its grant."""
+    record_id = _upload(client, cast, "CBC")
+    grant_id = _grant_cbc(client, cast)
+    assert [item["id"] for item in _granted_records(client, cast)["items"]] == [record_id]
+
+    assert client.post(f"{GRANTS}/{grant_id}/revoke", headers=cast.patient).status_code == 200
+
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 404
+    assert (
+        client.post(f"{RECORDS}/{record_id}/download-url", headers=cast.doctor_cmc).status_code
+        == 404
+    )
+    assert _granted_records(client, cast) == {
+        "grantedCategories": [],
+        "items": [],
+        "nextCursor": None,
+    }
+
+
+def test_the_listing_discloses_a_chooser_not_a_document(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    """docs/SECURITY.md: a filename is unsafe to put in a storage key, so it is unsafe to
+    broadcast across a page. The listing says enough to pick a record; ``GET /records/{id}``
+    discloses the document, one audited read at a time."""
+    record_id = _upload(client, cast, "CBC")
+    _grant_cbc(client, cast)
+
+    (item,) = _granted_records(client, cast)["items"]
+
+    assert set(item) == {
+        "id",
+        "categoryCode",
+        "categoryDisplayName",
+        "origin",
+        "dateOfService",
+        "uploadedByHospital",
+        "createdAt",
+    }
+    assert item["uploadedByHospital"] == {"hid": "HID-0001", "name": "TMH Jamshedpur"}
+    assert item["origin"] == "HOSPITAL_UPLOAD"
+
+    # Every withheld field is still reachable on the single authorized read.
+    detail = client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).json()
+    assert detail["originalFilename"] == "cbc.pdf"
+    assert detail["sizeBytes"] == len(PDF[1])
+
+
+def test_a_hidden_record_never_appears_in_a_granted_listing(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    record_id = _upload(client, cast, "CBC")
+    _grant_cbc(client, cast)
+    _hide(db_engine, record_id)
+
+    listed = _granted_records(client, cast)
+
+    assert listed["items"] == []
+    # The approval stands; one withdrawn document does not undo it.
+    assert [category["code"] for category in listed["grantedCategories"]] == ["CBC"]
+
+
+def test_the_patient_sees_that_a_clinician_asked_what_they_could_read(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    """SYSTEM_ARCHITECTURE rule 3 covers metadata-beyond-existence, so a listing is an
+    access event. One row per request — never one per record, whatever the page holds."""
+    for _ in range(3):
+        _upload(client, cast, "CBC")
+
+    _granted_records(client, cast)  # refused: no grant yet
+    assert _audit(db_engine, cast.patient_id).count("ACCESS_DENIED") == 1
+
+    _grant_cbc(client, cast)
+    assert len(_granted_records(client, cast)["items"]) == 3
+
+    trail = _audit(db_engine, cast.patient_id)
+    assert trail.count("RECORDS_LISTED") == 1
+    assert trail.count("RECORD_VIEWED") == 0  # listing three records is not reading them
+
+
+def test_the_listing_pages_without_multiplying_audit_rows(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    for _ in range(3):
+        _upload(client, cast, "CBC")
+    _grant_cbc(client, cast)
+
+    first = _granted_records(client, cast, limit="2")
+    assert len(first["items"]) == 2 and first["nextCursor"] is not None
+    second = _granted_records(client, cast, limit="2", cursor=first["nextCursor"])
+    assert len(second["items"]) == 1 and second["nextCursor"] is None
+
+    seen = {item["id"] for item in [*first["items"], *second["items"]]}
+    assert len(seen) == 3  # no overlap, no loss
+    # Two requests, two rows — the count tracks requests, never rows returned.
+    assert _audit(db_engine, cast.patient_id).count("RECORDS_LISTED") == 2

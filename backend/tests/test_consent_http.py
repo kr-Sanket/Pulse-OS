@@ -74,6 +74,8 @@ REQUESTS = f"{API}/access-requests"
 GRANTS = f"{API}/consent-grants"
 AUDIT = f"{API}/audit-logs"
 HEALTH_ID = "PHI-IND-2026-1QE8DVR"
+#: The second patient the fixture seeds — used to prove two subjects are told apart.
+OTHER_HEALTH_ID = "PHI-IND-2026-5WD2FD4"
 PROBLEM_JSON = "application/problem+json"
 
 
@@ -257,6 +259,60 @@ def test_inbox_and_sent_listings(world: World) -> None:
 
     # Another patient never sees it.
     assert world.client.get(f"{REQUESTS}/inbox", headers=world.other_patient).json()["items"] == []
+
+
+def test_the_sent_listing_names_the_patient_but_the_inbox_does_not(world: World) -> None:
+    """The whole point of the field: a doctor's own listing is unreadable without knowing
+    who each request is about. The patient's inbox is unchanged — every row is theirs."""
+    _create(world, "CBC")
+
+    sent = world.client.get(f"{REQUESTS}/sent", headers=world.doctor)
+    inbox = world.client.get(f"{REQUESTS}/inbox", headers=world.patient)
+
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["items"][0]["patientHealthId"] == HEALTH_ID
+    assert inbox.status_code == 200
+    assert "patientHealthId" not in inbox.json()["items"][0]
+
+
+def test_the_sent_listing_exposes_nothing_else_off_the_patient_row(world: World) -> None:
+    _create(world, "CBC")
+
+    item = world.client.get(f"{REQUESTS}/sent", headers=world.doctor).json()["items"][0]
+
+    assert set(item) == {
+        "id",
+        "status",
+        "purpose",
+        "categoryCodes",
+        "requester",
+        "requesterDoctorId",
+        "requesterHospitalId",
+        "requesterHospitalName",
+        "expiresAt",
+        "createdAt",
+        "patientHealthId",
+    }
+    # No name, no date of birth, no internal patient id.
+    assert not {"patientName", "fullName", "dateOfBirth", "patientId"} & set(item)
+
+
+def test_the_sent_listing_distinguishes_two_patients(world: World) -> None:
+    """The duplicate-detection use case: two requests, two subjects, told apart."""
+    _create(world, "CBC")
+    _create(world, "MRI", patientHealthId=OTHER_HEALTH_ID)
+
+    items = world.client.get(f"{REQUESTS}/sent", headers=world.doctor).json()["items"]
+
+    assert {item["patientHealthId"] for item in items} == {HEALTH_ID, OTHER_HEALTH_ID}
+
+
+def test_creating_a_request_still_answers_without_a_subject(world: World) -> None:
+    """The write path is untouched: the requester just supplied the Health ID."""
+    created = _create(world, "CBC")
+
+    assert created.status_code == 201
+    assert "patientHealthId" not in created.json()
 
 
 def test_approve_then_reject_closes_the_request(world: World) -> None:
@@ -682,6 +738,14 @@ def test_openapi_declares_every_consent_path_and_its_failures(consent_app: FastA
 def test_openapi_schemas_are_camel_case_and_paginated(consent_app: FastAPI) -> None:
     schemas = consent_app.openapi()["components"]["schemas"]
     assert set(schemas["AccessRequestListResponse"]["properties"]) == {"items", "nextCursor"}
+    assert set(schemas["SentAccessRequestListResponse"]["properties"]) == {"items", "nextCursor"}
+    # The requester's own item is the inbox item plus the subject, and nothing else.
+    assert set(schemas["SentAccessRequestResponse"]["properties"]) == {
+        *schemas["AccessRequestListItemResponse"]["properties"],
+        "patientHealthId",
+    }
+    assert "patientHealthId" not in schemas["AccessRequestListItemResponse"]["properties"]
+    assert "patientHealthId" not in schemas["AccessRequestResponse"]["properties"]
     assert set(schemas["AccessRequestResponse"]["properties"]) == {
         "id",
         "status",

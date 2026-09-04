@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { formatInstantDate } from "@/lib/dates";
+import { formatInstantDate } from "@pulseos/ui";
 
 import type { AccessRequest, DecisionOutcome } from "./api";
 import {

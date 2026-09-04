@@ -4,6 +4,7 @@ Flushes run inside savepoints; ``IntegrityError`` becomes a domain error so the 
 can express draw-and-insert (ADR-012) without touching SQLAlchemy session details.
 """
 
+from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,6 +26,15 @@ class PatientRepository:
     async def get_by_health_id(self, health_id: str) -> Patient | None:
         result = await self._session.execute(select(Patient).where(Patient.health_id == health_id))
         return result.scalar_one_or_none()
+
+    async def list_by_ids(self, patient_ids: Collection[UUID]) -> list[Patient]:
+        """Batch read for the directory's Health-ID projection: one statement per page of
+        results, never one per row. The empty case short-circuits rather than emitting
+        ``IN ()`` — a page that names no patient should cost no round trip."""
+        if not patient_ids:
+            return []
+        result = await self._session.execute(select(Patient).where(Patient.id.in_(patient_ids)))
+        return list(result.scalars())
 
     async def add(self, patient: Patient) -> Patient:
         """Flush a new patient; the violated unique constraint decides the domain error

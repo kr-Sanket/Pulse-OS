@@ -1,4 +1,4 @@
-// Date and time formatting for the portal, in one place.
+// Date and time formatting for every portal, in one place.
 //
 // Three functions because the API returns three different kinds of value, and they must
 // not be formatted the same way:

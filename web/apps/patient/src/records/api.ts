@@ -19,12 +19,7 @@ export type DownloadUrl = components["schemas"]["DownloadUrlResponse"];
 
 // The category vocabulary is shared with Consent and lives in lib/; re-exported here so
 // this module stays the one place the Records page imports its API from.
-export {
-  categoryLabel,
-  categoryLabels,
-  listCategories,
-  type RecordCategory,
-} from "@/lib/recordCategories";
+export { categoryLabel, categoryLabels, listCategories, type RecordCategory } from "@pulseos/ui";
 export type { ApiResult } from "@pulseos/ui";
 
 /** Asked for on every listing: the API caps a page at 100 and the page has no pager. */

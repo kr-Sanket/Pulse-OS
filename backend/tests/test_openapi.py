@@ -131,3 +131,51 @@ def test_registration_schema_requires_full_name_only() -> None:
     schema = _spec()["components"]["schemas"]["PatientRegistrationRequest"]
     assert schema["required"] == ["fullName"]
     assert schema.get("additionalProperties") is False  # unknown fields rejected on writes
+
+
+def test_m4_granted_record_listing_is_present_and_declares_its_query() -> None:
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/granted-records"]["get"]
+    assert set(operation["responses"]) >= {"200", "422"}
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+    assert set(parameters) == {"patientHealthId", "cursor", "limit"}
+    assert parameters["patientHealthId"]["in"] == "query"
+    assert parameters["patientHealthId"]["required"] is True
+
+
+def test_granted_record_schema_is_a_chooser_not_a_document() -> None:
+    """ADR-020's disclosure allow-list, pinned. Widening it must be a deliberate edit to
+    GrantedRecordResponse — never a side effect of adding a field for patients."""
+    schemas = _spec()["components"]["schemas"]
+
+    assert set(schemas["GrantedRecordResponse"]["properties"]) == {
+        "id",
+        "categoryCode",
+        "categoryDisplayName",
+        "origin",
+        "dateOfService",
+        "uploadedByHospital",
+        "createdAt",
+    }
+    withheld = {
+        "originalFilename",
+        "description",
+        "sizeBytes",
+        "contentType",
+        "processingStatus",
+        "s3Key",
+        "patientId",
+        "uploadedByDoctorId",
+        "isHidden",
+    }
+    assert not withheld & set(schemas["GrantedRecordResponse"]["properties"])
+
+
+def test_granted_record_listing_reports_the_scope_beside_the_page() -> None:
+    schemas = _spec()["components"]["schemas"]
+
+    assert set(schemas["GrantedRecordListResponse"]["properties"]) == {
+        "grantedCategories",
+        "items",
+        "nextCursor",
+    }

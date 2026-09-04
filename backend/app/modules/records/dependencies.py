@@ -151,6 +151,12 @@ def get_record_service(
         # The ADR-013 layer-3 choke point. Same request session, so a read and the audit
         # event recording it commit together or not at all.
         consent=consent,
+        # The same ConsentService again, under the two other names records knows it by
+        # (ADR-020): what a clinician may currently read, and where a listing is recorded.
+        # One object, three protocols — the seams are narrow so each call site says which
+        # question it is asking, not merely which module it is asking.
+        grant_scope=consent,
+        listing_auditor=consent,
         presign_ttl_seconds=settings.s3_presign_ttl_seconds,
         max_upload_bytes=settings.records_max_upload_bytes,
     )

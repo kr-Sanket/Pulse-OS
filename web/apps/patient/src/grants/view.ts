@@ -10,8 +10,8 @@
 // re-assembles them, using only fields the API actually returns.
 
 import type { Tone } from "@/components/dashboard/StatusBadge";
-import { formatInstantDate } from "@/lib/dates";
-import { categoryLabel } from "@/lib/recordCategories";
+import { formatInstantDate } from "@pulseos/ui";
+import { categoryLabel } from "@pulseos/ui";
 
 import type { Grant, GrantStatus } from "./api";
 

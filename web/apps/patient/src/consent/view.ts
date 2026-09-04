@@ -13,8 +13,8 @@
 // page loaded lands in "decided" — truthfully unsorted rather than guessed at.
 
 import type { Tone } from "@/components/dashboard/StatusBadge";
-import { categoryLabel } from "@/lib/recordCategories";
-import { formatInstantDate, formatRelativeTime } from "@/lib/dates";
+import { categoryLabel } from "@pulseos/ui";
+import { formatInstantDate, formatRelativeTime } from "@pulseos/ui";
 
 import type { AccessRequest, DecisionOutcome } from "./api";
 

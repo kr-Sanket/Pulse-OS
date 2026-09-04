@@ -7,6 +7,12 @@ trivially and is still logged, and a clinician passes only on an active grant
 (docs/SYSTEM_ARCHITECTURE.md rule 3). Every read of record content crosses that seam exactly
 once, and a refusal is reported as "not found" so existence never leaks.
 
+One read is scoped rather than authorized: the clinician listing (ADR-020) filters a page
+by the categories ``consent`` reports as granted, so that a doctor holding a grant can
+finally learn which record ids it covers. That is not a second authorization path — the
+listing hands out identifiers and a narrow projection, and every record reached from it
+still passes ``enforce`` one at a time.
+
 Framework-free; owns no transaction. The object-storage write happens AFTER the metadata
 flush, so a DB failure never leaves a file behind, and a storage failure rolls back the
 row (an orphan object is only possible if the final request commit itself fails — rare,
@@ -14,8 +20,9 @@ harmless, unreferenced).
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Final, Protocol
 from uuid import UUID, uuid4
 
@@ -53,6 +60,7 @@ from app.modules.records.repository import (
 )
 from app.modules.records.storage import ObjectStorage
 from app.shared.pagination import CursorKey, encode_cursor
+from app.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +91,50 @@ class ConsentEnforcer(Protocol):
     ) -> None: ...
 
 
+class GrantScope(Protocol):
+    """What the consent module says this caller may currently read (ADR-020).
+
+    A second protocol beside ``ConsentEnforcer`` rather than a second method on it, because
+    the two have opposite shapes and opposite risks. ``enforce`` returns nothing and raises
+    — a caller cannot proceed by ignoring it. This returns a set, which a caller *could*
+    misread as permission. Keeping them apart is what makes that mistake ungrammatical:
+    there is no way to hold a ``GrantScope`` and accidentally call it to authorize a single
+    record, and no way to hold a ``ConsentEnforcer`` and use it to filter a page.
+
+    **This is a filter, never a verdict.** It narrows what a listing offers; it does not
+    permit a read. Every record reached from a listing is still authorized one at a time by
+    ``ConsentEnforcer.enforce`` (docs/SYSTEM_ARCHITECTURE.md rule 3), which is why a record
+    id learned from a listing is worth nothing once the grant behind it is revoked.
+    """
+
+    async def granted_category_ids(
+        self, requester: AuthenticatedUser, *, patient_id: UUID, at: datetime
+    ) -> frozenset[UUID]: ...
+
+
+class ListingAuditor(Protocol):
+    """How a clinician listing reaches the patient's audit trail (ADR-020).
+
+    A third protocol, for the same reason there are two above: a scope query must stay
+    free of side effects, and an audit append is nothing but one. Merging them would hide
+    a write behind a question and make the scope query unusable anywhere it must not
+    touch the trail.
+
+    The audit log belongs to ``consent`` (isolation rule 1), so this module states that a
+    listing happened and consent decides what to call it and writes the row.
+    """
+
+    async def record_listing(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID],
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class FileUpload:
     """The validated-at-the-boundary upload payload, already fully read into memory
@@ -107,6 +159,22 @@ class RecordPage:
 
 
 @dataclass(frozen=True, slots=True)
+class GrantedRecordPage:
+    """One page of a clinician's consented view of a patient.
+
+    Carries the granted categories beside the records because the two answer different
+    questions and one cannot be inferred from the other: an empty page under a live grant
+    ("the patient has nothing in what you were given") and an empty page under no grant
+    ("you were given nothing") are clinically different situations that would otherwise
+    render identically.
+    """
+
+    items: list[RecordView]
+    next_cursor: str | None
+    granted_categories: list[RecordCategory]
+
+
+@dataclass(frozen=True, slots=True)
 class DownloadLink:
     url: str
     expires_in_seconds: int
@@ -124,9 +192,12 @@ class RecordService:
         storage: ObjectStorage,
         queue: JobQueue,
         consent: ConsentEnforcer,
+        grant_scope: GrantScope,
+        listing_auditor: ListingAuditor,
         *,
         presign_ttl_seconds: int,
         max_upload_bytes: int,
+        clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self._records = records
         self._categories = categories
@@ -136,9 +207,16 @@ class RecordService:
         self._patients = patients
         self._storage = storage
         self._queue = queue
+        # Three names, one collaborator in production (ADR-016 direction 2, ADR-020):
+        # asking permission, asking what is in scope, and recording that a listing
+        # happened are different questions, and a seam per question is what keeps the
+        # first from being answered by the second.
         self._consent = consent
+        self._grant_scope = grant_scope
+        self._listing_auditor = listing_auditor
         self._presign_ttl_seconds = presign_ttl_seconds
         self.max_upload_bytes = max_upload_bytes
+        self._now = clock
 
     # -- uploads ---------------------------------------------------------------------
 
@@ -283,6 +361,89 @@ class RecordService:
         # both resolves the ids and fixes the response order — no second scan, and two
         # patients with the same categories always answer identically.
         return [category for category in await self._categories.list_all() if category.id in held]
+
+    async def list_shared_for_clinician(
+        self,
+        caller: AuthenticatedUser,
+        *,
+        patient_health_id: str,
+        after: CursorKey | None,
+        limit: int,
+        request_context: str | None = None,
+    ) -> GrantedRecordPage:
+        """The records a consented clinician may read for one patient, newest first.
+
+        Step 4 of the consent flow (docs/SYSTEM_ARCHITECTURE.md), and the step that made
+        the other three usable: until this existed a clinician could hold a live grant and
+        still have no way to learn a single record id, because ids are random (ADR-012's
+        no-enumeration rule applies to every identifier) and no listing admitted them.
+
+        **Authorization is a filter here, and a verdict everywhere else.** The granted
+        category set comes from ``consent`` — this module never restates the grant
+        predicate — and narrows what the page offers. It does not permit anything: opening
+        any record from this page still crosses ``enforce`` exactly once
+        (``get_for_caller``), and so does taking its file. Revoking a grant between the
+        listing and the read refuses the read, which is the property that makes it safe to
+        hand out ids at all.
+
+        ``consent.enforce`` is deliberately *not* called per record. It authorizes one
+        document and audits that outcome, so calling it down a page would write a
+        ``RECORD_VIEWED`` for every record the clinician merely saw listed — and an
+        ``ACCESS_DENIED`` for every one they did not — turning the patient's trail into a
+        record of reads that never happened. The listing writes one truthful event instead
+        (ADR-020); see ``ListingAuditor``.
+
+        Two rules this module owns are applied before consent is consulted at all: the
+        caller must be a clinician whose profile is ACTIVE (ADR-015 — a suspended doctor is
+        refused outright rather than handed an empty page, exactly as at
+        ``list_existing_categories``), and the Health ID must resolve to a patient.
+
+        The clock is read once and passed down, so the grant filter and the audit row
+        describe the same instant and every row on a page is judged as of one moment.
+        """
+        doctor = await self._doctors.get_by_user_id(caller.user_id)
+        if doctor is None:
+            raise ProfileNotFoundError()
+        if doctor.status is not DoctorStatus.ACTIVE:
+            raise ClinicianNotActiveError()
+        patient = await self._patients.get_by_health_id(patient_health_id)
+        if patient is None:
+            raise UnknownPatientError()
+
+        at = self._now()
+        granted = await self._grant_scope.granted_category_ids(caller, patient_id=patient.id, at=at)
+        # Exactly one audit event per request, written before anything is returned — an
+        # empty scope is a refusal the patient is entitled to see, not a silent nothing.
+        await self._listing_auditor.record_listing(
+            caller,
+            patient_id=patient.id,
+            granted_category_ids=granted,
+            at=at,
+            request_context=request_context,
+        )
+        if not granted:
+            # Nothing is in scope, so there is nothing to ask medical_records for.
+            return GrantedRecordPage(items=[], next_cursor=None, granted_categories=[])
+
+        # Ordered by the vocabulary, like the existence projection: two clinicians holding
+        # the same categories always see them listed identically.
+        categories = [
+            category for category in await self._categories.list_all() if category.id in granted
+        ]
+        rows = await self._records.list_page_for_grantee(
+            patient_id=patient.id, category_ids=granted, after=after, limit=limit + 1
+        )
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = None
+        if has_more:
+            last = page[-1][0]
+            next_cursor = encode_cursor(CursorKey(created_at=last.created_at, item_id=last.id))
+        return GrantedRecordPage(
+            items=[self._to_view(row) for row in page],
+            next_cursor=next_cursor,
+            granted_categories=categories,
+        )
 
     async def get_for_caller(
         self,

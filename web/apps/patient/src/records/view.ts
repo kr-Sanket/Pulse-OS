@@ -36,20 +36,10 @@ export function categoryStyle(code: string): CategoryStyle {
   return CATEGORY_STYLES[code] ?? FALLBACK_STYLE;
 }
 
-// Date formatting is portal-wide and lives in lib/dates.ts; re-exported here because the
-// records components and their tests import everything they render through this module.
-export { formatCalendarDate, formatInstantDate } from "@/lib/dates";
-
-export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const kilobytes = bytes / 1024;
-  if (kilobytes < 1024) {
-    return `${Math.round(kilobytes)} KB`;
-  }
-  return `${(kilobytes / 1024).toFixed(1)} MB`;
-}
+// Date and size formatting are portal-wide and live in the shared package; re-exported
+// here because the records components and their tests import everything they render
+// through this module.
+export { formatCalendarDate, formatFileSize, formatInstantDate } from "@pulseos/ui";
 
 /** Who the record came from. A locker upload has no hospital — the patient added it. */
 export function providerLabel(record: RecordMetadata): string {

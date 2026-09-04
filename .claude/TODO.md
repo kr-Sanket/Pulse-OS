@@ -29,6 +29,8 @@ Ordered by dependency. Each item is demonstrable on its own.
 - [ ] BE: **rate limiting** (Redis buckets, stricter on auth). Was deferred since M0.3 and is
       now load-bearing: `POST /access-requests` **and** the new `GET /records/existence` are
       both unthrottled Health-ID existence oracles (finding M3-D). Ship with or before slice 2.
+      `GET /granted-records` needs the same bucket, though it is not an oracle: it answers only
+      where a live grant already exists, and every probe without one writes an `ACCESS_DENIED`.
 - [ ] BE/PO: **decide whether discovery is audited.** `GET /records/existence` writes no audit
       event — no record was accessed and no truthful `AuditAction` member exists. A doctor
       probing Health IDs is arguably something a patient should see. Adding a member is
@@ -54,10 +56,13 @@ Ordered by dependency. Each item is demonstrable on its own.
 
 Each is a stated security or correctness gap. **M3-D is now the most urgent** — see §1.
 
-- [ ] BE: **M3-B** — `GET /records` returns full metadata and writes **no** audit event.
-      SYSTEM_ARCHITECTURE rule 3 covers "metadata-beyond-existence"; CHECKLIST:26 requires an
-      entry for every read. Either audit listings or amend the rule. Until then the Audit
-      History page under-reports what it implies.
+- [ ] BE: **M3-B (narrowed by ADR-020)** — `GET /records` returns full metadata and writes
+      **no** audit event. SYSTEM_ARCHITECTURE rule 3 covers "metadata-beyond-existence";
+      CHECKLIST:26 requires an entry for every read. The clinician half is now settled:
+      `GET /granted-records` writes one `RECORDS_LISTED` per request, so the rule holds without
+      exception for **non-owner** listings. What remains is the owner/hospital-admin case, whose
+      argument is genuinely weaker (the caller is the subject, or the uploader) — so this is now
+      a ruling on whether rule 3 should say "non-owner", not an unaudited clinician read.
 - [ ] BE: **M3-E** — hospital-admin denials are unaudited (layer 2 refuses before the choke
       point) while clinician denials are logged. One ruling should settle this and the
       hidden-record refusal together.

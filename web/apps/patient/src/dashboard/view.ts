@@ -20,7 +20,7 @@ import { bucketFor, clinicianLine, hospitalLine } from "@/consent/view";
 import type { Grant } from "@/grants/api";
 import { bucketGrants, groupGrants, type GrantGroupView } from "@/grants/view";
 import type { Tone } from "@/components/dashboard/StatusBadge";
-import { formatRelativeTime } from "@/lib/dates";
+import { formatRelativeTime } from "@pulseos/ui";
 import type { RecordMetadata } from "@/records/api";
 import { categoryStyle, formatCalendarDate, providerLabel, recordTitle } from "@/records/view";
 

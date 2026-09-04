@@ -79,6 +79,9 @@ portal's request flow, first item under M4. Deferred backend findings are in TOD
   to discover that records exist (SYSTEM_ARCHITECTURE §Consent Flow step 1), plus the batched
   staff identity projection that lets patients read names instead of UUIDs.
 - ✅ Doctor portal slice 1: login → dashboard → patient search by Health ID → available categories.
+- ✅ `GET /api/v1/granted-records` (ADR-020) — the clinician-scoped record listing that turns an
+  approval into reachable record ids (SYSTEM_ARCHITECTURE §Consent Flow step 4). Grant-filtered,
+  chooser-only disclosure, one audit event per request; `enforce` still rules on every read.
 - ⬜ Doctor portal slice 2: the request-access flow. **This is the last thing between the repo
   and a demonstrable M3 gate.**
 - ⬜ Notification fan-out for access requests, with the `notifications` module.

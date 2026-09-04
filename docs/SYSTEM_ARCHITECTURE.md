@@ -70,9 +70,13 @@ object store. That's it.
    `notifications` pushes to patient.
 3. Patient approves/rejects per category → `consent` writes grants + audit events →
    `AuditAnchor.anchor(event)` enqueued (async, non-blocking).
-4. Doctor reads: every fetch passes `consent.enforce(...)`; allowed reads get metadata and, for
+4. Doctor lists what the grant covers (`GET /granted-records`, ADR-020) — the step that turns an
+   approval into reachable record ids. The page is *filtered* by the granted categories, audited
+   once as `RECORDS_LISTED`, and discloses a chooser (category, date, hospital), never a document.
+5. Doctor reads: every fetch passes `consent.enforce(...)`; allowed reads get metadata and, for
    files, a short-lived presigned URL; every read/download appends an audit event (also anchored).
-5. Revocation deactivates grants immediately; subsequent reads 403 and are logged.
+6. Revocation deactivates grants immediately; subsequent reads 403 and are logged — including
+   ids the clinician already holds from step 4, because a listing permits nothing.
 
 ## Cross-Cutting Concerns
 

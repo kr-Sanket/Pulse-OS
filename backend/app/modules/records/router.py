@@ -27,6 +27,8 @@ from app.modules.records.dependencies import (
 from app.modules.records.errors import RecordsError
 from app.modules.records.schemas import (
     DownloadUrlResponse,
+    GrantedRecordListResponse,
+    GrantedRecordResponse,
     RecordCategoryListResponse,
     RecordCategoryResponse,
     RecordExistenceResponse,
@@ -38,6 +40,12 @@ from app.shared.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 
 records_router = APIRouter(prefix="/records", tags=["records"])
 categories_router = APIRouter(prefix="/record-categories", tags=["records"])
+# A top-level resource rather than a sub-path of /records: `/records/existence` only works
+# because it is declared before `/records/{record_id}`, and a second literal competing with
+# a UUID path parameter is a trap waiting for whoever reorders these routes. This one
+# cannot shadow anything. It stays in this module because `records` owns the data —
+# ownership decides the module, the URL only decides the shape (docs/API_GUIDELINES.md).
+granted_records_router = APIRouter(prefix="/granted-records", tags=["records"])
 
 # Writing and listing need a relationship this module can evaluate on its own.
 RequireRecordActor = require_role(Role.PATIENT, Role.HOSPITAL_ADMIN)
@@ -253,3 +261,60 @@ async def create_download_url(
     except RecordsError as exc:
         return _problem(request, exc)  # returned, not raised — see _problem
     return DownloadUrlResponse(url=link.url, expires_in_seconds=link.expires_in_seconds)
+
+
+@granted_records_router.get("", response_model=GrantedRecordListResponse)
+async def list_granted_records(
+    user: Clinician,
+    service: RecordServiceDep,
+    request_context: RequestContextDep,
+    patient_health_id: Annotated[str, Query(alias="patientHealthId", min_length=1, max_length=20)],
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> GrantedRecordListResponse:
+    """The records one patient's consent currently lets this clinician read, newest first.
+
+    Step 4 of the consent flow (docs/SYSTEM_ARCHITECTURE.md) and the step that closes it:
+    after ``/records/existence`` says a category holds something and the patient approves a
+    request for it, this is where the clinician learns the record ids. Each item is the
+    narrow chooser projection of ``GrantedRecordResponse`` — no filename, description, size
+    or content type; those are disclosed by ``GET /records/{record_id}``, one authorized and
+    audited read at a time.
+
+    ``grantedCategories`` reports the scope the page was drawn from, so an empty list under
+    a live grant is distinguishable from having no grant at all.
+
+    Roles: DOCTOR, and the clinician profile must be ACTIVE (ADR-015). Consent requirement:
+    the page is filtered by the categories consent reports as granted — a filter, never a
+    verdict. Nothing here permits a read: every record opened from this page still passes
+    ``consent.enforce``, so an id learned here is refused the moment its grant is revoked.
+    A clinician with no live grant receives an empty page rather than a 403: they already
+    know this patient exists, having searched the Health ID, so there is no existence left
+    to protect.
+
+    Audited: exactly one event per request — ``RECORDS_LISTED``, or ``ACCESS_DENIED`` when
+    nothing is in scope. Unlike the single-record reads, this handler *raises* its failures
+    (ADR-017 does not apply): every ``RecordsError`` below is raised while resolving the
+    clinician or the patient, which happens before the audit row is written, so no unwind
+    can discard a trail entry.
+
+    Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
+    422 (missing/oversized Health ID, unknown Health ID, bad cursor or limit).
+    """
+    try:
+        page = await service.list_shared_for_clinician(
+            user,
+            patient_health_id=patient_health_id,
+            after=parse_cursor(cursor),
+            limit=limit,
+            request_context=request_context,
+        )
+    except RecordsError as exc:
+        raise to_http_error(exc) from exc
+    return GrantedRecordListResponse(
+        granted_categories=[
+            RecordCategoryResponse.model_validate(category) for category in page.granted_categories
+        ],
+        items=[GrantedRecordResponse.from_view(view) for view in page.items],
+        next_cursor=page.next_cursor,
+    )

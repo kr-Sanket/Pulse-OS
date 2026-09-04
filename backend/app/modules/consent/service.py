@@ -19,6 +19,13 @@ router and layer 2 (relationship checks — a hospital reading its own upload) b
 one relationship it does resolve itself is the patient's own data, because
 docs/SYSTEM_ARCHITECTURE.md rule 3 requires that case to pass trivially *and still log*.
 
+**Two questions, two methods.** ``enforce`` rules on one record and audits the outcome;
+``granted_category_ids`` reports which categories a clinician may currently read and rules
+on nothing. Keeping them apart is what lets ``records`` filter a listing without either
+authorizing by the wrong route or writing a page-sized burst of audit rows (ADR-020). They
+share the rules that decide them — ``_acting_clinician`` and the grant predicate in the
+repository — so the two answers cannot drift apart.
+
 **Cross-module reads go through published interfaces only.** Patients are resolved through
 ``patients.directory``; clinicians through the ``ClinicianDirectory`` protocol below,
 because ``records`` publishes no equivalent seam today. Record categories are opaque UUIDs
@@ -68,6 +75,7 @@ from app.modules.consent.repository import (
 )
 from app.modules.patients.directory import PatientDirectoryService
 from app.shared.pagination import CursorKey, encode_cursor
+from app.shared.time import utc_now
 
 #: Undecided requests lapse after this long (docs/DOMAIN_MODEL.md §1 design default).
 DEFAULT_REQUEST_TTL: Final = timedelta(days=7)
@@ -84,10 +92,6 @@ DEFAULT_GRANT_TTL: Final = timedelta(days=90)
 MAX_REQUEST_CONTEXT: Final = 200
 
 _UNSAFE_CONTEXT_CHARS: Final = re.compile(r"[^\x20-\x7e]+")
-
-
-def utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 def as_utc(value: datetime) -> datetime:
@@ -193,6 +197,10 @@ class RequestView:
     #: The hospital the request was raised under, which is not necessarily where the
     #: requester practises today — the request row records the affiliation at the time.
     requester_hospital_name: str | None = None
+    #: Who the request is about. Populated for the clinician's own outgoing listing, where
+    #: the subject is the one thing the requester cannot infer from context; left empty for
+    #: the patient's inbox, where every row is about the reader.
+    patient_health_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,7 +409,11 @@ class ConsentService:
         rows = await self._requests.list_page_by_requester(
             clinician.id, after=after, limit=limit + 1
         )
-        return await self._to_page(rows, limit=limit)
+        # One statement for the whole page: the subject of each request, by Health ID.
+        # The clinician typed it to raise the request, so this returns it to them and
+        # nothing else off the patient row (patients.directory).
+        health_ids = await self._patients.health_ids_by_id({row.patient_id for row in rows})
+        return await self._to_page(rows, limit=limit, patient_health_ids=health_ids)
 
     # -- grants ------------------------------------------------------------------------
 
@@ -585,25 +597,103 @@ class ConsentService:
         if not allowed:
             raise AccessDeniedError()
 
+    async def granted_category_ids(
+        self, requester: AuthenticatedUser, *, patient_id: UUID, at: datetime
+    ) -> frozenset[UUID]:
+        """Every category of this patient's records the requester may currently read.
+
+        The **scope** question, as distinct from ``enforce``'s **verdict** question, and
+        the seam ``records`` uses to filter a clinician's listing (ADR-020). Side-effect
+        free by construction: it authorizes nothing, refuses nothing, and writes no audit
+        row, which is what makes it safe to call before knowing whether a listing will even
+        be served — and what will let M5's consent-scoped retrieval reuse it.
+
+        It shares the two rules that decide ``enforce`` rather than restating them: the
+        ADR-015 acting-clinician test below, and the grant predicate inside
+        ``list_active_category_ids``. A category in this set is therefore exactly a
+        category ``enforce`` would admit at the same instant, so a record surfaced by a
+        listing cannot be one a subsequent read refuses (barring a change between the two
+        calls, which is revocation working).
+
+        Anyone who is not an acting clinician has an empty scope — patients included: a
+        patient's own records are reached by ownership, never by a grant, and no caller
+        should be able to obtain a "scope" for someone else's data by asking nicely.
+        """
+        clinician = await self._acting_clinician(requester)
+        if clinician is None:
+            return frozenset()
+        return frozenset(
+            await self._grants.list_active_category_ids(
+                patient_id=patient_id, grantee_doctor_id=clinician.id, at=at
+            )
+        )
+
+    async def record_listing(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID],
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None:
+        """Append the single audit event for one clinician listing (ADR-020).
+
+        Separate from ``granted_category_ids`` because a scope query must stay free of
+        side effects and this is nothing but a side effect; separate from ``enforce``
+        because that call authorizes one record and this one authorizes nothing at all —
+        by the time it runs the ruling has been made, and its job is only to make the
+        ruling visible to the patient.
+
+        **Exactly one row, whatever the page holds.** A listing is one act by one
+        clinician; writing a row per record would assert reads that never happened, bury
+        the patient's trail under a page-sized burst, and cost a chain anchor apiece at M6
+        (ADR-004). What was actually read stays fully traceable, because opening any of
+        those records still writes its own ``RECORD_VIEWED``.
+
+        An empty scope is a refusal, not a quiet nothing: a clinician with no live grant
+        who asks what they may read has been told "nothing", and the patient is entitled to
+        see that they asked. Which action is written is decided here rather than by the
+        caller — the vocabulary belongs to this module.
+        """
+        await self._write_audit(
+            requester,
+            action=(
+                AuditAction.RECORDS_LISTED if granted_category_ids else AuditAction.ACCESS_DENIED
+            ),
+            patient_id=patient_id,
+            occurred_at=at,
+            request_context=request_context,
+        )
+
+    async def _acting_clinician(self, requester: AuthenticatedUser) -> Clinician | None:
+        """The requester as a practitioner who may act clinically, or None.
+
+        ADR-015 in one place: a suspended clinician loses access even where a grant
+        survives. Shared by the verdict path and the scope path so the suspension rule
+        cannot come to mean two different things.
+        """
+        if requester.role is not Role.DOCTOR:
+            return None
+        clinician = await self._clinicians.get_by_user_id(requester.user_id)
+        return clinician if clinician is not None and clinician.is_active else None
+
     async def _is_allowed(
         self, requester: AuthenticatedUser, *, patient_id: UUID, category_id: UUID
     ) -> bool:
         if requester.role is Role.PATIENT:
             patient = await self._patients.get_by_user_id(requester.user_id)
             return patient is not None and patient.id == patient_id
-        if requester.role is Role.DOCTOR:
-            clinician = await self._clinicians.get_by_user_id(requester.user_id)
-            if clinician is None or not clinician.is_active:
-                # A suspended clinician loses access even where a grant survives (ADR-015).
-                return False
-            grant = await self._grants.get_active(
-                patient_id=patient_id,
-                grantee_doctor_id=clinician.id,
-                category_id=category_id,
-                at=self._now(),
-            )
-            return grant is not None
-        return False
+        clinician = await self._acting_clinician(requester)
+        if clinician is None:
+            return False
+        grant = await self._grants.get_active(
+            patient_id=patient_id,
+            grantee_doctor_id=clinician.id,
+            category_id=category_id,
+            at=self._now(),
+        )
+        return grant is not None
 
     # -- internals ---------------------------------------------------------------------
 
@@ -711,7 +801,16 @@ class ConsentService:
             raise EmptyCategorySelectionError()
         return tuple(seen)
 
-    async def _to_page(self, rows: list[ConsentRequest], *, limit: int) -> RequestPage:
+    async def _to_page(
+        self,
+        rows: list[ConsentRequest],
+        *,
+        limit: int,
+        patient_health_ids: Mapping[UUID, str] | None = None,
+    ) -> RequestPage:
+        """The shared listing projection. ``patient_health_ids`` is supplied only by the
+        clinician's own listing; the inbox passes nothing, so its rows carry no subject and
+        its response shape is unchanged."""
         page, next_cursor = _split_page(rows, limit=limit, key=_row_created_at)
         # Two statements for the whole page, whatever its size — see StaffDirectory.
         requesters = await self._staff.clinicians_by_id({row.requester_doctor_id for row in page})
@@ -725,6 +824,9 @@ class ConsentService:
                 ),
                 requester=requesters.get(row.requester_doctor_id),
                 requester_hospital_name=hospitals.get(row.requester_hospital_id),
+                patient_health_id=(
+                    None if patient_health_ids is None else patient_health_ids.get(row.patient_id)
+                ),
             )
             for row in page
         ]

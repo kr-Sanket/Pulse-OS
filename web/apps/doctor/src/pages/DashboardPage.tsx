@@ -4,25 +4,29 @@
 // Wired to GET /api/v1/doctors/me through useDoctorProfile. The search card hands the
 // Health ID to /patients through the URL, so there is exactly one search implementation.
 
-import { IdCard, Search } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Search } from "lucide-react";
+import { Navigate, useNavigate } from "react-router-dom";
 
-import { Detail } from "@/components/common/Detail";
 import { ErrorState } from "@/components/common/ErrorState";
-import { IconChip } from "@/components/shell/IconChip";
 import { SectionCard } from "@/components/shell/SectionCard";
-import { StatusBadge } from "@/components/shell/StatusBadge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PatientSearchForm } from "@/existence/components/PatientSearchForm";
+import { ClinicianIdentityCard } from "@/profile/components/ClinicianIdentityCard";
+import { ClinicianIdentitySkeleton } from "@/profile/components/ClinicianIdentitySkeleton";
+import { StatusNotice } from "@/profile/components/StatusNotice";
 import { firstNameOf, toIdentityView } from "@/profile/view";
 import { useDoctorProfile } from "@/profile/useDoctorProfile";
 
 export function DashboardPage() {
   const { resource, reload } = useDoctorProfile();
   const navigate = useNavigate();
-  const identity = resource.status === "ready" ? toIdentityView(resource.data) : null;
+  const outcome = resource.status === "ready" ? resource.data : null;
+  const identity = outcome?.kind === "registered" ? toIdentityView(outcome.profile) : null;
+
+  // An account with no clinician profile has nothing to do here — onboard it instead.
+  if (outcome?.kind === "unregistered") {
+    return <Navigate to="/register" replace />;
+  }
 
   return (
     <div className="space-y-8">
@@ -44,40 +48,9 @@ export function DashboardPage() {
           onRetry={reload}
         />
       ) : identity === null ? (
-        <IdentitySkeleton />
+        <ClinicianIdentitySkeleton />
       ) : (
-        <Card className="[--card-spacing:--spacing(6)]">
-          <CardContent className="space-y-6">
-            <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-              <IconChip icon={IdCard} tone="solid" size="lg" />
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <h3 className="text-foreground text-xl font-semibold tracking-tight">
-                    {identity.fullName}
-                  </h3>
-                  <StatusBadge tone={identity.statusTone}>{identity.statusLabel}</StatusBadge>
-                </div>
-                <p className="text-muted-foreground truncate text-sm">{identity.hospitalName}</p>
-              </div>
-            </div>
-
-            <Separator />
-
-            <dl className="grid gap-x-6 gap-y-5 sm:grid-cols-3">
-              <Detail label="Hospital">{identity.hospitalName}</Detail>
-              <Detail label="Specialty">
-                <span className={identity.hasSpecialty ? undefined : "text-muted-foreground"}>
-                  {identity.specialty}
-                </span>
-              </Detail>
-              <Detail label="Registration number">
-                <span className="font-mono text-[13px] tracking-tight">
-                  {identity.registrationNumber}
-                </span>
-              </Detail>
-            </dl>
-          </CardContent>
-        </Card>
+        <ClinicianIdentityCard identity={identity} />
       )}
 
       <SectionCard
@@ -93,38 +66,13 @@ export function DashboardPage() {
             void navigate(`/patients?healthId=${encodeURIComponent(healthId.trim())}`)
           }
         />
-        {identity !== null && !identity.canSearch ? (
-          <p role="alert" className="text-destructive pt-3 text-sm leading-relaxed">
-            Your clinician profile is {identity.statusLabel.toLowerCase()}. A hospital administrator
-            must activate it before you can look up patients.
-          </p>
-        ) : null}
+        {identity === null ? null : (
+          <StatusNotice
+            identity={identity}
+            className="text-destructive pt-3 text-sm leading-relaxed"
+          />
+        )}
       </SectionCard>
     </div>
-  );
-}
-
-function IdentitySkeleton() {
-  return (
-    <Card className="[--card-spacing:--spacing(6)]" aria-busy role="status" aria-label="Loading">
-      <CardContent className="space-y-6">
-        <div className="flex items-center gap-5">
-          <Skeleton className="size-11 shrink-0 rounded-xl" />
-          <div className="min-w-0 flex-1 space-y-2">
-            <Skeleton className="h-6 w-56 max-w-full" />
-            <Skeleton className="h-4 w-40" />
-          </div>
-        </div>
-        <Separator />
-        <div className="grid gap-x-6 gap-y-5 sm:grid-cols-3">
-          {["hospital", "specialty", "registration"].map((field) => (
-            <div key={field} className="space-y-1.5">
-              <Skeleton className="h-2.5 w-24" />
-              <Skeleton className="h-4 w-32 max-w-full" />
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
   );
 }

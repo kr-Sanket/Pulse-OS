@@ -106,6 +106,15 @@ class AuditAction(StrEnum):
     members are values in a VARCHAR(32) column, so the vocabulary extends without a
     migration.
 
+    ``RECORDS_LISTED`` extends it again, for the same reason and by the same precedent
+    (ADR-020). A clinician asking which of a patient's records they may read is a real
+    access event — SYSTEM_ARCHITECTURE rule 3 covers "metadata-beyond-existence" — and no
+    existing member states it truthfully: ``RECORD_VIEWED`` means one document was read and
+    is paired with a record id, so reusing it would either invent views that never happened
+    or leave that pairing unfilled. It is the one member whose event has **no** target at
+    all: its subject is a scope, which ``patient_id`` already carries. See the target-column
+    note on ``AuditLog``.
+
     ``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own
     ADR (.claude/TODO.md parking lot), and an unused member here would imply a capability
     that docs/SECURITY.md's no-break-glass invariant denies.
@@ -120,6 +129,7 @@ class AuditAction(StrEnum):
     RECORD_DOWNLOADED = "RECORD_DOWNLOADED"
     SUMMARY_GENERATED = "SUMMARY_GENERATED"
     ACCESS_DENIED = "ACCESS_DENIED"
+    RECORDS_LISTED = "RECORDS_LISTED"
 
 
 class ConsentRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -352,11 +362,19 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     published identity vocabulary (ADR-013) — a domain type, not a foreign table, so
     importing it crosses no isolation boundary.
 
-    Exactly one of the three target columns is set for any given action (a record for
+    **At most one** of the three target columns is set for any given action (a record for
     ``RECORD_VIEWED``, a category for a consent decision, a request for
     ``ACCESS_REQUESTED``); all three are nullable because the vocabulary spans different
     subjects, and the pairing rule is the service's to uphold — no column combination in
     this table can express it.
+
+    The rule read "exactly one" until ADR-020. ``RECORDS_LISTED`` is an event about a
+    **scope** rather than an object: one clinician listing spans every category they hold a
+    grant for and every record inside them, so no single target column could be filled
+    truthfully, and filling one per row would multiply a single action into a page-sized
+    burst. Such an event sets none of the three, and ``patient_id`` — never nullable — is
+    what identifies its subject. The invariant that still holds without exception is the
+    one that matters: **never more than one**.
 
     ``request_context`` is the ``X-Request-Id`` correlation key (docs/API_GUIDELINES.md).
     It is unbounded ``Text`` rather than a sized column on purpose: that header is

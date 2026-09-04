@@ -389,3 +389,102 @@ def test_grant_history_pages_include_revoked_and_expired_rows() -> None:
             assert await f.grants.list_page_by_patient(uuid4(), after=None, limit=10) == []
 
     asyncio.run(scenario())
+
+
+def test_active_category_ids_answer_the_same_predicate_get_active_does() -> None:
+    """``list_active_category_ids`` is the scope form of ``get_active`` (ADR-020).
+
+    The two must agree exactly, or a clinician listing would offer a record the read that
+    follows it refuses — so revocation, expiry, the grantee and the patient are all tested
+    against the set the same way they are tested against the single lookup.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            f = await _arrange(session)
+            request = await _add_request(f)
+
+            async def grant(category_id: UUID, *, expires_at: dt.datetime) -> ConsentGrant:
+                await f.categories.add(
+                    ConsentRequestCategory(request_id=request.id, category_id=category_id)
+                )
+                decision = await f.decisions.add(
+                    ConsentDecision(
+                        request_id=request.id,
+                        category_id=category_id,
+                        status=ConsentDecisionStatus.APPROVED,
+                    )
+                )
+                return await f.grants.add(
+                    ConsentGrant(
+                        decision_id=decision.id,
+                        patient_id=f.patient_id,
+                        grantee_doctor_id=f.doctor_id,
+                        category_id=category_id,
+                        expires_at=expires_at,
+                    )
+                )
+
+            cbc_grant = await grant(f.cbc_id, expires_at=NOW + dt.timedelta(days=90))
+            await grant(f.mri_id, expires_at=NOW - dt.timedelta(seconds=1))  # already expired
+
+            async def scope(**overrides: object) -> set[UUID]:
+                arguments = {
+                    "patient_id": f.patient_id,
+                    "grantee_doctor_id": f.doctor_id,
+                    "at": NOW,
+                    **overrides,
+                }
+                return set(await f.grants.list_active_category_ids(**arguments))  # type: ignore[arg-type]
+
+            assert await scope() == {f.cbc_id}  # the expired MRI grant is absent
+            assert await scope(at=NOW + dt.timedelta(days=91)) == set()  # both expired
+            assert await scope(grantee_doctor_id=uuid4()) == set()  # wrong grantee
+            assert await scope(patient_id=uuid4()) == set()  # wrong patient
+
+            # The boundary matches get_active's strict `expires_at > at` exactly.
+            assert await scope(at=cbc_grant.expires_at) == set()
+            assert await scope(at=cbc_grant.expires_at - dt.timedelta(microseconds=1)) == {f.cbc_id}
+
+            cbc_grant.revoked_at = NOW
+            await session.flush()
+            assert await scope() == set()  # revoked
+
+    asyncio.run(scenario())
+
+
+def test_active_category_ids_report_a_category_once_however_often_it_was_granted() -> None:
+    """A category can be re-granted after an expiry, so several rows can cover it. The
+    caller wants the category, not its history."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            f = await _arrange(session)
+            for _ in range(2):
+                request = await _add_request(f)
+                await f.categories.add(
+                    ConsentRequestCategory(request_id=request.id, category_id=f.cbc_id)
+                )
+                decision = await f.decisions.add(
+                    ConsentDecision(
+                        request_id=request.id,
+                        category_id=f.cbc_id,
+                        status=ConsentDecisionStatus.APPROVED,
+                    )
+                )
+                await f.grants.add(
+                    ConsentGrant(
+                        decision_id=decision.id,
+                        patient_id=f.patient_id,
+                        grantee_doctor_id=f.doctor_id,
+                        category_id=f.cbc_id,
+                        expires_at=NOW + dt.timedelta(days=90),
+                    )
+                )
+
+            found = await f.grants.list_active_category_ids(
+                patient_id=f.patient_id, grantee_doctor_id=f.doctor_id, at=NOW
+            )
+            assert found == [f.cbc_id]
+
+    asyncio.run(scenario())

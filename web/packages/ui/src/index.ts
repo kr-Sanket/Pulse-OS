@@ -27,6 +27,19 @@ export {
   type Resource,
   type ApiResourceState,
 } from "./lib/useApiResource";
+export {
+  formatCalendarDate,
+  formatInstantDate,
+  formatInstantTime,
+  formatRelativeTime,
+} from "./lib/dates";
+export { formatFileSize } from "./lib/fileSize";
+export {
+  categoryLabel,
+  categoryLabels,
+  listCategories,
+  type RecordCategory,
+} from "./lib/recordCategories";
 export { cn } from "./lib/utils";
 export { initialsFor } from "./lib/initials";
 

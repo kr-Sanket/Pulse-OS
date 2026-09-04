@@ -6,8 +6,9 @@ admin only their hospital's uploads, and nothing else exists (doctor access is M
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,6 +16,7 @@ from app.core.queue import InMemoryJobQueue, QueueUnavailableError
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.models import User
 from app.modules.consent.dependencies import RecordsStaffDirectory
+from app.modules.consent.models import AuditAction
 from app.modules.consent.repository import (
     AuditLogRepository,
     ConsentDecisionRepository,
@@ -22,7 +24,7 @@ from app.modules.consent.repository import (
     ConsentRequestCategoryRepository,
     ConsentRequestRepository,
 )
-from app.modules.consent.service import ConsentService
+from app.modules.consent.service import ConsentService, as_utc
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
@@ -59,9 +61,15 @@ from app.modules.records.repository import (
 from app.modules.records.seed import seed_reference_data
 from app.modules.records.service import RECORD_UPLOADED_TASK, FileUpload, RecordService
 from app.shared.pagination import CursorKey, decode_cursor
+from app.shared.time import utc_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.support import FakeClinicianDirectory, sqlite_session
+from tests.support import (
+    FakeClinicianDirectory,
+    counting_statements,
+    sqlite_session,
+    sqlite_session_with_engine,
+)
 
 PDF = FileUpload(filename="cbc report.pdf", content_type="application/pdf", data=b"%PDF-1.7 x")
 
@@ -71,6 +79,7 @@ class Harness:
     service: RecordService
     consent: ConsentService
     audit: AuditLogRepository
+    categories: RecordCategoryRepository
     storage: FakeObjectStorage
     queue: InMemoryJobQueue
     admin_caller: AuthenticatedUser
@@ -86,6 +95,7 @@ async def _harness(
     *,
     verified: bool = True,
     max_upload_bytes: int = 1024,
+    clock: Callable[[], datetime] = utc_now,
 ) -> Harness:
     await seed_reference_data(session)
 
@@ -119,6 +129,10 @@ async def _harness(
 
     storage = FakeObjectStorage()
     queue = InMemoryJobQueue()
+    # ``records`` owns the Doctor row; consent reaches it through the directory protocol,
+    # so a clinician the grant path must recognise has to be registered here too.
+    clinicians = FakeClinicianDirectory()
+    clinicians.register(doctor_user.id, doctor_id=doctor.id, hospital_id=hospital.id)
     consent = ConsentService(
         requests=ConsentRequestRepository(session),
         request_categories=ConsentRequestCategoryRepository(session),
@@ -126,8 +140,9 @@ async def _harness(
         grants=ConsentGrantRepository(session),
         audit=AuditLogRepository(session),
         patients=PatientDirectoryService(PatientRepository(session)),
-        clinicians=FakeClinicianDirectory(),
+        clinicians=clinicians,
         staff=RecordsStaffDirectory(staff_directory(session)),
+        clock=clock,
     )
     service = RecordService(
         records=MedicalRecordRepository(session),
@@ -139,13 +154,17 @@ async def _harness(
         storage=storage,
         queue=queue,
         consent=consent,
+        grant_scope=consent,
+        listing_auditor=consent,
         presign_ttl_seconds=300,
         max_upload_bytes=max_upload_bytes,
+        clock=clock,
     )
     return Harness(
         service=service,
         consent=consent,
         audit=AuditLogRepository(session),
+        categories=RecordCategoryRepository(session),
         storage=storage,
         queue=queue,
         admin_caller=AuthenticatedUser(
@@ -594,5 +613,392 @@ def test_discovery_writes_no_audit_event() -> None:
 
             after = await h.audit.list_page_by_patient(h.patient.id, after=None, limit=99)
             assert len(after) == before
+
+    asyncio.run(scenario())
+
+
+# -- granted-record listing (M4.3, ADR-020) ----------------------------------------------
+
+
+async def _category_ids(h: Harness, *codes: str) -> list[UUID]:
+    ids: list[UUID] = []
+    for code in codes:
+        category = await h.categories.get_by_code(code)
+        assert category is not None
+        ids.append(category.id)
+    return ids
+
+
+async def _grant(h: Harness, *codes: str, ttl: timedelta = timedelta(days=30)) -> list[UUID]:
+    """Give the harness clinician a live grant per category, through the real consent flow.
+
+    Built by request → approve rather than by inserting a ConsentGrant, because a grant is
+    only reachable through the decision it derives from (the ``decision_id`` foreign key),
+    and a fabricated one would test a state the application cannot produce.
+    """
+    ids = await _category_ids(h, *codes)
+    view = await h.consent.create_request(
+        h.doctor_caller,
+        patient_health_id=h.patient.health_id,
+        category_ids=ids,
+        purpose="continuity of care",
+    )
+    outcome = await h.consent.approve_categories(
+        h.patient_caller, view.request.id, ids, grant_ttl=ttl
+    )
+    return [grant.id for grant in outcome.grants]
+
+
+async def _list_granted(h: Harness, *, limit: int = 20, after: CursorKey | None = None):  # type: ignore[no-untyped-def]
+    return await h.service.list_shared_for_clinician(
+        h.doctor_caller, patient_health_id=h.patient.health_id, after=after, limit=limit
+    )
+
+
+async def _actions(h: Harness) -> list[str]:
+    trail = await h.audit.list_page_by_patient(h.patient.id, after=None, limit=99)
+    return [row.action.value for row in trail]
+
+
+def test_a_grant_reveals_the_record_ids_it_covers_and_nothing_else() -> None:
+    """The capability ADR-020 adds: a consented clinician can finally address a record."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            await _upload(h, "MRI")
+            await _grant(h, "CBC")
+
+            page = await _list_granted(h)
+
+            assert [view.category.code for view in page.items] == ["CBC"]
+            assert [category.code for category in page.granted_categories] == ["CBC"]
+            assert page.next_cursor is None
+
+    asyncio.run(scenario())
+
+
+def test_a_revoked_grant_stops_revealing_records_immediately() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            (grant_id,) = await _grant(h, "CBC")
+            assert len((await _list_granted(h)).items) == 1
+
+            await h.consent.revoke_grant(h.patient_caller, grant_id)
+
+            page = await _list_granted(h)
+            assert page.items == [] and page.granted_categories == []
+
+    asyncio.run(scenario())
+
+
+def test_an_expired_grant_reveals_nothing() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            await _grant(h, "CBC", ttl=timedelta(seconds=-1))
+
+            assert (await _list_granted(h)).items == []
+
+    asyncio.run(scenario())
+
+
+def test_a_grant_expiring_at_this_very_instant_does_not_count() -> None:
+    """The boundary the listing shares with ``enforce``: ``expires_at > at``, strictly.
+
+    A frozen clock is the only way to put ``expires_at`` exactly on the instant the listing
+    is judged at, which is what distinguishes "> now" from ">= now". The deadline is set on
+    the row rather than through ``grant_ttl`` because the service floors a zero TTL to its
+    configured default.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            frozen = datetime(2026, 9, 4, 10, 0, tzinfo=UTC)
+            h = await _harness(session, clock=lambda: frozen)
+            await _upload(h, "CBC")
+            (grant_id,) = await _grant(h, "CBC")
+            grants = ConsentGrantRepository(session)
+
+            grant = await grants.get_by_id(grant_id)
+            assert grant is not None
+            grant.expires_at = frozen
+            await session.flush()
+            assert as_utc(grant.expires_at) == frozen
+            assert (await _list_granted(h)).items == []
+
+            # One microsecond of life left is still life — the predicate is strict, not off
+            # by one in the other direction.
+            grant.expires_at = frozen + timedelta(microseconds=1)
+            await session.flush()
+            assert len((await _list_granted(h)).items) == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_hidden_record_stays_hidden_from_a_consented_clinician() -> None:
+    """docs/DOMAIN_MODEL.md §1: hiding withdraws a record from what consent can share, so
+    a live grant for its category is not enough — as at every other clinician read."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            await _upload(h, "CBC")
+            await _grant(h, "CBC")
+            rows = await MedicalRecordRepository(session).list_page(
+                patient_id=h.patient.id, limit=9
+            )
+            rows[0][0].is_hidden = True
+            await session.flush()
+
+            page = await _list_granted(h)
+
+            assert [view.record.id for view in page.items] == [rows[1][0].id]
+            # The category still lists: the patient approved it, and one hidden document
+            # does not withdraw the approval.
+            assert [category.code for category in page.granted_categories] == ["CBC"]
+
+    asyncio.run(scenario())
+
+
+def test_a_grant_for_one_patient_reveals_nothing_about_another() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            other_user = User(firebase_uid=f"fb-other-{uuid4()}", role=Role.PATIENT)
+            session.add(other_user)
+            await session.flush()
+            other = Patient(
+                user_id=other_user.id, health_id="PHI-IND-2026-2QE8DVR", full_name="Other (Demo)"
+            )
+            session.add(other)
+            await session.flush()
+            await h.service.upload_for_health_id(
+                h.admin_caller,
+                patient_health_id=other.health_id,
+                category_code="CBC",
+                date_of_service=date(2026, 3, 1),
+                description=None,
+                file=PDF,
+            )
+            await _grant(h, "CBC")  # granted by h.patient, not by `other`
+
+            covered = await _list_granted(h)
+            assert covered.items == []  # h.patient holds no CBC record of their own
+
+            uncovered = await h.service.list_shared_for_clinician(
+                h.doctor_caller, patient_health_id=other.health_id, after=None, limit=20
+            )
+            assert uncovered.items == [] and uncovered.granted_categories == []
+
+    asyncio.run(scenario())
+
+
+def test_a_suspended_clinician_cannot_list_granted_records() -> None:
+    """ADR-015, and refused rather than emptied: a suspended doctor is told their profile
+    is inactive, exactly as at ``/records/existence``."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            await _grant(h, "CBC")
+            h.doctor.status = DoctorStatus.DISABLED
+            await session.flush()
+
+            with pytest.raises(ClinicianNotActiveError):
+                await _list_granted(h)
+
+    asyncio.run(scenario())
+
+
+def test_listing_requires_a_clinician_profile_and_a_real_health_id() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            with pytest.raises(UnknownPatientError):
+                await h.service.list_shared_for_clinician(
+                    h.doctor_caller,
+                    patient_health_id="PHI-IND-2026-0000000",
+                    after=None,
+                    limit=20,
+                )
+            with pytest.raises(ProfileNotFoundError):
+                await h.service.list_shared_for_clinician(
+                    h.admin_caller, patient_health_id=h.patient.health_id, after=None, limit=20
+                )
+
+    asyncio.run(scenario())
+
+
+def test_no_grant_returns_an_empty_page_that_never_touched_medical_records() -> None:
+    """The short-circuit, proved structurally rather than by counting statements.
+
+    ``list_page_for_grantee`` refuses an empty category set (a grant-free listing is not
+    expressible), so had the service queried records here this call would have raised
+    instead of returning a page.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+
+            page = await _list_granted(h)
+
+            assert page.items == [] and page.granted_categories == [] and page.next_cursor is None
+
+    asyncio.run(scenario())
+
+
+def test_an_empty_scope_is_audited_as_a_refusal() -> None:
+    """A clinician asking what they may read has been answered "nothing", and the patient
+    is entitled to see that they asked."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+
+            await _list_granted(h)
+
+            assert await _actions(h) == ["ACCESS_DENIED"]
+
+    asyncio.run(scenario())
+
+
+def test_a_served_listing_writes_one_records_listed_event_with_no_target() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            await _grant(h, "CBC")
+
+            await _list_granted(h)
+
+            trail = await h.audit.list_page_by_patient(h.patient.id, after=None, limit=99)
+            listed = [row for row in trail if row.action is AuditAction.RECORDS_LISTED]
+            assert len(listed) == 1
+            event = listed[0]
+            assert event.actor_user_id == h.doctor_caller.user_id
+            assert event.actor_role is Role.DOCTOR
+            # A scope-level event fills none of the three target columns (ADR-020); the
+            # patient it concerns is carried by patient_id, which is never null.
+            assert event.target_record_id is None
+            assert event.target_category_id is None
+            assert event.target_request_id is None
+
+    asyncio.run(scenario())
+
+
+def test_one_audit_row_per_listing_however_many_records_it_returns() -> None:
+    """The regression test for the design decision: audit volume must track *requests*,
+    not rows, or a page-sized burst buries the patient's trail and costs an anchor apiece
+    at M6 (ADR-004)."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            for _ in range(5):
+                await _upload(h, "CBC")
+            await _grant(h, "CBC")
+
+            small = await _list_granted(h, limit=1)
+            assert len(small.items) == 1
+            assert (await _actions(h)).count("RECORDS_LISTED") == 1
+
+            large = await _list_granted(h, limit=100)
+            assert len(large.items) == 5
+            assert (await _actions(h)).count("RECORDS_LISTED") == 2
+
+    asyncio.run(scenario())
+
+
+def test_the_listing_paginates_newest_first_over_a_stable_cursor() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            for _ in range(3):
+                await _upload(h, "CBC")
+            await _grant(h, "CBC")
+
+            first = await _list_granted(h, limit=2)
+            assert len(first.items) == 2 and first.next_cursor is not None
+            second = await _list_granted(h, limit=2, after=decode_cursor(first.next_cursor))
+
+            assert len(second.items) == 1 and second.next_cursor is None
+            seen = [view.record.id for view in [*first.items, *second.items]]
+            assert len(set(seen)) == 3
+            newest_first = [view.record.created_at for view in [*first.items, *second.items]]
+            assert newest_first == sorted(newest_first, reverse=True)
+
+    asyncio.run(scenario())
+
+
+def test_the_scope_is_reported_even_when_the_patient_holds_nothing_in_it() -> None:
+    """ "Nothing was approved" and "what was approved is empty" are different answers, and
+    only ``granted_categories`` distinguishes them."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "MRI")
+            await _grant(h, "CBC")
+
+            page = await _list_granted(h)
+
+            assert page.items == []
+            assert [category.code for category in page.granted_categories] == ["CBC"]
+
+    asyncio.run(scenario())
+
+
+def test_granted_categories_follow_the_vocabulary_order() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _grant(h, "XRAY", "CBC")
+
+            page = await _list_granted(h)
+
+            assert [category.code for category in page.granted_categories] == ["CBC", "XRAY"]
+
+    asyncio.run(scenario())
+
+
+def test_a_listing_costs_the_same_number_of_statements_at_any_page_size() -> None:
+    """The N+1 guard, and the reason ``enforce`` is not called per record.
+
+    Per-record enforcement would cost two lookups and an audit insert for every row; this
+    resolves the scope once and reads the page in one joined statement, so the cost of a
+    listing is a property of the request, not of how much the patient holds.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session_with_engine() as (session, engine):
+            h = await _harness(session)
+            for _ in range(10):
+                await _upload(h, "CBC")
+            await _grant(h, "CBC")
+            await session.flush()
+
+            with counting_statements(engine) as one:
+                assert len((await _list_granted(h, limit=1)).items) == 1
+            with counting_statements(engine) as ten:
+                assert len((await _list_granted(h, limit=10)).items) == 10
+
+            assert len(one) == len(ten)
+            # Six, and always six: the clinician, the patient, the granted category set,
+            # the audit insert, the category vocabulary, and the page itself — category and
+            # hospital ride the page's joins, so no row costs a statement of its own. (In
+            # production the clinician directory is a real adapter and adds one more; this
+            # harness resolves it in memory. What matters is that neither number moves with
+            # the page size.)
+            assert len(ten) == 6
 
     asyncio.run(scenario())

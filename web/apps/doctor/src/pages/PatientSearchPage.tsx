@@ -4,23 +4,55 @@
 // lives in CategoryResults. This file is layout, plus the one piece of routing behaviour:
 // a Health ID arriving in the URL (from the dashboard's search card) runs immediately.
 
-import { Search } from "lucide-react";
+import { FolderOpen, Search } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { SectionCard } from "@/components/shell/SectionCard";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CategoryResults } from "@/existence/components/CategoryResults";
 import { PatientSearchForm } from "@/existence/components/PatientSearchForm";
 import { useRecordExistence } from "@/existence/useRecordExistence";
+import { useGrantedRecords } from "@/granted/useGrantedRecords";
+import { joinCategories } from "@/granted/view";
 import { useDoctorProfile } from "@/profile/useDoctorProfile";
 import { toIdentityView } from "@/profile/view";
+import { RequestAccessDialog } from "@/requests/components/RequestAccessDialog";
+import { useAccessRequest } from "@/requests/useAccessRequest";
 
 export function PatientSearchPage() {
   const [params] = useSearchParams();
   const handedOver = params.get("healthId") ?? "";
   const { outcome, searching, search } = useRecordExistence();
   const { resource } = useDoctorProfile();
-  const identity = resource.status === "ready" ? toIdentityView(resource.data) : null;
+  const clinician = resource.status === "ready" ? resource.data : null;
+  const identity = clinician?.kind === "registered" ? toIdentityView(clinician.profile) : null;
+  const request = useAccessRequest();
+
+  // A new search is a new patient: nothing selected, no half-written draft carried over.
+  const startSearch = (healthId: string) => {
+    request.reset();
+    search(healthId);
+  };
+
+  const found = outcome.kind === "found" ? outcome : null;
+  const chosenCategories =
+    found === null
+      ? []
+      : found.categories.filter((category) => request.selected.has(category.code));
+
+  // A search that resolved to a real patient — whether or not they hold anything — is also
+  // the moment to find out whether this clinician already has access to them. Both outcomes
+  // are real patients; only "error" and the pre-search states are not.
+  const identified = outcome.kind === "found" || outcome.kind === "none" ? outcome.healthId : null;
+  const granted = useGrantedRecords(identified);
+  // Shown only where there is genuinely something to view. Never disabled: a button a
+  // clinician cannot press teaches them nothing about why.
+  const grantedScope =
+    granted.outcome === null || granted.outcome.kind === "no-grant"
+      ? null
+      : granted.outcome.categories;
 
   // A Health ID in the URL is a search the clinician already started on the dashboard, so
   // it runs once on arrival rather than making them press the button again.
@@ -28,9 +60,11 @@ export function PatientSearchPage() {
   useEffect(() => {
     if (handedOver.length > 0 && !alreadyRun.current) {
       alreadyRun.current = true;
-      search(handedOver);
+      startSearch(handedOver);
     }
-  }, [handedOver, search]);
+    // startSearch is stable for this purpose: it only wraps search and a reset.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handedOver]);
 
   return (
     <div className="space-y-8">
@@ -47,11 +81,58 @@ export function PatientSearchPage() {
           initialHealthId={handedOver}
           searching={searching}
           enabled={identity === null ? true : identity.canSearch}
-          onSearch={search}
+          onSearch={startSearch}
         />
       </SectionCard>
 
-      <CategoryResults outcome={outcome} />
+      {identified === null || grantedScope === null ? null : (
+        <SectionCard
+          title="You already have access"
+          icon={FolderOpen}
+          description={`This patient has approved ${joinCategories(grantedScope)}.`}
+          contentClassName="space-y-4 pt-1"
+        >
+          <div className="flex flex-wrap gap-1.5">
+            {grantedScope.map((category) => (
+              <Badge key={category} variant="info">
+                {category}
+              </Badge>
+            ))}
+          </div>
+          <Button asChild className="gap-2">
+            <Link to={`/patients/${encodeURIComponent(identified)}/records`}>
+              <FolderOpen className="size-4" aria-hidden />
+              View Granted Records
+            </Link>
+          </Button>
+        </SectionCard>
+      )}
+
+      <CategoryResults
+        outcome={outcome}
+        selection={{
+          selected: request.selected,
+          onToggle: request.toggleCategory,
+          onClear: request.clearSelection,
+          onRequestAccess: request.openDialog,
+          canRequest: request.canRequest,
+        }}
+      />
+
+      {found === null ? null : (
+        <RequestAccessDialog
+          open={request.dialogOpen}
+          onOpenChange={request.setDialogOpen}
+          patientHealthId={found.healthId}
+          categories={chosenCategories}
+          purpose={request.purpose}
+          onPurposeChange={request.setPurpose}
+          problem={request.problem}
+          state={request.state}
+          onSubmit={() => request.submit(found.healthId)}
+          onFinish={request.finish}
+        />
+      )}
     </div>
   );
 }

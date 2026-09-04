@@ -11,7 +11,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 
-import { NAV_ITEMS } from "./navigation";
+import { NAV_SECTIONS, navSectionId } from "./navigation";
 
 export interface SidebarProps {
   open: boolean;
@@ -44,29 +44,42 @@ export function Sidebar({ open, onNavigate }: SidebarProps) {
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-2">
-        <ul className="space-y-1">
-          {NAV_ITEMS.map((item) => (
-            <li key={item.to}>
-              <NavLink
-                to={item.to}
-                end={item.to === "/"}
-                onClick={onNavigate}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm transition-colors duration-150",
-                    isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                  )
-                }
+      <nav className="flex-1 space-y-8 overflow-y-auto px-3 pb-2">
+        {NAV_SECTIONS.map((section) => {
+          const headingId = navSectionId(section.title);
+          return (
+            <div key={section.title}>
+              <p
+                id={headingId}
+                className="text-muted-foreground px-3.5 pb-3 text-[11px] font-medium tracking-wider uppercase"
               >
-                <item.icon className="size-[18px] shrink-0" aria-hidden />
-                {item.label}
-              </NavLink>
-            </li>
-          ))}
-        </ul>
+                {section.title}
+              </p>
+              <ul aria-labelledby={headingId} className="space-y-1">
+                {section.items.map((item) => (
+                  <li key={item.to}>
+                    <NavLink
+                      to={item.to}
+                      end={item.to === "/"}
+                      onClick={onNavigate}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm transition-colors duration-150",
+                          isActive
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                        )
+                      }
+                    >
+                      <item.icon className="size-[18px] shrink-0" aria-hidden />
+                      {item.label}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
       </nav>
 
       <Separator />

@@ -66,7 +66,13 @@ action, subject Patient, target (record / category / request), timestamp, reques
 canonical-JSON hash, and an optional AnchorReceipt (chain tx) added asynchronously.
 Action vocabulary: `RECORD_UPLOADED · ACCESS_REQUESTED · CONSENT_APPROVED · CONSENT_REJECTED ·
 CONSENT_REVOKED · RECORD_VIEWED · RECORD_DOWNLOADED · SUMMARY_GENERATED · EMERGENCY_ACCESS
-(Phase 2)`. Audit events are written in the same transaction as the action they record.
+(Phase 2)`, plus two the implementation added with their own ADRs: `ACCESS_DENIED` (ADR-018 — a
+refused read must be logged, and no success verb states that) and `RECORDS_LISTED` (ADR-020 — a
+clinician listing what a grant covers). Audit events are written in the same transaction as the
+action they record.
+**At most one** target is set per event: exactly one for every action naming an object, and
+**none** for `RECORDS_LISTED`, whose subject is a scope rather than an object — `patient_id`,
+never nullable, carries it (ADR-020).
 
 ## 2. Relationship Diagram
 
@@ -119,6 +125,7 @@ Legend: ✅ always (within role) · ⭕ conditional (condition noted) · ❌ nev
 | Read/update own profile & health profile | ✅ | ✅ (own) | ✅ (own) | ✅ (own) |
 | Search patient by Health ID / QR | ❌ | ⭕ existence + name confirmation only | ⭕ same | ❌ |
 | See that records exist (category + hospital level) | ✅ own | ⭕ after search | ⭕ after search | ❌ |
+| List which records a grant covers | ✅ own | ⭕ grant-scoped, chooser fields only (ADR-020) | ⭕ own hospital's uploads | ❌ |
 | Read record content / download | ✅ own | ⭕ active grant for that category | ⭕ only records their hospital uploaded | ❌ |
 | Upload record | ✅ own locker | ⭕ prescription, for patient with active grant | ⭕ for verified patient at their hospital | ❌ |
 | Hide/unhide record | ✅ own locker only | ❌ | ❌ | ❌ |
