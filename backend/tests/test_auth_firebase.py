@@ -7,6 +7,7 @@ leak) and the config-failure path.
 import asyncio
 from collections.abc import Callable
 
+import firebase_admin
 import pytest
 from app.core.config import Settings
 from app.modules.auth.errors import (
@@ -152,6 +153,33 @@ def test_broken_credentials_config_is_unavailable(tmp_path_factory: pytest.TempP
     # locally (no network) and surfaces as a server-side error, not a token error.
     missing = tmp_path_factory.mktemp("creds") / "nonexistent.json"
     provider = FirebaseAuthProvider(Settings(firebase_credentials_file=str(missing)))
+
+    with pytest.raises(AuthProviderUnavailableError):
+        _verify(provider)
+
+
+class _AppWithoutProject:
+    """An initialized SDK app that resolved no project — what ADC without
+    GOOGLE_CLOUD_PROJECT produces."""
+
+    project_id = None
+
+
+def test_unresolved_project_is_unavailable_not_an_invalid_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server with no Firebase project configured must not answer 401.
+
+    The SDK signals it with a bare ValueError, which is also how it reports a malformed
+    token, so without the guard in _get_app the caller is told their credentials are bad
+    when it is the server that is unconfigured (app/core/config.py promises 503).
+    """
+    provider = FirebaseAuthProvider(Settings(firebase_credentials_file=None))
+    monkeypatch.setattr(
+        firebase_admin,
+        "initialize_app",
+        lambda credential=None, name=None: _AppWithoutProject(),
+    )
 
     with pytest.raises(AuthProviderUnavailableError):
         _verify(provider)

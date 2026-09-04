@@ -104,4 +104,16 @@ class FirebaseAuthProvider(AuthenticationProvider):
                 except Exception as exc:
                     logger.exception("firebase initialization failed")
                     raise AuthProviderUnavailableError() from exc
+            # The SDK resolves the project from the credential, an app option, or
+            # GOOGLE_CLOUD_PROJECT. With none of them it raises a bare ``ValueError`` on
+            # first use — the same type it raises for a structurally invalid token — so an
+            # unconfigured server would answer 401 "invalid token" and blame the caller for
+            # its own missing credentials. Checking here keeps that a 503, which is what
+            # app/core/config.py promises. Cheap to repeat: the SDK memoizes the lookup.
+            if not self._app.project_id:
+                logger.error(
+                    "firebase project id could not be resolved; set "
+                    "PULSEOS_FIREBASE_CREDENTIALS_FILE or GOOGLE_CLOUD_PROJECT"
+                )
+                raise AuthProviderUnavailableError()
             return self._app
