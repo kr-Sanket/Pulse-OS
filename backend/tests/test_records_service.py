@@ -28,6 +28,7 @@ from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
 from app.modules.records.directory import staff_directory
 from app.modules.records.errors import (
+    ClinicianNotActiveError,
     EmptyFileError,
     FileTooLargeError,
     HospitalNotVerifiedError,
@@ -40,6 +41,8 @@ from app.modules.records.errors import (
 )
 from app.modules.records.fake import FakeObjectStorage
 from app.modules.records.models import (
+    Doctor,
+    DoctorStatus,
     Hospital,
     HospitalAdmin,
     HospitalVerificationStatus,
@@ -47,6 +50,7 @@ from app.modules.records.models import (
     RecordProcessingStatus,
 )
 from app.modules.records.repository import (
+    DoctorRepository,
     HospitalAdminRepository,
     HospitalRepository,
     MedicalRecordRepository,
@@ -74,6 +78,7 @@ class Harness:
     doctor_caller: AuthenticatedUser
     patient: Patient
     hospital: Hospital
+    doctor: Doctor
 
 
 async def _harness(
@@ -98,6 +103,14 @@ async def _harness(
     session.add_all([admin_user, patient_user, doctor_user])
     await session.flush()
     session.add(HospitalAdmin(user_id=admin_user.id, hospital_id=hospital.id, full_name="Admin"))
+    doctor = Doctor(
+        user_id=doctor_user.id,
+        hospital_id=hospital.id,
+        full_name="Dr Verma",
+        registration_number="REG-1",
+        status=DoctorStatus.ACTIVE,
+    )
+    session.add(doctor)
     patient = Patient(
         user_id=patient_user.id, health_id="PHI-IND-2026-1QE8DVR", full_name="Aarav (Demo)"
     )
@@ -120,6 +133,7 @@ async def _harness(
         records=MedicalRecordRepository(session),
         categories=RecordCategoryRepository(session),
         admins=HospitalAdminRepository(session),
+        doctors=DoctorRepository(session),
         hospitals=HospitalRepository(session),
         patients=PatientDirectoryService(PatientRepository(session)),
         storage=storage,
@@ -145,6 +159,7 @@ async def _harness(
         ),
         patient=patient,
         hospital=hospital,
+        doctor=doctor,
     )
 
 
@@ -432,5 +447,152 @@ def test_pagination_walks_all_records_without_overlap() -> None:
                 after = decode_cursor(page.next_cursor)
             assert seen == created
             assert pages == 3  # 2 + 2 + 1
+
+    asyncio.run(scenario())
+
+
+# -- existence projection (M4.1) ---------------------------------------------------------
+
+
+async def _upload(h: Harness, code: str) -> None:
+    await h.service.upload_for_health_id(
+        h.admin_caller,
+        patient_health_id=h.patient.health_id,
+        category_code=code,
+        date_of_service=date(2026, 3, 1),
+        description=None,
+        file=PDF,
+    )
+
+
+def test_existence_lists_only_categories_the_patient_holds() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            await _upload(h, "CBC")
+            await _upload(h, "XRAY")
+
+            found = await h.service.list_existing_categories(
+                h.doctor_caller, patient_health_id=h.patient.health_id
+            )
+
+            # Grouped, and ordered by the vocabulary rather than by upload order.
+            assert [category.code for category in found] == ["CBC", "XRAY"]
+
+    asyncio.run(scenario())
+
+
+def test_existence_is_empty_when_the_patient_holds_nothing() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            assert (
+                await h.service.list_existing_categories(
+                    h.doctor_caller, patient_health_id=h.patient.health_id
+                )
+                == []
+            )
+
+    asyncio.run(scenario())
+
+
+def test_existence_accepts_a_desk_typed_health_id() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+
+            found = await h.service.list_existing_categories(
+                h.doctor_caller, patient_health_id=f"  {h.patient.health_id.lower()} "
+            )
+
+            assert [category.code for category in found] == ["CBC"]
+
+    asyncio.run(scenario())
+
+
+def test_existence_excludes_records_the_patient_has_hidden() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            rows = await MedicalRecordRepository(session).list_page(
+                patient_id=h.patient.id, limit=10
+            )
+            rows[0][0].is_hidden = True
+            await session.flush()
+
+            assert (
+                await h.service.list_existing_categories(
+                    h.doctor_caller, patient_health_id=h.patient.health_id
+                )
+                == []
+            )
+
+    asyncio.run(scenario())
+
+
+def test_a_suspended_clinician_cannot_discover_records() -> None:
+    """ADR-015: a non-ACTIVE doctor keeps no clinical capability, discovery included."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            h.doctor.status = DoctorStatus.DISABLED
+            await session.flush()
+
+            with pytest.raises(ClinicianNotActiveError):
+                await h.service.list_existing_categories(
+                    h.doctor_caller, patient_health_id=h.patient.health_id
+                )
+
+    asyncio.run(scenario())
+
+
+def test_existence_requires_a_clinician_profile() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            ghost = AuthenticatedUser(user_id=uuid4(), firebase_uid="fb-ghost", role=Role.DOCTOR)
+
+            with pytest.raises(ProfileNotFoundError):
+                await h.service.list_existing_categories(
+                    ghost, patient_health_id=h.patient.health_id
+                )
+
+    asyncio.run(scenario())
+
+
+def test_existence_rejects_an_unknown_health_id() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            with pytest.raises(UnknownPatientError):
+                await h.service.list_existing_categories(
+                    h.doctor_caller, patient_health_id="PHI-IND-2026-0000000"
+                )
+
+    asyncio.run(scenario())
+
+
+def test_discovery_writes_no_audit_event() -> None:
+    """No record was accessed, so the trail records nothing — see the router docstring."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            before = len(await h.audit.list_page_by_patient(h.patient.id, after=None, limit=99))
+
+            await h.service.list_existing_categories(
+                h.doctor_caller, patient_health_id=h.patient.health_id
+            )
+
+            after = await h.audit.list_page_by_patient(h.patient.id, after=None, limit=99)
+            assert len(after) == before
 
     asyncio.run(scenario())

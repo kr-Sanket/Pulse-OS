@@ -1,7 +1,7 @@
 {
   "extends": "@pulseos/config/tsconfig.react.json",
   "compilerOptions": {
-    "types": []
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }

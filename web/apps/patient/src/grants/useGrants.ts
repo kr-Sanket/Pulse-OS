@@ -10,7 +10,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { api } from "@/api";
 import { categoryLabels, listCategories } from "@/lib/recordCategories";
-import { useApiResource } from "@/lib/useApiResource";
+import { useApiResource } from "@pulseos/ui";
 
 import { listGrants, revokeGrant } from "./api";
 import {

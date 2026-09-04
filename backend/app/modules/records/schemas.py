@@ -126,6 +126,20 @@ class RecordCategoryListResponse(ApiModel):
     items: list[RecordCategoryResponse]
 
 
+class RecordExistenceResponse(ApiModel):
+    """Which categories a patient holds records in — the clinician's discovery view.
+
+    Deliberately the *same item shape* as the category vocabulary and nothing more: a code
+    and a display name. No id, no filename, no hospital, no size, no service date, no
+    description, and no count — a count is itself clinical signal (three MRIs and thirty
+    are different stories), so this first cut answers presence only. A distinct response
+    model rather than a reused one because the two operations mean different things: one
+    publishes the vocabulary, this one says what a named patient has.
+    """
+
+    items: list[RecordCategoryResponse]
+
+
 class UploadingHospitalResponse(ApiModel):
     hid: str
     name: str

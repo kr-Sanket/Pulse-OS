@@ -30,7 +30,7 @@ import {
   listRecords,
   type RecordMetadata,
 } from "@/records/api";
-import { useApiResource } from "@/lib/useApiResource";
+import { useApiResource } from "@pulseos/ui";
 import { matchesQuery } from "@/records/view";
 
 interface DownloadFailure {

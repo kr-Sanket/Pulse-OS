@@ -11,7 +11,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import { api } from "@/api";
-import { useApiResource } from "@/lib/useApiResource";
+import { useApiResource } from "@pulseos/ui";
 import { categoryLabels, listCategories } from "@/lib/recordCategories";
 
 import { decideRequest, listInbox, type DecisionKind } from "./api";

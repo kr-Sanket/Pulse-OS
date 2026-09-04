@@ -3,7 +3,7 @@
 
 import type { LucideIcon } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { cn } from "@pulseos/ui";
 
 export type IconChipTone = "muted" | "solid";
 export type IconChipSize = "sm" | "md" | "lg" | "xl";

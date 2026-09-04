@@ -19,6 +19,7 @@ from app.modules.consent.service import ConsentService
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.repository import PatientRepository
 from app.modules.records.errors import (
+    ClinicianNotActiveError,
     DoctorNotFoundError,
     EmptyFileError,
     FileTooLargeError,
@@ -56,6 +57,10 @@ def to_http_error(exc: RecordsError) -> HTTPException:
         return HTTPException(status_code=404, detail="Doctor not found.")
     if isinstance(exc, HospitalNotFoundError):
         return HTTPException(status_code=404, detail="Hospital not found.")
+    if isinstance(exc, ClinicianNotActiveError):
+        return HTTPException(
+            status_code=403, detail="Your clinician profile is not active at its hospital."
+        )
     if isinstance(exc, HospitalNotVerifiedError):
         return HTTPException(status_code=409, detail="Hospital is not verified yet.")
     if isinstance(exc, OrgRegistrationConflictError):
@@ -138,6 +143,7 @@ def get_record_service(
         records=MedicalRecordRepository(session),
         categories=RecordCategoryRepository(session),
         admins=HospitalAdminRepository(session),
+        doctors=DoctorRepository(session),
         hospitals=HospitalRepository(session),
         patients=PatientDirectoryService(PatientRepository(session)),
         storage=storage,

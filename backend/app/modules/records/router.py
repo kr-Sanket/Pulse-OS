@@ -29,6 +29,7 @@ from app.modules.records.schemas import (
     DownloadUrlResponse,
     RecordCategoryListResponse,
     RecordCategoryResponse,
+    RecordExistenceResponse,
     RecordListResponse,
     RecordMetadataResponse,
 )
@@ -47,6 +48,11 @@ RecordActor = Annotated[AuthenticatedUser, Depends(RequireRecordActor)]
 # is absent from both gates: no admin break-glass exists (docs/SECURITY.md).
 RequireRecordReader = require_role(Role.PATIENT, Role.HOSPITAL_ADMIN, Role.DOCTOR)
 RecordReader = Annotated[AuthenticatedUser, Depends(RequireRecordReader)]
+
+# Discovering that records exist is a clinician-only capability: a patient already knows
+# what they hold, and no hospital or platform admin has any reason to probe a Health ID.
+RequireClinician = require_role(Role.DOCTOR)
+Clinician = Annotated[AuthenticatedUser, Depends(RequireClinician)]
 
 
 def _problem(request: Request, exc: RecordsError) -> JSONResponse:
@@ -170,6 +176,37 @@ async def list_records(
     return RecordListResponse(
         items=[RecordMetadataResponse.from_view(view) for view in page.items],
         next_cursor=page.next_cursor,
+    )
+
+
+@records_router.get("/existence", response_model=RecordExistenceResponse)
+async def list_record_existence(
+    user: Clinician,
+    service: RecordServiceDep,
+    patient_health_id: Annotated[str, Query(alias="patientHealthId", min_length=1, max_length=20)],
+) -> RecordExistenceResponse:
+    """Which record categories a patient holds anything in — existence only.
+
+    Step 1 of the consent flow (docs/SYSTEM_ARCHITECTURE.md): the clinician learns that
+    records exist so they can ask for the right categories. The response carries a code and
+    a display name per category and nothing else — no record id, filename, hospital, date,
+    description or count — so a caller with no grant learns only what step 1 allows.
+
+    Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
+    Consent requirement: none, and deliberately so — ``consent.enforce`` answers whether a
+    *record* may be read, which cannot be answered before any grant exists. Every read past
+    this point still crosses it. Nothing here is audited: no record was accessed.
+    Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
+    422 (missing/oversized Health ID, or no patient with that Health ID).
+    """
+    try:
+        categories = await service.list_existing_categories(
+            user, patient_health_id=patient_health_id
+        )
+    except RecordsError as exc:
+        raise to_http_error(exc) from exc
+    return RecordExistenceResponse(
+        items=[RecordCategoryResponse.model_validate(category) for category in categories]
     )
 
 

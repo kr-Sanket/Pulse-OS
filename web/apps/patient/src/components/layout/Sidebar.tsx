@@ -9,12 +9,12 @@
 import { HeartPulse, LogOut } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
-import { useAuth } from "@/auth/AuthContext";
+import { useAuth } from "@pulseos/ui";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn } from "@pulseos/ui";
 
-import { initialsFor } from "./initials";
+import { initialsFor } from "@pulseos/ui";
 import { NAV_SECTIONS, navSectionId } from "./navigation";
 
 export interface SidebarProps {

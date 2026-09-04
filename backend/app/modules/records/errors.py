@@ -50,6 +50,12 @@ class DoctorNotFoundError(RecordsError):
     existence must not leak across hospitals)."""
 
 
+class ClinicianNotActiveError(RecordsError):
+    """The caller is a doctor whose profile is not ACTIVE at its hospital (ADR-015): a
+    suspended clinician keeps no clinical capability, including discovering that a
+    patient's records exist."""
+
+
 class UnknownPatientError(RecordsError):
     """The supplied Health ID does not match any patient."""
 

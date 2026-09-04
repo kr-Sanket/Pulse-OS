@@ -25,6 +25,7 @@ from app.modules.consent.errors import AccessDeniedError
 from app.modules.consent.models import AuditAction
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.records.errors import (
+    ClinicianNotActiveError,
     EmptyFileError,
     FileTooLargeError,
     HospitalNotVerifiedError,
@@ -35,6 +36,7 @@ from app.modules.records.errors import (
     UnsupportedFileTypeError,
 )
 from app.modules.records.models import (
+    DoctorStatus,
     Hospital,
     HospitalVerificationStatus,
     MedicalRecord,
@@ -42,6 +44,7 @@ from app.modules.records.models import (
     RecordOrigin,
 )
 from app.modules.records.repository import (
+    DoctorRepository,
     HospitalAdminRepository,
     HospitalRepository,
     MedicalRecordRepository,
@@ -115,6 +118,7 @@ class RecordService:
         records: MedicalRecordRepository,
         categories: RecordCategoryRepository,
         admins: HospitalAdminRepository,
+        doctors: DoctorRepository,
         hospitals: HospitalRepository,
         patients: PatientDirectoryService,
         storage: ObjectStorage,
@@ -127,6 +131,7 @@ class RecordService:
         self._records = records
         self._categories = categories
         self._admins = admins
+        self._doctors = doctors
         self._hospitals = hospitals
         self._patients = patients
         self._storage = storage
@@ -241,6 +246,43 @@ class RecordService:
             last = page[-1][0]
             next_cursor = encode_cursor(CursorKey(created_at=last.created_at, item_id=last.id))
         return RecordPage(items=[self._to_view(row) for row in page], next_cursor=next_cursor)
+
+    async def list_existing_categories(
+        self, caller: AuthenticatedUser, *, patient_health_id: str
+    ) -> list[RecordCategory]:
+        """Which record categories this patient holds anything in — existence, not content.
+
+        Step 1 of the canonical consent flow (docs/SYSTEM_ARCHITECTURE.md §Consent Flow): a
+        clinician has to learn that records exist somewhere before they can ask for them,
+        and they cannot ask for a category the patient has nothing in.
+
+        **This read deliberately does not pass ``consent.enforce``, and that is not a hole
+        in the choke point.** ``enforce`` answers "may this clinician read *this record* in
+        *this category*", which by construction is unanswerable before any grant exists —
+        gating discovery on it would make the consent flow unstartable. What is returned
+        here is not record content and not metadata about a record: no id, no filename, no
+        hospital, no date, no description, no count. It is the vocabulary subset the patient
+        has data in, which is exactly what step 1 specifies. Everything past this point —
+        every byte of metadata and every file — still crosses ``enforce`` exactly once.
+
+        The relationship this module *can* decide is ADR-015's: the caller must be a
+        clinician whose profile is ACTIVE. A suspended doctor loses every clinical
+        capability, discovery included.
+        """
+        doctor = await self._doctors.get_by_user_id(caller.user_id)
+        if doctor is None:
+            raise ProfileNotFoundError()
+        if doctor.status is not DoctorStatus.ACTIVE:
+            raise ClinicianNotActiveError()
+        patient = await self._patients.get_by_health_id(patient_health_id)
+        if patient is None:
+            raise UnknownPatientError()
+
+        held = set(await self._records.list_category_ids_with_records(patient.id))
+        # The vocabulary is ten rows and already ordered by code, so filtering it in memory
+        # both resolves the ids and fixes the response order — no second scan, and two
+        # patients with the same categories always answer identically.
+        return [category for category in await self._categories.list_all() if category.id in held]
 
     async def get_for_caller(
         self,

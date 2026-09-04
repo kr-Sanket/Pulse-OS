@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
 
-import { useAuth } from "../auth/AuthContext";
-import { LoadingScreen } from "../components/LoadingScreen";
+import { useAuth } from "@pulseos/ui";
+import { LoadingScreen } from "@pulseos/ui";
 
 export function LoginPage() {
   const { user, initializing, signIn } = useAuth();

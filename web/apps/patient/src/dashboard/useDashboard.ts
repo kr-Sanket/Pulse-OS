@@ -14,7 +14,7 @@ import { useCallback, useMemo } from "react";
 import { api } from "@/api";
 import { useProfile, type ProfileState } from "@/profile/useProfile";
 import { categoryLabels } from "@/lib/recordCategories";
-import { useApiResource, type Resource } from "@/lib/useApiResource";
+import { useApiResource, type Resource } from "@pulseos/ui";
 
 import { loadCategories, loadGrants, loadInbox, loadRecords, loadTrail } from "./api";
 import {

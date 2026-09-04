@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import type { PatientProfile } from "@pulseos/api-client";
 
 import { api } from "@/api";
-import { useAuth } from "@/auth/AuthContext";
+import { useAuth } from "@pulseos/ui";
 
 import { loadOrRegisterProfile } from "./loadProfile";
 

@@ -6,7 +6,7 @@
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
 
-import { attempt, statusFailure, type ApiResult } from "@/lib/apiResult";
+import { attempt, statusFailure, type ApiResult } from "@pulseos/ui";
 
 export type AccessRequest = components["schemas"]["AccessRequestListItemResponse"];
 export type AccessRequestPage = components["schemas"]["AccessRequestListResponse"];

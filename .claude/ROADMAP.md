@@ -50,7 +50,7 @@ queryable; RBAC enforced (patient cannot call hospital endpoints); ≥80% covera
 88–100% coverage; every gate criterion verified against fakes). The live MinIO/Docker
 verification rides on the same deferred PO ops items as the M0.3 gate.*
 
-## M3 — Consent Domain (Month 3) ← CURRENT, backend COMPLETE (2026-09-01)
+## M3 — Consent Domain (Month 3) ✅ backend COMPLETE (2026-09-01); gate reachable once the doctor request flow lands
 
 The heart of PulseOS. `consent` module: request → per-category approve/reject → revoke;
 consent-enforcement wired into every non-owner record-read path; append-only access audit log.
@@ -59,27 +59,35 @@ consent-enforcement wired into every non-owner record-read path; append-only acc
 per category → doctor reads only approved categories → patient sees audit entry. Revocation cuts
 access immediately. Attempted unauthorized reads are denied AND logged.
 
-*Status — backend done, frontend not started (session 014, branch `feature/consent`).* Migration
-0004 (five tables), repository/service/HTTP layers, and the records integration are implemented;
-268 backend tests, consent module 99–100% coverage. Every gate criterion is exercised over HTTP
-in `tests/test_m3_gate.py` across TMH and CMC — including revocation taking effect on the next
-read and denials being written to the trail. ADR-016…019 record the decisions taken. **The gate
-is not yet demonstrable end to end**: it has no UI, and the two portal journeys it names are
-listed under M4 below. Deferred backend findings from the M3 review are in TODO.md.
+*Status (2026-09-04) — backend done and merged to `main`; the patient half of the UI is done.*
+Migration 0004 (five tables), repository/service/HTTP layers, and the records integration are
+implemented. Every gate criterion is exercised over HTTP in `tests/test_m3_gate.py` across TMH
+and CMC — including revocation taking effect on the next read and denials being written to the
+trail. ADR-016…019 record the decisions taken. The patient portal now renders the consent inbox,
+active grants and the audit trail against the real API. **The gate is still not demonstrable end
+to end**, for one remaining reason: no UI can *create* an access request. That is the doctor
+portal's request flow, first item under M4. Deferred backend findings are in TODO.md.
 
 ## M4 — Core Features Complete (Month 4)
 
-**Carried forward from M3** (backend shipped without them): doctor portal — patient search by
-Health ID and the request-access flow; patient portal — consent inbox and audit-log view. Both
-need two backend pieces that M3 did not build: the category-level existence projection a
-clinician uses to *discover* that records exist (SYSTEM_ARCHITECTURE §Consent Flow step 1), and
-a patient-facing audit-log endpoint. Notification fan-out for access requests also moves here,
-with the `notifications` module.
+**Carried forward from M3** — status as of 2026-09-04:
 
-Hospital portal (request management, doctor management UI, bulk upload); QR identity generation
-and scanning; record download via presigned URLs (logged); patient-controlled hide/unhide for
-locker records (`is_hidden` is enforced against consent as of M3 but has no endpoint); Flutter
+- ✅ Patient portal: consent inbox, active grants and audit-log view, all integrated.
+- ✅ `GET /api/v1/audit-logs` — the patient-facing trail.
+- ✅ `GET /api/v1/consent-grants` — the grant listing, with a derived ACTIVE/REVOKED/EXPIRED state.
+- ✅ `GET /api/v1/records/existence` — the category-level existence projection a clinician uses
+  to discover that records exist (SYSTEM_ARCHITECTURE §Consent Flow step 1), plus the batched
+  staff identity projection that lets patients read names instead of UUIDs.
+- ✅ Doctor portal slice 1: login → dashboard → patient search by Health ID → available categories.
+- ⬜ Doctor portal slice 2: the request-access flow. **This is the last thing between the repo
+  and a demonstrable M3 gate.**
+- ⬜ Notification fan-out for access requests, with the `notifications` module.
+
+Still to build: hospital portal (request management, doctor management UI, bulk upload); QR
+identity generation and scanning; patient-controlled hide/unhide for locker records (`is_hidden`
+is enforced against consent — including the existence projection — but has no endpoint); Flutter
 patient app started (auth, profile, consent inbox) — *pending Product Owner decision on timing*.
+Record download via presigned URLs is ✅ done and audited (patient portal).
 
 **Gate:** all three web portals demo the full interoperability story end-to-end with seed data,
 including the M3 consent journey.

@@ -247,3 +247,67 @@ def test_get_with_context_returns_none_for_unknown_id() -> None:
             assert await records.get_with_context(uuid4()) is None
 
     asyncio.run(scenario())
+
+
+def test_category_existence_is_grouped_scoped_and_hides_hidden_records() -> None:
+    """The existence projection's query: one row per category the patient actually holds,
+    nothing from anyone else, and nothing the patient has hidden."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            hospital = await _hospital(session)
+            patient = await _patient(session)
+            other_patient = await _patient(session)
+            categories = RecordCategoryRepository(session)
+            cbc = await categories.add(RecordCategory(code="CBC", display_name="CBC"))
+            mri = await categories.add(RecordCategory(code="MRI", display_name="MRI"))
+            xray = await categories.add(RecordCategory(code="XRAY", display_name="X-Ray"))
+
+            records = MedicalRecordRepository(session)
+            # Two CBCs collapse to one row; MRI adds a second.
+            for second, category in enumerate([cbc, cbc, mri]):
+                await _record(
+                    session,
+                    patient_id=patient.id,
+                    category=category,
+                    hospital_id=hospital.id,
+                    created_at=datetime(2026, 2, 1, 10, 0, second),
+                )
+            hidden = await _record(
+                session,
+                patient_id=patient.id,
+                category=xray,
+                hospital_id=None,
+                created_at=datetime(2026, 2, 1, 11, 0, 0),
+            )
+            hidden.is_hidden = True
+            # Another patient's record must not appear in this patient's projection.
+            await _record(
+                session,
+                patient_id=other_patient.id,
+                category=xray,
+                hospital_id=hospital.id,
+                created_at=datetime(2026, 2, 1, 12, 0, 0),
+            )
+            await session.flush()
+
+            held = await records.list_category_ids_with_records(patient.id)
+
+            assert set(held) == {cbc.id, mri.id}
+            assert len(held) == 2  # grouped: the second CBC does not produce a second row
+            assert xray.id not in held  # hidden from everyone but the patient
+
+    asyncio.run(scenario())
+
+
+def test_category_existence_is_empty_for_a_patient_with_no_records() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            patient = await _patient(session)
+
+            assert (
+                await MedicalRecordRepository(session).list_category_ids_with_records(patient.id)
+                == []
+            )
+
+    asyncio.run(scenario())

@@ -8,7 +8,7 @@ import { Database } from "lucide-react";
 import { SectionCard } from "@/components/dashboard/SectionCard";
 import { Button } from "@/components/ui/button";
 import { DATA_CARD, DATA_CONTROLS } from "@/data/settings";
-import { cn } from "@/lib/utils";
+import { cn } from "@pulseos/ui";
 
 export function DataControlsCard() {
   return (

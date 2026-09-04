@@ -19,9 +19,24 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase:** M3 Consent Domain — **backend COMPLETE** (2026-09-01, session 014, branch `feature/consent`, largely uncommitted); M0 and the M2 backend fully done.
-- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (auth, Health ID, patient registration/profile, patient web portal, api-client, seed — merged as PR #1); M2 backend (hospital/doctor onboarding per ADR-015, record upload → S3 port, presigned downloads, arq worker per ADR-014, demo-actor seed); M3 backend (consent request → per-category decision → grant → revoke, `consent.enforce()` on every non-owner record read, append-only audit log, migration 0004, records ⇄ consent integration — ADR-016…019).
-- **Next milestone:** M3 frontend (doctor search + request flow, patient consent inbox and audit view) plus the two backend pieces those journeys need — the clinician-facing record-existence projection and a patient audit-log endpoint — both now listed under M4. The M3 gate is **not yet demonstrable end to end**: the backend passes every criterion in `tests/test_m3_gate.py`, but there is no UI. Deferred M3 review findings and the still-open PO items (ops/Docker, OD-1…3, ADR-009/010) are in TODO.md.
+- **Phase:** **M4 — Core Features Complete**, in progress on `main` (2026-09-04, session 015).
+  M0, the M2 backend and the M3 backend are all done and merged. **79 files are uncommitted** —
+  M4.1, M4.2 and the shared-UI extraction; commit before starting anything (TODO §0).
+- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (merged
+  as PR #1); M2 backend (onboarding per ADR-015, upload → S3 port, presigned downloads, arq
+  worker per ADR-014, seed); M3 backend (request → per-category decision → grant → revoke,
+  `consent.enforce()` on every non-owner record read, append-only audit log, migration 0004 —
+  ADR-016…019); **M4 so far** — patient-facing `GET /consent-grants`, `GET /audit-logs` and the
+  batched staff identity projection; `GET /records/existence` (the clinician discovery step);
+  the **patient portal fully integrated** across all seven pages; `@pulseos/ui` promoted to the
+  shared portal foundation; the **doctor portal's first slice** (login → dashboard → patient
+  search by Health ID → available categories).
+- **Next:** the doctor portal's **request-access flow** — the last thing between the repository
+  and an end-to-end consent demo, because no UI can currently *create* an access request. Ship
+  rate limiting with or before it (both `/access-requests` and `/records/existence` are
+  unthrottled Health-ID oracles, finding M3-D). Then the hospital portal and `notifications`.
+- **Health:** 320 backend tests at 97% coverage, mypy strict + ruff clean; 131 web tests, tsc +
+  eslint + prettier clean; CI green on both.
 - **Session log / handoff notes:** [SESSION.md](SESSION.md) — read this second, update it before ending every session.
 
 ## Architecture in One Paragraph

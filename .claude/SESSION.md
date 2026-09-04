@@ -5,6 +5,147 @@
 
 ---
 
+## Session 015 — 2026-09-04 · ← CURRENT STATE
+
+**Read this entry alone to know where the project stands.** Everything below it is history.
+
+**Branch:** `main`. Last commit `cca4925` (Firebase auth + local dev environment).
+**⚠️ 79 files are uncommitted** — the whole of M4.1 and M4.2 plus the `@pulseos/ui` extraction
+(see "Not committed" at the end of this entry). Commit before any other work.
+
+**Phase:** M4 — Core Features Complete. M0/M2/M3 backends are done; the **patient portal is
+fully integrated against the real API**; the **doctor portal's first vertical slice** is built.
+
+### Quality gates (measured 2026-09-04)
+
+| Gate | Result |
+|---|---|
+| `pytest` | **320 passed**, **97% line coverage** (`--cov=app`) |
+| `ruff format --check` / `ruff check` / `mypy` (strict) | clean, 105 files / 100 source files |
+| `pnpm typecheck` / `lint` / `format:check` | clean, 6 workspace projects |
+| `pnpm test` | **131 tests** — patient 111, doctor 16, api-client 3, ui 1 |
+| `pnpm build` | all three apps build |
+
+### Architecture (unchanged in shape, extended in reach)
+
+Modular-monolith FastAPI backend (ADR-001) with six modules — `auth`, `patients`, `records`,
+`consent` implemented; `ai` and `notifications` are still `__init__.py` docstrings only.
+Layering is strict everywhere: **router → service → repository**, services import no FastAPI and
+own no transaction, one session/transaction per request, cross-module access only through a
+published `directory.py` seam or a Protocol. 12 tables, 4 Alembic migrations, **25 operations
+under `/api/v1`** plus `/health` and `/ready`.
+
+Web: pnpm workspace, three apps (`patient` complete, `doctor` first slice, `hospital` still a
+two-file scaffold) over three packages (`api-client` generated, `config`, **`ui` — now a real
+shared foundation**).
+
+### Backend state
+
+Everything from M0.3/M2/M3 plus, this session:
+
+- **`GET /api/v1/consent-grants`** (M4) — the patient's grant history with a derived
+  `status` (ACTIVE / REVOKED / EXPIRED) computed from the same predicate enforcement uses.
+- **`GET /api/v1/audit-logs`** (M4) — the patient-facing trail, keyset-paginated on
+  `occurred_at`. Path is `/audit-logs`, **not** `/audit`: plural kebab-case per
+  API_GUIDELINES:9, matching the `audit_logs` table.
+- **Identity projection** (M4) — `records.directory.StaffDirectoryService` publishes
+  display-safe staff facts (`full_name`, `specialty`, `hospital_name` — no ids, no employment
+  status). Consent declares a `StaffDirectory` protocol; the boundary adapts it. Batched by
+  construction: a collection in, a mapping out, **one statement per identity kind per page**
+  (an N+1 guard test counts SQL statements). Feeds `requester` on the inbox, `grantee` on the
+  grants listing, and `actor` on audit entries.
+- **`GET /api/v1/records/existence?patientHealthId=`** (M4.1) — the clinician discovery step
+  (SYSTEM_ARCHITECTURE §Consent Flow step 1). DOCTOR-only, must be ACTIVE (ADR-015). Returns
+  `{items:[{code, displayName}]}` and nothing else: no ids, filenames, hospitals, dates,
+  descriptions or **counts**. Hidden records excluded. One grouped SQL query.
+- **Bug fix in `auth/firebase.py`** — an unresolved Firebase project id used to surface as
+  `InvalidTokenError` → **401**, blaming the caller for the server's missing configuration
+  (the SDK reports it with a bare `ValueError`, the same type it uses for a malformed token).
+  `_get_app` now checks `app.project_id` and raises `AuthProviderUnavailableError` → **503**,
+  which is what `core/config.py` always promised.
+
+### Frontend state
+
+- **Patient portal — complete and fully integrated.** All seven pages (Dashboard, Records,
+  Consent, Grants, Audit, Profile, Settings) render real API data. **`src/data/` now contains
+  only `settings.ts`** — every other mock module was deleted. Per-feature architecture,
+  repeated six times: `src/<feature>/{api.ts, view.ts, use*.ts}` + dumb components; all mapping
+  in `view.ts`; 111 tests, all pure logic.
+- **Doctor portal — first vertical slice (M4.2).** Login → dashboard (name, hospital, ACTIVE
+  badge, search card) → `/patients` search by Health ID → available categories. Wired to
+  `GET /doctors/me` and `GET /records/existence`. **Access requests are not implemented yet.**
+- **`@pulseos/ui` is now the shared foundation** (ADR-003: "share components, tokens", and do
+  not triple auth plumbing). It holds the auth layer (`provider`, `firebase`,
+  `firebaseAuthProvider`, `devMockAuthProvider`, `AuthContext`), `ProtectedRoute`,
+  `LoadingScreen`, `apiResult`, `useApiResource`, `cn`, `initialsFor`, and **`tokens.css`**.
+  Both apps import the same palette, so the surfaces cannot drift.
+  **shadcn primitives are deliberately duplicated per app** — that is the shadcn model
+  (`components.json` is per app), and sharing them would drag the whole UI kit into the
+  package. When the hospital portal lands, a third copy is the signal to hoist.
+
+### Authentication flow (verified end to end this session)
+
+1. Google sign-in via the shared Firebase provider. Only three env vars are read:
+   `VITE_FIREBASE_{API_KEY,AUTH_DOMAIN,PROJECT_ID}`.
+2. `GET /patients/me` → **403** for a fresh account (`_to_authenticated_user` requires the
+   `pulseos_role` / `pulseos_user_id` custom claims).
+3. `POST /patients/register` (accepts a claim-less verified token) → creates `users` +
+   `patients`, issues the Health ID, calls `set_custom_user_claims` **in the same transaction**.
+4. Frontend force-refreshes the ID token; `GET /patients/me` → **200**.
+
+**The rule to remember: the database says who you are; the Firebase token says what you may
+do.** Any local fixture that edits `users` must be followed by the matching `*/register` call,
+because that call is the only writer of custom claims.
+
+### Recent implementation decisions
+
+- **Grouping key for grants includes `status`** (not just grantee + grantedAt + expiresAt), so a
+  half-withdrawn approval renders as two truthful cards rather than one that lies.
+- **`/records/existence` deliberately does not call `consent.enforce`** — `enforce` answers "may
+  this clinician read *this record*", unanswerable before any grant exists; gating discovery on
+  it would make the consent flow unstartable. The relationship `records` *can* decide (ADR-015
+  ACTIVE) is enforced instead. Everything past discovery still crosses the choke point once.
+- **Discovery is not audited** — no record was accessed and no truthful `AuditAction` exists.
+  Adding one is ADR-sized (ADR-018 is the precedent). **Open question, see TODO.**
+- **The audit page's summary is page-scoped** and says so on every card; there is no aggregate
+  endpoint and presenting a page total as a lifetime total would misrepresent a compliance record.
+- **Health ID validation in the doctor portal is format-only.** The ISO 7064 check character
+  stays in `patients/health_id.py`; a TypeScript copy would be free to drift.
+
+### Important development notes
+
+- **`backend/.env` is read relative to the process CWD**, and `make dev-api` runs
+  `cd backend && uvicorn`. The root `.env` is **docker-compose only**. There is still no
+  `backend/.env.example` — this gap has cost debugging time twice.
+- Infrastructure must be running (`make up`) or every DB-touching request 500s — and a 500
+  carries **no CORS headers** (Starlette's `ServerErrorMiddleware` sits outside
+  `CORSMiddleware`), so browsers misreport it as a CORS failure. Curl `/ready` first.
+- **Swagger at `/docs` cannot authenticate anything.** No OpenAPI `securitySchemes` is declared,
+  because auth reads the raw `Authorization` header in a plain dependency rather than through a
+  FastAPI security class. Use curl with a real bearer token copied from the browser.
+- Seeded staff and patients carry `synthetic:` subjects and **can never authenticate**
+  (`auth/seed.py` refuses non-synthetic subjects), so a real Google account always starts empty.
+- Category codes are the API vocabulary; internal category UUIDs never leave the backend.
+- Audit digests are SHA-256 and **must** become keccak256 before anything is anchored (ADR-019).
+
+### Milestones
+
+- **Current: M4 — Core Features Complete.** Done: patient portal integration, the three
+  patient-facing listing APIs, the identity projection, the existence endpoint, doctor portal
+  slice 1. Remaining: doctor access-request flow, hospital portal, notifications module.
+- **Next: M5 — AI Layer** (OCR → chunk → embed → RAG copilot + summaries), which replaces the
+  no-op body of `workers/tasks.py::record_uploaded`.
+
+### Not committed
+
+79 files: the M4.1 existence endpoint (`records` module + 4 test files), the entire doctor
+portal (`web/apps/doctor/**`), the `@pulseos/ui` extraction (11 files moved with `git mv`,
+36 patient files repointed), the regenerated api-client, and this documentation refresh.
+**Next step: review and commit as two or three coherent commits** (backend M4.1 / shared-ui
+extraction / doctor portal M4.2), then open the PR.
+
+---
+
 ## Session 014 — 2026-09-01
 
 **Phase:** M3 Consent Domain — backend implemented end to end. Branch `feature/consent`

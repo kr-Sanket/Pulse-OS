@@ -5,9 +5,9 @@
 // out three times on one page. A null loader means "nothing to fetch yet" (no record is
 // selected), which keeps the caller free of conditional hooks.
 //
-// Lives in lib/ rather than in one feature folder: Records and Consent both load pages
-// this way, and a second copy of an abort-and-reload effect is exactly the duplication
-// this file exists to prevent.
+// Lives in the shared package rather than in one app: every portal loads pages this way,
+// and a second copy of an abort-and-reload effect is exactly the duplication this file
+// exists to prevent (ADR-003).
 
 import { useEffect, useState } from "react";
 

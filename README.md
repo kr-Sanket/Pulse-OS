@@ -64,17 +64,27 @@ gates: [`.claude/ROADMAP.md`](.claude/ROADMAP.md).
 
 ## Status
 
-**M0 complete; M2 and M3 backends implemented.** The walking skeleton (M0.3) shipped: Firebase
-auth, Health ID issuance, patient registration/profile, patient web portal, generated
-api-client, idempotent seed. M2 added the `records` backend: hospital/doctor onboarding
-(ADR-015), record upload → S3/MinIO with FHIR-aligned metadata, presigned downloads, and the
-arq worker skeleton (ADR-014). M3 adds the `consent` backend — the heart of the system: access
-request → per-category approve/reject → revoke, with a single enforcement choke point in front
-of every non-owner record read and an append-only, hash-chained audit log behind it
-(ADR-016…019). Still to come for M3: the doctor and patient portal journeys, so the consent
-flow is not yet demonstrable end to end. Also outstanding: Docker/MinIO live verification
-(deferred PO ops items). See [`.claude/ROADMAP.md`](.claude/ROADMAP.md) and
-[`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md).
+**M0, M2 and M3 backends complete. M4 in progress: the patient portal is fully integrated and
+the doctor portal's first slice is live.**
+
+The backend exposes 25 operations under `/api/v1`: Firebase-backed auth with PulseOS role claims,
+patient registration and Health ID issuance (ADR-012), hospital/doctor onboarding (ADR-015),
+record upload → S3/MinIO with FHIR-aligned metadata and presigned downloads, and the consent
+domain — access request → per-category approve/reject → grant → revoke, with a single
+enforcement choke point in front of every non-owner record read and an append-only, hashed audit
+log behind it (ADR-016…019). M4 added the patient-facing read side: `GET /consent-grants`,
+`GET /audit-logs`, a batched staff identity projection so patients see names rather than UUIDs,
+and `GET /records/existence` — the clinician discovery step, which returns record *categories*
+and nothing else.
+
+The **patient portal** (7 pages) runs entirely on real APIs. The **doctor portal** covers login →
+dashboard → patient search by Health ID → available categories; the request-access flow is next
+and is the last thing standing between the repository and an end-to-end consent demo. The
+**hospital portal** is still a scaffold, and the AI and blockchain layers have not started.
+
+320 backend tests at 97% coverage; 131 web tests. See [`.claude/SESSION.md`](.claude/SESSION.md)
+for the current-state handoff, [`.claude/TODO.md`](.claude/TODO.md) for remaining work, and
+[`.claude/ROADMAP.md`](.claude/ROADMAP.md) for the milestone plan.
 
 ## Stack (summary)
 

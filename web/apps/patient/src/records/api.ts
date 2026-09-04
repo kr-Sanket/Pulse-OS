@@ -11,7 +11,7 @@
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
 
-import { attempt, failure, statusFailure, type ApiResult } from "@/lib/apiResult";
+import { attempt, failure, statusFailure, type ApiResult } from "@pulseos/ui";
 
 export type RecordMetadata = components["schemas"]["RecordMetadataResponse"];
 export type RecordPage = components["schemas"]["RecordListResponse"];
@@ -25,7 +25,7 @@ export {
   listCategories,
   type RecordCategory,
 } from "@/lib/recordCategories";
-export type { ApiResult } from "@/lib/apiResult";
+export type { ApiResult } from "@pulseos/ui";
 
 /** Asked for on every listing: the API caps a page at 100 and the page has no pager. */
 const MAX_PAGE_SIZE = 100;

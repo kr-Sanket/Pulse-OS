@@ -7,9 +7,9 @@
 
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
-import { AuthProvider } from "./auth/AuthContext";
+import { AuthContextProvider } from "@pulseos/ui";
 import { PatientLayout } from "./components/layout/PatientLayout";
-import { ProtectedRoute } from "./components/ProtectedRoute";
+import { ProtectedRoute } from "@pulseos/ui";
 import { AuditPage } from "./pages/AuditPage";
 import { ConsentPage } from "./pages/ConsentPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -21,7 +21,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 
 export function App() {
   return (
-    <AuthProvider>
+    <AuthContextProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -43,6 +43,6 @@ export function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
-    </AuthProvider>
+    </AuthContextProvider>
   );
 }

@@ -1,8 +1,9 @@
-// The one authentication interface the application consumes.
+// The one authentication interface every PulseOS portal consumes.
 //
 // Everything above this file — AuthContext, pages, layout, the API client — talks to
 // `authProvider` and never to Firebase. Which implementation backs it is decided here,
-// exactly once, at module load:
+// exactly once, at module load. Shared by every portal (ADR-003: one auth plumbing, not
+// three); each app supplies its own VITE_FIREBASE_* values:
 //
 //   • Firebase, whenever it is configured, and ALWAYS in a production build.
 //   • A development mock, only when `import.meta.env.DEV` is true AND no Firebase
@@ -12,7 +13,7 @@
 // missing configuration still throws the same "Missing VITE_FIREBASE_API_KEY…" error at
 // startup that it did before this abstraction existed.
 
-import { isFirebaseConfigured } from "../firebase";
+import { isFirebaseConfigured } from "./firebase";
 import { createDevMockAuthProvider } from "./devMockAuthProvider";
 import { createFirebaseAuthProvider } from "./firebaseAuthProvider";
 

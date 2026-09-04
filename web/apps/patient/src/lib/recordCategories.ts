@@ -7,7 +7,7 @@
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
 
-import { attempt, failure, type ApiResult } from "./apiResult";
+import { attempt, failure, type ApiResult } from "@pulseos/ui";
 
 export type RecordCategory = components["schemas"]["RecordCategoryResponse"];
 

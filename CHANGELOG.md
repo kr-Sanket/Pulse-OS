@@ -6,6 +6,56 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ## [Unreleased]
 
 ### Added
+- **M4.2 Doctor portal — first vertical slice:** login → dashboard → patient search. The
+  dashboard renders the clinician's own profile from `GET /doctors/me` (name, hospital,
+  ACTIVE/PENDING/SUSPENDED badge, registration number) and a search card; `/patients` searches by
+  Pulse Health ID against `GET /records/existence` and lists the available record categories —
+  names only, no counts, filenames, hospitals or dates. A non-ACTIVE clinician sees their real
+  status and a disabled search (ADR-015). Access requests are **not** part of this slice. 16 tests.
+- **`@pulseos/ui` is now the shared portal foundation** (ADR-003: "share components, tokens", and
+  do not triple auth plumbing). The auth layer (`provider`, `firebase`, `firebaseAuthProvider`,
+  `devMockAuthProvider`, `AuthContext`), `ProtectedRoute`, `LoadingScreen`, `apiResult`,
+  `useApiResource`, `cn`, `initialsFor` and **`tokens.css`** moved out of the patient app; both
+  portals now compile the same palette, so the surfaces cannot drift. shadcn primitives stay
+  per app deliberately — that is the shadcn model, and sharing them would drag the whole UI kit
+  into the package. Behaviour-neutral: the patient app's 111 tests and its CSS hash are unchanged.
+- **M4.1 `GET /api/v1/records/existence`** — the clinician-facing record-existence projection
+  (SYSTEM_ARCHITECTURE §Consent Flow step 1). DOCTOR-only and ACTIVE-only; answers
+  `{items:[{code, displayName}]}` for a Pulse Health ID and nothing else — no record ids,
+  filenames, hospitals, dates, descriptions or counts. Hidden records are excluded. One grouped
+  SQL query. It deliberately does not pass `consent.enforce`, which cannot answer a
+  per-record question before any grant exists; the ADR-015 ACTIVE check is the relationship this
+  module *can* decide, and every read past discovery still crosses the choke point once. Backend
+  tests 300 → 320.
+- **Patient-facing identity projection** — `records.directory.StaffDirectoryService` publishes
+  display-safe staff facts (full name, specialty, hospital name; no identifiers, no employment
+  status), consumed by consent through a `StaffDirectory` protocol. Batched by construction: a
+  collection in, a mapping out, one statement per identity kind per page, with an N+1 guard test
+  that counts SQL statements. Adds `requester` to the access-request listings, `grantee` to the
+  grants listing and `actor` to audit entries, so patients read names instead of UUIDs.
+- **`GET /api/v1/consent-grants`** — the patient's grant history (revoked and expired included),
+  each row carrying a derived `status` (ACTIVE / REVOKED / EXPIRED) read with the same predicate
+  enforcement applies, so the listing can never call a grant active that a read would refuse.
+- **`GET /api/v1/audit-logs`** — the patient-facing append-only trail, keyset-paginated on the
+  application-assigned `occurred_at`. Exposes the action, the actor and the role they held, the
+  target (category by code), the event time and the tamper-evidence digest; deliberately omits
+  `patientId`, `requestContext` and the storage timestamp.
+- **M4 Patient portal integration:** all seven pages (Dashboard, Medical Records, Consent
+  Requests, Active Grants, Audit History, Profile, Settings) rebuilt against the real API, each
+  as `src/<feature>/{api,view,use*}` with dumb components and all mapping in `view.ts`. Records
+  supports listing, detail, presigned download and locker upload; Consent supports per-category
+  approve/reject without a refetch; Grants groups one approval's rows into one card and revokes
+  them together; Audit renders the trail with a page-scoped summary that says so. Every mock
+  module was deleted except `src/data/settings.ts`. Web tests → 131.
+
+### Fixed
+- **An unconfigured Firebase project reported itself as a client error.** `firebase_admin`
+  signals a missing project id with a bare `ValueError` — the same type it raises for a
+  malformed token — so `FirebaseAuthProvider` mapped it to `InvalidTokenError` and answered
+  **401 "Invalid authentication token."**, blaming the caller for the server's own missing
+  configuration, while `core/config.py` promised 503. `_get_app` now verifies the SDK resolved a
+  project and raises `AuthProviderUnavailableError` → **503**, logging which variable to set.
+
 - **M3 Consent Domain (backend):** the `consent` module — access request → per-category
   approve/reject → revoke, with `consent.enforce()` attached to every non-owner record read.
   Migration 0004 adds five tables: `consent_requests`, `consent_request_categories`,

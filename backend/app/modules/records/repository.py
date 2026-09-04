@@ -207,6 +207,24 @@ class MedicalRecordRepository:
         await self._session.flush()
         return record
 
+    async def list_category_ids_with_records(self, patient_id: UUID) -> list[UUID]:
+        """The categories this patient actually holds records in — ids only.
+
+        The existence projection's whole query (docs/SYSTEM_ARCHITECTURE.md §Consent Flow
+        step 1): one grouped scan of ``ix`` on ``patient_id``, returning nothing but the
+        category. No row, no filename, no hospital, no date ever leaves this method, so a
+        caller that may only learn *whether* records exist cannot accidentally be handed
+        more. Hidden records are excluded — a record the patient has hidden must not exist
+        as far as anyone but the patient is concerned (the same rule service.py applies to
+        content reads).
+        """
+        result = await self._session.execute(
+            select(MedicalRecord.category_id)
+            .where(MedicalRecord.patient_id == patient_id, MedicalRecord.is_hidden.is_(False))
+            .group_by(MedicalRecord.category_id)
+        )
+        return list(result.scalars())
+
     async def get_with_context(self, record_id: UUID) -> RecordRow | None:
         result = await self._session.execute(
             self._context_query().where(MedicalRecord.id == record_id)

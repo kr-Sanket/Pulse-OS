@@ -1,10 +1,37 @@
-// M0.1 scaffold shell — real screens arrive with their milestones (.claude/ROADMAP.md).
+// Doctor portal routes.
+//
+// /login is public. Everything else renders inside DoctorLayout behind ProtectedRoute:
+// the guard wraps the layout once, so each page below is a plain <Outlet /> child and no
+// page repeats the auth check.
+
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
+import { AuthContextProvider, ProtectedRoute } from "@pulseos/ui";
+
+import { DoctorLayout } from "./components/layout/DoctorLayout";
+import { DashboardPage } from "./pages/DashboardPage";
+import { LoginPage } from "./pages/LoginPage";
+import { PatientSearchPage } from "./pages/PatientSearchPage";
 
 export function App() {
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem" }}>
-      <h1>PulseOS — Doctor Portal</h1>
-      <p>Engineering scaffold (M0.1). No features yet.</p>
-    </main>
+    <AuthContextProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            element={
+              <ProtectedRoute>
+                <DoctorLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/patients" element={<PatientSearchPage />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthContextProvider>
   );
 }

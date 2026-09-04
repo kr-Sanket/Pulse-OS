@@ -9,7 +9,7 @@ import { useCallback, useMemo } from "react";
 
 import { api } from "@/api";
 import { categoryLabels, listCategories } from "@/lib/recordCategories";
-import { useApiResource } from "@/lib/useApiResource";
+import { useApiResource } from "@pulseos/ui";
 
 import { listAuditEvents, MAX_PAGE_SIZE } from "./api";
 import { summarize, toEventViews, type AuditEventView, type SummaryStat } from "./view";

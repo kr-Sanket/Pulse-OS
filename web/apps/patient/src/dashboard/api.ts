@@ -14,7 +14,7 @@ import type { PulseOSClient } from "@pulseos/api-client";
 import { listAuditEvents } from "@/audit/api";
 import { listInbox } from "@/consent/api";
 import { listGrants } from "@/grants/api";
-import type { ApiResult } from "@/lib/apiResult";
+import type { ApiResult } from "@pulseos/ui";
 import { listCategories, type RecordCategory } from "@/lib/recordCategories";
 import { listRecords, type RecordPage } from "@/records/api";
 

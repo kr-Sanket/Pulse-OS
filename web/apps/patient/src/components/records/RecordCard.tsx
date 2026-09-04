@@ -18,7 +18,7 @@ import {
   recordDescription,
   recordTitle,
 } from "@/records/view";
-import { cn } from "@/lib/utils";
+import { cn } from "@pulseos/ui";
 
 export interface RecordCardProps {
   record: RecordMetadata;

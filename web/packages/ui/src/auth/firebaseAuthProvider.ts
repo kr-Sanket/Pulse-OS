@@ -11,7 +11,7 @@ import {
   type User,
 } from "firebase/auth";
 
-import { getFirebaseAuth } from "../firebase";
+import { getFirebaseAuth } from "./firebase";
 import type { AuthProvider, AuthUser } from "./provider";
 
 function toAuthUser(user: User): AuthUser {

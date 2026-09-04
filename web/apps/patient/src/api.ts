@@ -6,7 +6,7 @@
 
 import { createPulseOSClient } from "@pulseos/api-client";
 
-import { authProvider } from "./auth/provider";
+import { authProvider } from "@pulseos/ui";
 
 export const api = createPulseOSClient({
   baseUrl: import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000",

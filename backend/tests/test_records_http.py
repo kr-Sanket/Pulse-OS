@@ -18,7 +18,7 @@ from app.modules.auth.models import User
 from app.modules.patients.seed import seed_synthetic_patients
 from app.modules.records.errors import StorageUnavailableError
 from app.modules.records.fake import FakeObjectStorage
-from app.modules.records.models import HospitalAdmin
+from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin
 from app.modules.records.repository import HospitalRepository
 from app.modules.records.seed import seed_reference_data
 from fastapi.testclient import TestClient
@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.support import run_with_session
 
 RECORDS = "/api/v1/records"
+EXISTENCE = f"{RECORDS}/existence"
 CATEGORIES = "/api/v1/record-categories"
 
 #: A pinned, valid synthetic Health ID (app/modules/patients/seed.py).
@@ -44,12 +45,14 @@ def _bearer(token: str) -> dict[str, str]:
 @dataclass
 class Actors:
     """Bearer headers for one admin of HID-0001, one admin of HID-0002, one seeded
-    patient (owner of HEALTH_ID), one doctor, and one system admin."""
+    patient (owner of HEALTH_ID), one ACTIVE and one DISABLED doctor of HID-0001, and one
+    system admin."""
 
     admin_a: dict[str, str]
     admin_b: dict[str, str]
     patient: dict[str, str]
     doctor: dict[str, str]
+    suspended_doctor: dict[str, str]
     system_admin: dict[str, str]
 
 
@@ -62,7 +65,7 @@ def actors(
     fake_storage: FakeObjectStorage,
     fake_queue: InMemoryJobQueue,
 ) -> Actors:
-    async def arrange(session: AsyncSession) -> tuple[UUID, UUID, UUID, UUID, UUID]:
+    async def arrange(session: AsyncSession) -> tuple[UUID, UUID, UUID, UUID, UUID, UUID]:
         await seed_reference_data(session)  # HID-0001..3 VERIFIED + 10 categories
         await seed_synthetic_patients(session)  # includes the owner of HEALTH_ID
 
@@ -82,8 +85,32 @@ def actors(
         # Real identity rows: any actor that reaches an audited path is a foreign key on
         # audit_logs.actor_user_id, so a fabricated id would fail the write.
         doctor_user = User(firebase_uid="fb-doc", role=Role.DOCTOR)
+        suspended_user = User(firebase_uid="fb-doc-off", role=Role.DOCTOR)
         system_admin_user = User(firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN)
-        session.add_all([doctor_user, system_admin_user])
+        session.add_all([doctor_user, suspended_user, system_admin_user])
+        await session.flush()
+
+        # Clinician profiles: /records/existence needs one, and ADR-015 needs it ACTIVE.
+        hospital_a = await hospitals.get_by_hid("HID-0001")
+        assert hospital_a is not None
+        session.add_all(
+            [
+                Doctor(
+                    user_id=doctor_user.id,
+                    hospital_id=hospital_a.id,
+                    full_name="Dr Verma",
+                    registration_number="REG-A",
+                    status=DoctorStatus.ACTIVE,
+                ),
+                Doctor(
+                    user_id=suspended_user.id,
+                    hospital_id=hospital_a.id,
+                    full_name="Dr Suspended",
+                    registration_number="REG-B",
+                    status=DoctorStatus.DISABLED,
+                ),
+            ]
+        )
         await session.flush()
 
         patient_query = select(User).where(User.firebase_uid == "synthetic:patient:aarav")
@@ -93,12 +120,18 @@ def actors(
             admin_ids[1],
             patient_user.id,
             doctor_user.id,
+            suspended_user.id,
             system_admin_user.id,
         )
 
-    admin_a_id, admin_b_id, patient_user_id, doctor_user_id, system_admin_user_id = (
-        run_with_session(db_engine, arrange)
-    )
+    (
+        admin_a_id,
+        admin_b_id,
+        patient_user_id,
+        doctor_user_id,
+        suspended_doctor_id,
+        system_admin_user_id,
+    ) = run_with_session(db_engine, arrange)
 
     fake_auth.register_user(
         "admin-a", user_id=admin_a_id, firebase_uid="fb-admin-0", role=Role.HOSPITAL_ADMIN
@@ -116,6 +149,9 @@ def actors(
         "doctor", user_id=doctor_user_id, firebase_uid="fb-doc", role=Role.DOCTOR
     )
     fake_auth.register_user(
+        "doctor-off", user_id=suspended_doctor_id, firebase_uid="fb-doc-off", role=Role.DOCTOR
+    )
+    fake_auth.register_user(
         "sysadmin", user_id=system_admin_user_id, firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN
     )
     return Actors(
@@ -123,6 +159,7 @@ def actors(
         admin_b=_bearer("admin-b"),
         patient=_bearer("patient"),
         doctor=_bearer("doctor"),
+        suspended_doctor=_bearer("doctor-off"),
         system_admin=_bearer("sysadmin"),
     )
 
@@ -357,3 +394,107 @@ def test_record_categories_listing(client: TestClient, actors: Actors) -> None:
     assert len(items) == 10
     assert {"code": "CBC", "displayName": "Complete Blood Count"} in items
     assert [i["code"] for i in items] == sorted(i["code"] for i in items)
+
+
+# -- existence projection (M4.1) ---------------------------------------------------------
+
+
+def test_existence_returns_only_codes_and_display_names(client: TestClient, actors: Actors) -> None:
+    _upload(client, actors.admin_a, categoryCode="CBC")
+    _upload(client, actors.admin_a, categoryCode="CBC")
+    _upload(client, actors.admin_a, categoryCode="XRAY")
+
+    response = client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.doctor)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == {"items"}
+    assert body["items"] == [
+        {"code": "CBC", "displayName": "Complete Blood Count"},
+        {"code": "XRAY", "displayName": "X-Ray"},
+    ]
+
+
+def test_existence_never_carries_record_metadata(client: TestClient, actors: Actors) -> None:
+    """The whole point of the endpoint: presence, and nothing that identifies a document."""
+    _upload(client, actors.admin_a, categoryCode="CBC")
+
+    body = client.get(
+        EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.doctor
+    ).json()
+
+    leaked = {
+        "id",
+        "originalFilename",
+        "uploadedByHospital",
+        "sizeBytes",
+        "description",
+        "dateOfService",
+        "contentType",
+        "s3Key",
+        "processingStatus",
+        "recordCount",
+        "count",
+    }
+    for item in body["items"]:
+        assert set(item) == {"code", "displayName"}
+        assert not leaked & set(item)
+
+
+def test_existence_is_empty_for_a_patient_with_no_records(
+    client: TestClient, actors: Actors
+) -> None:
+    response = client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.doctor)
+
+    assert response.status_code == 200
+    assert response.json() == {"items": []}
+
+
+def test_existence_is_doctor_only(client: TestClient, actors: Actors) -> None:
+    forbidden = [
+        client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.patient),
+        client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.admin_a),
+        client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.system_admin),
+    ]
+
+    assert [response.status_code for response in forbidden] == [403] * 3
+
+
+def test_existence_requires_authentication(client: TestClient) -> None:
+    response = client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID})
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_a_suspended_clinician_is_refused(client: TestClient, actors: Actors) -> None:
+    _upload(client, actors.admin_a, categoryCode="CBC")
+
+    response = client.get(
+        EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.suspended_doctor
+    )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
+def test_existence_rejects_an_unknown_or_missing_health_id(
+    client: TestClient, actors: Actors
+) -> None:
+    unknown = client.get(
+        EXISTENCE, params={"patientHealthId": "PHI-IND-2026-0000000"}, headers=actors.doctor
+    )
+    missing = client.get(EXISTENCE, headers=actors.doctor)
+    blank = client.get(EXISTENCE, params={"patientHealthId": ""}, headers=actors.doctor)
+
+    assert [unknown.status_code, missing.status_code, blank.status_code] == [422, 422, 422]
+
+
+def test_existence_does_not_collide_with_the_record_id_route(
+    client: TestClient, actors: Actors
+) -> None:
+    """`/records/existence` is declared before `/records/{record_id}`; without that order
+    FastAPI would try to parse "existence" as a UUID and answer 422."""
+    response = client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=actors.doctor)
+
+    assert response.status_code == 200

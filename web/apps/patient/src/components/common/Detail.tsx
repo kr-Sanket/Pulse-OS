@@ -7,7 +7,7 @@
 
 import type { ReactNode } from "react";
 
-import { cn } from "@/lib/utils";
+import { cn } from "@pulseos/ui";
 
 export interface DetailProps {
   label: string;

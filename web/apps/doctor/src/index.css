@@ -1,0 +1,10 @@
+/* Global stylesheet for the doctor portal.
+ *
+ * Identical wiring to the patient portal: Tailwind CSS v4 configured from CSS only, with
+ * the PulseOS palette imported from the shared package so the two surfaces cannot drift
+ * apart (ADR-003).
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@pulseos/ui/tokens.css";

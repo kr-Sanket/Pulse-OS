@@ -1100,6 +1100,23 @@
         "title": "RecordCategoryResponse",
         "type": "object"
       },
+      "RecordExistenceResponse": {
+        "description": "Which categories a patient holds records in \u2014 the clinician's discovery view.\n\nDeliberately the *same item shape* as the category vocabulary and nothing more: a code\nand a display name. No id, no filename, no hospital, no size, no service date, no\ndescription, and no count \u2014 a count is itself clinical signal (three MRIs and thirty\nare different stories), so this first cut answers presence only. A distinct response\nmodel rather than a reused one because the two operations mean different things: one\npublishes the vocabulary, this one says what a named patient has.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordCategoryResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RecordExistenceResponse",
+        "type": "object"
+      },
       "RecordListResponse": {
         "properties": {
           "items": {
@@ -2482,6 +2499,51 @@
           }
         },
         "summary": "Upload Record",
+        "tags": [
+          "records"
+        ]
+      }
+    },
+    "/api/v1/records/existence": {
+      "get": {
+        "description": "Which record categories a patient holds anything in \u2014 existence only.\n\nStep 1 of the consent flow (docs/SYSTEM_ARCHITECTURE.md): the clinician learns that\nrecords exist so they can ask for the right categories. The response carries a code and\na display name per category and nothing else \u2014 no record id, filename, hospital, date,\ndescription or count \u2014 so a caller with no grant learns only what step 1 allows.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).\nConsent requirement: none, and deliberately so \u2014 ``consent.enforce`` answers whether a\n*record* may be read, which cannot be answered before any grant exists. Every read past\nthis point still crosses it. Nothing here is audited: no record was accessed.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n422 (missing/oversized Health ID, or no patient with that Health ID).",
+        "operationId": "list_record_existence_api_v1_records_existence_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "patientHealthId",
+            "required": true,
+            "schema": {
+              "maxLength": 20,
+              "minLength": 1,
+              "title": "Patienthealthid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordExistenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Record Existence",
         "tags": [
           "records"
         ]

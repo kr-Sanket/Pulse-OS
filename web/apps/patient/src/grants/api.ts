@@ -6,7 +6,7 @@
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
 
-import { attempt, statusFailure, type ApiResult } from "@/lib/apiResult";
+import { attempt, statusFailure, type ApiResult } from "@pulseos/ui";
 
 export type Grant = components["schemas"]["ConsentGrantListItemResponse"];
 /** What revoking answers with — the base grant shape, without the listing's derived state. */

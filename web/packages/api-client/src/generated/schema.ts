@@ -531,6 +531,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/records/existence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Record Existence
+         * @description Which record categories a patient holds anything in — existence only.
+         *
+         *     Step 1 of the consent flow (docs/SYSTEM_ARCHITECTURE.md): the clinician learns that
+         *     records exist so they can ask for the right categories. The response carries a code and
+         *     a display name per category and nothing else — no record id, filename, hospital, date,
+         *     description or count — so a caller with no grant learns only what step 1 allows.
+         *
+         *     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
+         *     Consent requirement: none, and deliberately so — ``consent.enforce`` answers whether a
+         *     *record* may be read, which cannot be answered before any grant exists. Every read past
+         *     this point still crosses it. Nothing here is audited: no record was accessed.
+         *     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
+         *     422 (missing/oversized Health ID, or no patient with that Health ID).
+         */
+        get: operations["list_record_existence_api_v1_records_existence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/records/{record_id}": {
         parameters: {
             query?: never;
@@ -1140,6 +1172,21 @@ export interface components {
             code: string;
             /** Displayname */
             displayName: string;
+        };
+        /**
+         * RecordExistenceResponse
+         * @description Which categories a patient holds records in — the clinician's discovery view.
+         *
+         *     Deliberately the *same item shape* as the category vocabulary and nothing more: a code
+         *     and a display name. No id, no filename, no hospital, no size, no service date, no
+         *     description, and no count — a count is itself clinical signal (three MRIs and thirty
+         *     are different stories), so this first cut answers presence only. A distinct response
+         *     model rather than a reused one because the two operations mean different things: one
+         *     publishes the vocabulary, this one says what a named patient has.
+         */
+        RecordExistenceResponse: {
+            /** Items */
+            items: components["schemas"]["RecordCategoryResponse"][];
         };
         /** RecordListResponse */
         RecordListResponse: {
@@ -2153,6 +2200,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecordMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_record_existence_api_v1_records_existence_get: {
+        parameters: {
+            query: {
+                patientHealthId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordExistenceResponse"];
                 };
             };
             /** @description Validation Error */

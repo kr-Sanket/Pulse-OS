@@ -5,7 +5,7 @@
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
 
-import { attempt, statusFailure, type ApiResult } from "@/lib/apiResult";
+import { attempt, statusFailure, type ApiResult } from "@pulseos/ui";
 
 export type AuditEvent = components["schemas"]["AuditEventResponse"];
 export type AuditEventPage = components["schemas"]["AuditEventListResponse"];

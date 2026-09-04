@@ -37,6 +37,37 @@ def test_m2_paths_are_present() -> None:
     assert "get" in paths["/api/v1/record-categories"]
 
 
+def test_m4_existence_projection_is_present_and_declares_its_failures() -> None:
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/records/existence"]["get"]
+    assert set(operation["responses"]) >= {"200", "422"}
+    (parameter,) = operation["parameters"]
+    assert parameter["name"] == "patientHealthId"
+    assert parameter["in"] == "query" and parameter["required"] is True
+
+
+def test_existence_response_exposes_presence_only() -> None:
+    """The contract guard for the endpoint's whole purpose: a code and a display name per
+    category, and nothing that identifies a document or counts one."""
+    schemas = _spec()["components"]["schemas"]
+
+    assert set(schemas["RecordExistenceResponse"]["properties"]) == {"items"}
+    # Its item type is the category vocabulary shape — two fields, no more.
+    assert set(schemas["RecordCategoryResponse"]["properties"]) == {"code", "displayName"}
+    leaked = {
+        "id",
+        "originalFilename",
+        "uploadedByHospital",
+        "sizeBytes",
+        "description",
+        "dateOfService",
+        "contentType",
+        "s3Key",
+        "recordCount",
+    }
+    assert not leaked & set(schemas["RecordCategoryResponse"]["properties"])
+
+
 def test_m2_registrations_declare_created_and_idempotent_responses() -> None:
     paths = _spec()["paths"]
     for path in ["/api/v1/hospitals/register", "/api/v1/doctors/register"]:

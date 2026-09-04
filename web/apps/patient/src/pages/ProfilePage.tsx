@@ -15,7 +15,7 @@ import { Pencil } from "lucide-react";
 
 import type { PatientProfile } from "@pulseos/api-client";
 
-import { useAuth } from "@/auth/AuthContext";
+import { useAuth } from "@pulseos/ui";
 import { EmergencyContactCard } from "@/components/profile/EmergencyContactCard";
 import { PersonalInfoCard } from "@/components/profile/PersonalInfoCard";
 import { ProfileErrorState } from "@/components/profile/ProfileErrorState";

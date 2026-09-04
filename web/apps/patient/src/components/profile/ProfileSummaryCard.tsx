@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Detail } from "@/components/common/Detail";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { initialsFor } from "@/components/layout/initials";
+import { initialsFor } from "@pulseos/ui";
 import type { AccountFacts, ProfileIdentity } from "@/profile/view";
 
 export interface ProfileSummaryCardProps {
