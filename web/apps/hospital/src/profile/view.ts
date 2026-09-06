@@ -10,6 +10,15 @@ import type { HospitalAdminProfile, HospitalVerificationStatus } from "./api";
 /** Shown when the hospital carries no address — the column is nullable. */
 export const NO_ADDRESS = "Not recorded";
 
+/** The label above the name on the dashboard.
+ *
+ * The name under it is `adminFullName` — the hospital's administrator of record on PulseOS,
+ * which is a different thing from the account that signed in. The two coincide whenever an
+ * administrator registered their own hospital, and diverge whenever they do not; the earlier
+ * "Signed in as" claimed they were always the same, and named the wrong one. The signed-in
+ * account is the sidebar footer's job (it reads `useAuth`), and that split is deliberate. */
+export const ADMIN_LABEL = "Hospital administrator";
+
 /**
  * What an administrator must be told about their hospital's verification, or null when
  * nothing is wrong.

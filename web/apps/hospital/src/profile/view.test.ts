@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { HospitalAdminProfile } from "./api";
-import { NO_ADDRESS, VERIFICATION_NOTICES, firstNameOf, toIdentityView } from "./view";
+import { ADMIN_LABEL, NO_ADDRESS, VERIFICATION_NOTICES, firstNameOf, toIdentityView } from "./view";
 
 const PROFILE: HospitalAdminProfile = {
   adminFullName: "Anita Rao",
@@ -62,4 +62,13 @@ test("the greeting uses the first name, and never renders empty", () => {
   expect(firstNameOf("Anita Rao")).toBe("Anita");
   expect(firstNameOf("  Anita  Rao ")).toBe("Anita");
   expect(firstNameOf("   ")).toBe("there");
+});
+
+test("the dashboard label names the administrator of record, not the signed-in account", () => {
+  // The name it sits above is `adminFullName` — the hospital's administrator on PulseOS —
+  // which is not necessarily the Firebase account that authenticated. The two diverge
+  // whenever an administrator did not register their own hospital, and the label must not
+  // claim otherwise; the signed-in account is the sidebar footer's job.
+  expect(ADMIN_LABEL).toBe("Hospital administrator");
+  expect(ADMIN_LABEL.toLowerCase()).not.toContain("signed in");
 });

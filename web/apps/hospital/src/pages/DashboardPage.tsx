@@ -16,7 +16,7 @@ import { HospitalIdentityCard } from "@/profile/components/HospitalIdentityCard"
 import { HospitalIdentitySkeleton } from "@/profile/components/HospitalIdentitySkeleton";
 import { VerificationNotice } from "@/profile/components/VerificationNotice";
 import { useHospitalProfile } from "@/profile/useHospitalProfile";
-import { firstNameOf, toIdentityView } from "@/profile/view";
+import { ADMIN_LABEL, firstNameOf, toIdentityView } from "@/profile/view";
 
 export function DashboardPage() {
   const { resource, reload } = useHospitalProfile();
@@ -31,7 +31,7 @@ export function DashboardPage() {
   return (
     <div className="space-y-8">
       <div className="space-y-2 pt-1">
-        <p className="text-muted-foreground text-sm">Signed in as</p>
+        <p className="text-muted-foreground text-sm">{ADMIN_LABEL}</p>
         {identity === null ? (
           <Skeleton className="h-9 w-56" />
         ) : (
