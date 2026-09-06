@@ -10,6 +10,7 @@ import { AuthContextProvider, ProtectedRoute } from "@pulseos/ui";
 
 import { HospitalLayout } from "./components/layout/HospitalLayout";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DoctorsPage } from "./pages/DoctorsPage";
 import { HospitalPage } from "./pages/HospitalPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -43,6 +44,7 @@ export function App() {
             }
           >
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/doctors" element={<DoctorsPage />} />
             <Route path="/hospital" element={<HospitalPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

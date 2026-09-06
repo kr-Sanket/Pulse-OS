@@ -5,10 +5,10 @@
 // with its heading via aria-labelledby, so the grouping reaches assistive technology and is
 // not merely visual.
 //
-// Only what this slice actually routes to. Doctor management, uploads and the record
-// listing arrive with their own slices and their own entries.
+// Only what the portal actually routes to. Uploads and the record listing arrive with
+// their own slices and their own entries.
 
-import { Building2, LayoutDashboard, type LucideIcon } from "lucide-react";
+import { Building2, LayoutDashboard, Stethoscope, type LucideIcon } from "lucide-react";
 
 export interface NavItem {
   /** Route path, matched exactly for "/" and by prefix otherwise. */
@@ -28,7 +28,12 @@ export interface NavSection {
 export const NAV_SECTIONS: readonly NavSection[] = [
   {
     title: "Clinical",
-    items: [{ to: "/", label: "Dashboard", title: "Dashboard", icon: LayoutDashboard }],
+    items: [
+      { to: "/", label: "Dashboard", title: "Dashboard", icon: LayoutDashboard },
+      // No count badge on the pending doctors: there is no aggregate endpoint, and a live
+      // count would mean the layout fetching the roster on every route.
+      { to: "/doctors", label: "Doctors", title: "Doctors", icon: Stethoscope },
+    ],
   },
   {
     title: "Account",

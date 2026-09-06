@@ -27,6 +27,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   directory instead of two divergent ones.
 
 ### Added
+- **Hospital portal — Slice 2, doctor management.** The roster (`GET /hospitals/me/doctors`)
+  plus activate and deactivate, in `doctors/{api,view,useDoctors}` with dumb components — the
+  only surface anywhere for ADR-015 step 3. Sectioned so whoever is waiting on the
+  administrator comes first: pending, then active, then suspended. A status change does not
+  refetch — the API answers with the updated row, that status is remembered, and grouping
+  re-files the one card; every other card is left as it was, the same approach the patient
+  portal takes when withdrawing a grant.
+  **Both actions are labelled by what they truly do**, which took reading `consent.enforce`
+  rather than guessing. Activation is permission to *ask*: an active doctor can search a Health
+  ID and request access, and still reaches no record without the patient's consent for that
+  category — so the card says it grants no record access. Suspension takes effect on the
+  doctor's next request because `_acting_clinician` refuses a suspended clinician *even where a
+  live grant survives*, and it withdraws no consent, so reactivating restores access without
+  anyone consenting again. Both sentences sit beside the button rather than behind a
+  confirmation dialog: the calls are idempotent and reversible, and text read before pressing
+  beats text dismissed after. The status vocabulary is the doctor portal's own
+  ("Active" / "Pending activation" / "Suspended"), so an administrator and a clinician never
+  read two different words for one state. A 404 on either action is worded without claiming
+  which of the two causes it was — the API conflates "unknown doctor" and "another hospital's
+  doctor" deliberately. The empty roster shows the hospital's `HID-XXXX` (with a copy button)
+  because a hospital cannot add a doctor — doctors register themselves against that ID — and an
+  unverified hospital is told registrations are refused rather than handed an ID that will not
+  work. Web tests 277 → 293. No backend, API, OpenAPI or generated-client changes.
 - **Hospital portal — Slice 1, identity and registration.** `GET /hospitals/me` behind
   `profile/{api,view,useHospitalProfile}` and `POST /hospitals/register` behind
   `register/{api,view,useHospitalRegistration}`, in the layering the other portals use: the
