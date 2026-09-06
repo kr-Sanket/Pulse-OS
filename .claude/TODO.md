@@ -27,14 +27,19 @@ Ordered by dependency. Each item is demonstrable on its own.
       loop with the already-built patient consent inbox and makes the M3 gate demonstrable end
       to end for the first time. *Blocked by nothing — the backend is complete.*
 - [ ] BE: **rate limiting** (Redis buckets, stricter on auth). Was deferred since M0.3 and is
-      now load-bearing: `POST /access-requests` **and** the new `GET /records/existence` are
-      both unthrottled Health-ID existence oracles (finding M3-D). Ship with or before slice 2.
-      `GET /granted-records` needs the same bucket, though it is not an oracle: it answers only
-      where a live grant already exists, and every probe without one writes an `ACCESS_DENIED`.
-- [ ] BE/PO: **decide whether discovery is audited.** `GET /records/existence` writes no audit
-      event — no record was accessed and no truthful `AuditAction` member exists. A doctor
-      probing Health IDs is arguably something a patient should see. Adding a member is
-      ADR-sized (ADR-018 is the precedent); a test currently pins the *absence*.
+      now load-bearing: `POST /access-requests`, `GET /records/existence` **and**
+      `GET /patients/lookup` are all unthrottled Health-ID oracles (finding M3-D). The lookup
+      is the most sensitive of the three — it is the only one that returns a patient's *name*
+      — though also the narrowest (HOSPITAL_ADMIN only, and a malformed ID is refused before
+      the database is touched). `GET /granted-records` needs the same bucket, though it is not
+      an oracle: it answers only where a live grant already exists, and every probe without one
+      writes an `ACCESS_DENIED`.
+- [ ] BE/PO: **decide whether discovery is audited.** `GET /records/existence` and
+      `GET /patients/lookup` write no audit event — no record was accessed and no truthful
+      `AuditAction` member exists. A doctor probing Health IDs, or a hospital resolving them to
+      names, is arguably something a patient should see; the lookup discloses more (a name), so
+      one ruling should cover both. Adding a member is ADR-sized (ADR-018 is the precedent); a
+      test currently pins the *absence* for existence.
 - [ ] BE: **local-dev identity script** (`scripts/dev_link_identity.py`) to attach a real
       Firebase UID to a seeded staff row, replacing the raw SQL currently needed to obtain a
       hospital-admin token. Must be loud, local-only and never importable by app code —
@@ -43,8 +48,11 @@ Ordered by dependency. Each item is demonstrable on its own.
 - [ ] BE: **no code path provisions `Role.SYSTEM_ADMIN`**, so `POST /hospitals/{hid}/verify`
       has no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in
       demos because the three simulated hospitals are seeded `VERIFIED`.
-- [ ] FE: **hospital portal** — `/hospitals/me`, upload for a Health ID, doctor list +
-      activate/deactivate. Second data source, and the only UI for the ADR-015 endpoints.
+- [ ] BE/FE: **hospital-scoped audit view** — the last unbuilt hospital capability in the
+      RBAC matrix ("View audit log: Hospital Admin ⭕ their hospital's actions only").
+      `GET /audit-logs` is `RequirePatient`, so there is no endpoint behind it yet. The rest
+      of the hospital portal is built (shell, identity, doctor management, upload with
+      patient confirmation per ADR-021, uploaded records).
 - [ ] BE: **`notifications` module** — in-app notification on request created / decided /
       revoked, delivered through arq. Currently an empty `__init__.py`; access requests arrive
       silently.
@@ -85,7 +93,7 @@ Each is a stated security or correctness gap. **M3-D is now the most urgent** �
       OD-1 unclaimed patients NO; OD-2 grant expiry 90d as an injected service default
       (`DEFAULT_GRANT_TTL`), overridable per approval; OD-3 grant exposes health profile —
       **not implemented either way**, so a ruling still changes code. See DOMAIN_MODEL.md §5.
-- [ ] PO: Review ADR-015 and **ADR-016…019** — all implemented per their documented rationale.
+- [ ] PO: Review ADR-015 and **ADR-016…021** — all implemented per their documented rationale.
 - [ ] PO: **ADR-009** deployment target (Render vs AWS) — still a placeholder, and M7 has no
       api/worker Dockerfile without it.
 - [ ] PO: **ADR-010** Flutter timing — still a placeholder; `mobile/` is a README.

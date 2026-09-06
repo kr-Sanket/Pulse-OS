@@ -23,3 +23,13 @@ class RegistrationConflictError(PatientsError):
 
 class HealthIdAllocationError(PatientsError):
     """All Health ID draws collided — statistically impossible outside of a bug."""
+
+
+class InvalidHealthIdError(PatientsError):
+    """The candidate is not a well-formed Pulse Health ID (shape or ISO 7064 check
+    character, ADR-012). Distinct from "no such patient": a transposed character fails
+    here, which is exactly the offline typo detection the check character exists for."""
+
+
+class PatientNotFoundError(PatientsError):
+    """A well-formed Health ID that matches no patient."""

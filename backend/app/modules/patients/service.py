@@ -19,9 +19,11 @@ from app.modules.patients.errors import (
     DuplicateHealthIdError,
     DuplicatePatientError,
     HealthIdAllocationError,
+    InvalidHealthIdError,
+    PatientNotFoundError,
     RegistrationConflictError,
 )
-from app.modules.patients.health_id import generate_health_id
+from app.modules.patients.health_id import generate_health_id, is_valid_health_id
 from app.modules.patients.models import Gender, Patient
 from app.modules.patients.repository import PatientRepository
 
@@ -86,6 +88,37 @@ class PatientService:
 
     async def get_profile(self, user_id: UUID) -> Patient | None:
         return await self._patients.get_by_user_id(user_id)
+
+    async def lookup_by_health_id(self, health_id: str) -> Patient:
+        """Resolve a Health ID to the patient it identifies, for identity confirmation.
+
+        The safety step in front of a hospital upload: a record is filed against a Health
+        ID and no endpoint can move or delete it afterwards, so the uploader has to be able
+        to check whose history they are about to write to before they write to it.
+
+        **Validated before it is queried, and that ordering is the point.** ADR-012 gave the
+        Health ID an ISO 7064 check character precisely so a transposed or mistyped
+        character is detectable without a database, and this is the reception desk it was
+        designed for. Running the check first means a typo is reported as a malformed ID
+        rather than as "no such patient" — the difference between "you typed it wrong" and
+        "this person is not on PulseOS", which are different instructions to the person at
+        the desk.
+
+        Case-insensitive and whitespace-tolerant on input (ADR-012 stores canonical
+        uppercase); the row's own Health ID is what comes back, so the caller is shown the
+        canonical form rather than whatever they typed.
+
+        Authorization is the caller's concern, not this method's: it says who a Health ID
+        belongs to and nothing about what anyone may do with them. The record write that
+        follows is authorized independently by the records module.
+        """
+        candidate = health_id.strip().upper()
+        if not is_valid_health_id(candidate):
+            raise InvalidHealthIdError()
+        patient = await self._patients.get_by_health_id(candidate)
+        if patient is None:
+            raise PatientNotFoundError()
+        return patient
 
     async def _complete_existing(self, user: User) -> RegistrationOutcome:
         if user.role is not Role.PATIENT:

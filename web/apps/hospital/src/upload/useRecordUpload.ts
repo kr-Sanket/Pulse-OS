@@ -13,21 +13,17 @@ import { listCategories, useApiResource, type RecordCategory } from "@pulseos/ui
 
 import { api } from "@/api";
 
+import type { PatientIdentity } from "@/patient-lookup/view";
+
 import { uploadRecordForHealthId, type RecordMetadata } from "./api";
-import {
-  draftProblems,
-  emptyDraft,
-  isSendable,
-  normalizeHealthId,
-  type UploadDraft,
-  type UploadField,
-} from "./view";
+import { draftProblems, emptyDraft, isSendable, type UploadDraft, type UploadField } from "./view";
 
 export type UploadState =
   | { kind: "editing" }
   | { kind: "uploading" }
-  /** The API created the record; `healthId` is the normalised ID it was filed against. */
-  | { kind: "uploaded"; record: RecordMetadata; healthId: string }
+  /** The API created the record; `patient` is the confirmed identity it was filed against,
+   * carried through so the receipt can name them without the upload response doing so. */
+  | { kind: "uploaded"; record: RecordMetadata; patient: PatientIdentity }
   | { kind: "error"; message: string };
 
 export interface RecordUpload {
@@ -37,7 +33,10 @@ export interface RecordUpload {
   problems: Readonly<Partial<Record<UploadField, string>>>;
   sendable: boolean;
   state: UploadState;
-  submit: () => void;
+  /** Files the document against the confirmed patient. The identity is passed in rather
+   * than held here: this hook must not be able to upload for anyone the lookup has not
+   * confirmed, and taking it as an argument is what makes that structural. */
+  submit: (patient: PatientIdentity) => void;
   /** Clear the form for the next patient, keeping nothing from the last one. */
   reset: () => void;
   /** The record categories to choose from, empty until they load. */
@@ -58,17 +57,17 @@ export function useRecordUpload(): RecordUpload {
   const vocabularyResource = vocabulary.resource;
   const categories = vocabularyResource.status === "ready" ? vocabularyResource.data : [];
 
-  async function send(): Promise<void> {
+  async function send(patient: PatientIdentity): Promise<void> {
     setAttempted(true);
     if (!isSendable(draft) || draft.file === null || draft.categoryCode === null) {
       return;
     }
-    const healthId = normalizeHealthId(draft.patientHealthId);
     setState({ kind: "uploading" });
 
     const description = draft.description.trim();
     const result = await uploadRecordForHealthId(api, {
-      patientHealthId: healthId,
+      // The canonical ID the *server* returned from the lookup, not the typed one.
+      patientHealthId: patient.healthId,
       file: draft.file,
       categoryCode: draft.categoryCode,
       dateOfService: draft.dateOfService,
@@ -79,7 +78,7 @@ export function useRecordUpload(): RecordUpload {
     setState(
       result.status === "error"
         ? { kind: "error", message: result.message }
-        : { kind: "uploaded", record: result.data, healthId },
+        : { kind: "uploaded", record: result.data, patient },
     );
   }
 
@@ -100,7 +99,7 @@ export function useRecordUpload(): RecordUpload {
     problems: attempted ? draftProblems(draft) : {},
     sendable: isSendable(draft),
     state,
-    submit: () => void send(),
+    submit: (patient) => void send(patient),
     reset,
     categories,
     categoriesUnavailable: vocabularyResource.status === "error",

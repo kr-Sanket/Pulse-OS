@@ -473,6 +473,75 @@ owned by the `records` module, DOCTOR-only, requiring an ACTIVE clinician (ADR-0
 
 ---
 
+## ADR-021 — Hospital patient lookup: a `patients`-owned identity endpoint, role-gated only
+
+**Date:** 2026-09-07 · **Status:** Accepted (M4) · **Extends:** ADR-012, ADR-013, ADR-015
+
+**Context:** `POST /records` files a document against a Health ID, and no endpoint edits or
+deletes a record afterwards. A hospital administrator had no way to check whose history they
+were about to write to: `GET /records/existence` is DOCTOR-only and returns no name, and
+nothing else resolves a Health ID. A valid Health ID belonging to the wrong patient was
+therefore an unrecoverable mistake, made at a reception desk, on the most sensitive write the
+system has. The RBAC matrix already grants this capability — docs/DOMAIN_MODEL.md §3, "Search
+patient by Health ID / QR: Hospital Admin ⭕ existence + name confirmation only" — it had
+simply never been built.
+
+**Decision:** `GET /api/v1/patients/lookup?healthId=`, owned by the `patients` module,
+HOSPITAL_ADMIN-only, answering `{healthId, fullName}` and nothing else. Four parts:
+
+1. **`patients` owns it, not `records`.** The disclosure is patient identity, and ownership
+   follows the data (the rule `/records/existence` already applies in reverse: it lives in
+   `records` because records owns category presence). No new table, no new repository
+   method — `PatientRepository.get_by_health_id` already existed for the directory.
+2. **Validated before it is queried.** The service runs `is_valid_health_id` first, so a
+   mistyped ID is refused as malformed rather than as "no such patient". That is ADR-012's
+   check character doing exactly the job it was specified for, and the two answers are
+   different instructions to the person at the desk.
+3. **Role gate only — no relationship layer.** Deliberately: every relationship an admin has
+   (their HospitalAdmin row, their hospital's verification status) lives in `records`, so
+   checking one would create a `patients → records` edge purely to gate a read that discloses
+   nothing about records. The `HOSPITAL_ADMIN` claim can only exist because
+   `POST /hospitals/register` created that profile, so the gate already implies a registered
+   administrator. A PENDING hospital can therefore look a patient up but still cannot upload
+   — the 409 stays where it was, and the lookup tells it nothing it could not learn by
+   attempting the upload.
+4. **A response allow-list, pinned by contract tests.** Two fields. Date of birth, gender,
+   contact details, `created_at`, the internal UUID and everything medical are absent;
+   widening it has to be a deliberate edit to `PatientLookupResponse`.
+
+**Why not the alternatives:**
+
+- *Widen `/records/existence` to HOSPITAL_ADMIN*: its contract is category presence with no
+  identity, and the thing needed here is a name. One route would carry two disclosure levels
+  chosen by role — the exact property ADR-020 rejected, because a route's disclosure must be
+  reviewable by reading the route.
+- *Own it in `records`, beside the upload it guards*: puts a patient-identity projection in a
+  module that does not own patient identity, and duplicates the resolution the `patients`
+  directory already publishes.
+- *Return the patient id so the upload could take it instead of a Health ID*: would change
+  the `POST /records` contract, put an internal UUID on the wire against DOMAIN_MODEL rule 4,
+  and make the lookup load-bearing for authorization rather than for confirmation.
+
+**Consequences:**
+
+- **This confirms an identity; it authorizes nothing.** The upload re-resolves the Health ID
+  and still requires a VERIFIED hospital. A UI that skipped the lookup would be no more
+  permitted than before — which is what keeps this a safety feature rather than a new
+  authorization path.
+- **It is a Health-ID oracle that returns a name, and the first endpoint to do so.** It joins
+  `POST /access-requests` and `GET /records/existence` in finding M3-D's rate-limiting bucket,
+  and is narrower than both (HOSPITAL_ADMIN only; a malformed ID is refused before the
+  database is touched). Rate limiting is not built here and remains M3-D's job.
+- **Not audited**, for the same reason discovery is not: no record was accessed and no
+  truthful `AuditAction` member exists. This widens that open question rather than settling
+  it — a lookup discloses a *name*, which is a stronger disclosure than category presence, so
+  whichever way the PO rules for `/records/existence` should now cover this too (TODO §1).
+- The `patients` module gains its first non-patient caller. Its dependency direction is
+  unchanged: it still imports only `auth`, and nothing imports it except through the
+  directory.
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.

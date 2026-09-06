@@ -35,3 +35,18 @@ class PatientProfileResponse(ApiModel):
     date_of_birth: date | None
     gender: Gender | None
     created_at: datetime
+
+
+class PatientLookupResponse(ApiModel):
+    """Identity confirmation for a hospital, and deliberately nothing else.
+
+    Two fields, both already known to whoever is holding the patient's card: the Health ID
+    they typed, echoed back in canonical form, and the name to read back to them. Date of
+    birth, gender, contact details, the internal UUID and every record fact are absent —
+    the question this answers is "is this the person in front of me", not "who is this
+    person" (docs/DOMAIN_MODEL.md §3: hospital admin gets existence + name confirmation
+    only). Widening it has to be a deliberate edit to this class.
+    """
+
+    health_id: str
+    full_name: str

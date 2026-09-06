@@ -1,27 +1,33 @@
-// Upload a record: file one document against a patient's Pulse Health ID.
+// Upload a record: confirm the patient, then file the document.
 //
-// The hospital half of POST /api/v1/records. Two reads sit behind it — the category
-// vocabulary (inside useRecordUpload) and the hospital itself, which is not merely the
-// unregistered guard: ADR-015 refuses an upload from a PENDING hospital with 409, so the form
-// is disabled with a reason rather than left to fail after the file has been transferred.
+// Two steps, in this order and not negotiable: `POST /records` files a document against a
+// Health ID and no endpoint can move or delete it afterwards, so a valid-but-wrong ID used
+// to be an unrecoverable mistake. The lookup panel closes that gap — the form below it stays
+// disabled until a lookup has succeeded *and* the administrator has confirmed the name.
 //
-// All state lives in useRecordUpload; all wording lives in upload/view.ts.
+// Three pieces of state, kept apart on purpose: the lookup session (patient-lookup/), the
+// document draft (upload/), and the hospital itself. The confirmed patient is passed to
+// `submit` rather than stored anywhere, so there is no path that uploads for an
+// unconfirmed patient.
 
 import { Navigate } from "react-router-dom";
 
 import { formatCalendarDate, formatFileSize } from "@pulseos/ui";
 
 import { ErrorState } from "@/components/common/ErrorState";
+import { PatientLookupPanel } from "@/patient-lookup/components/PatientLookupPanel";
+import { usePatientLookup } from "@/patient-lookup/usePatientLookup";
 import { HospitalIdentitySkeleton } from "@/profile/components/HospitalIdentitySkeleton";
 import { useHospitalProfile } from "@/profile/useHospitalProfile";
 import { toIdentityView } from "@/profile/view";
 import { UploadForm } from "@/upload/components/UploadForm";
 import { UploadReceipt } from "@/upload/components/UploadReceipt";
 import { useRecordUpload } from "@/upload/useRecordUpload";
-import { toReceiptView } from "@/upload/view";
+import { canUpload, toReceiptView, uploadBlockedReason } from "@/upload/view";
 
 export function UploadPage() {
   const upload = useRecordUpload();
+  const lookup = usePatientLookup();
   const { resource, reload } = useHospitalProfile();
   const outcome = resource.status === "ready" ? resource.data : null;
   const identity = outcome?.kind === "registered" ? toIdentityView(outcome.profile) : null;
@@ -32,6 +38,17 @@ export function UploadPage() {
   }
 
   const { state } = upload;
+  const gate = {
+    hospitalCanOperate: identity?.canOperate ?? false,
+    categoriesAvailable: !upload.categoriesUnavailable,
+    patientConfirmed: lookup.patient !== null,
+    draft: upload.draft,
+  };
+
+  function startOver(): void {
+    upload.reset();
+    lookup.reset();
+  }
 
   return (
     <div className="space-y-8">
@@ -54,31 +71,42 @@ export function UploadPage() {
         <HospitalIdentitySkeleton />
       ) : state.kind === "uploaded" ? (
         <UploadReceipt
-          receipt={toReceiptView(state.record, state.healthId, formatCalendarDate, formatFileSize)}
-          onUploadAnother={upload.reset}
+          receipt={toReceiptView(state.record, state.patient, formatCalendarDate, formatFileSize)}
+          onUploadAnother={startOver}
         />
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-6">
           {identity.canOperate ? null : (
             <p role="alert" className="text-destructive text-sm leading-relaxed">
               {identity.verificationNotice}
             </p>
           )}
-          {upload.categoriesUnavailable ? (
-            <p role="alert" className="text-destructive text-sm leading-relaxed">
-              Record categories could not be loaded, so uploads are unavailable right now.
-            </p>
-          ) : null}
+
+          <PatientLookupPanel
+            session={lookup.session}
+            searchable={lookup.searchable}
+            enabled={identity.canOperate}
+            onHealthIdChange={lookup.setHealthId}
+            onFind={lookup.find}
+            onConfirmedChange={lookup.setConfirmed}
+          />
 
           <UploadForm
             draft={upload.draft}
             problems={upload.problems}
             categories={upload.categories}
             uploading={state.kind === "uploading"}
-            enabled={identity.canOperate && !upload.categoriesUnavailable}
+            enabled={canUpload(gate)}
+            blockedReason={uploadBlockedReason(gate)}
             error={state.kind === "error" ? state.message : null}
             onFieldChange={upload.setField}
-            onSubmit={upload.submit}
+            onSubmit={() => {
+              // Belt and braces: the button is already closed without a confirmed patient,
+              // and `submit` cannot be called without one either.
+              if (lookup.patient !== null) {
+                upload.submit(lookup.patient);
+              }
+            }}
           />
         </div>
       )}

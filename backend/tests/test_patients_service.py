@@ -12,8 +12,13 @@ from app.modules.auth.fake import FakeAuthProvider
 from app.modules.auth.provider import VerifiedToken
 from app.modules.auth.repository import UserRepository
 from app.modules.auth.service import ROLE_CLAIM, USER_ID_CLAIM
-from app.modules.patients.errors import HealthIdAllocationError, RegistrationConflictError
-from app.modules.patients.health_id import is_valid_health_id
+from app.modules.patients.errors import (
+    HealthIdAllocationError,
+    InvalidHealthIdError,
+    PatientNotFoundError,
+    RegistrationConflictError,
+)
+from app.modules.patients.health_id import generate_health_id, is_valid_health_id
 from app.modules.patients.repository import PatientRepository
 from app.modules.patients.service import PatientService
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,5 +153,87 @@ def test_claim_provisioning_failure_propagates() -> None:
                 await _service(session, provider).register(
                     IDENTITY, full_name="Asha Rao", date_of_birth=None, gender=None
                 )
+
+    asyncio.run(scenario())
+
+
+# -- identity lookup (the hospital upload's confirmation step) --------------------------
+
+
+def test_lookup_resolves_a_health_id_to_its_patient() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service = _service(session, FakeAuthProvider())
+            registered = await service.register(
+                IDENTITY, full_name="Asha Rao", date_of_birth=None, gender=None
+            )
+
+            found = await service.lookup_by_health_id(registered.patient.health_id)
+
+            assert found.id == registered.patient.id
+            assert found.full_name == "Asha Rao"
+
+    asyncio.run(scenario())
+
+
+def test_lookup_normalises_the_health_id_as_typed_at_a_desk() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service = _service(session, FakeAuthProvider())
+            registered = await service.register(
+                IDENTITY, full_name="Asha Rao", date_of_birth=None, gender=None
+            )
+            typed = f"  {registered.patient.health_id.lower()}  "
+
+            found = await service.lookup_by_health_id(typed)
+
+            assert found.health_id == registered.patient.health_id
+
+    asyncio.run(scenario())
+
+
+def test_lookup_rejects_a_malformed_health_id_before_touching_the_database() -> None:
+    """ADR-012's check character is offline typo detection; running it first means a
+    mistyped ID is reported as malformed rather than as a patient who does not exist."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service = _service(session, FakeAuthProvider())
+
+            for candidate in ("", "nonsense", "PHI-IND-2026-AAAAAAA", "PHI-IND-26-7K3M99X"):
+                with pytest.raises(InvalidHealthIdError):
+                    await service.lookup_by_health_id(candidate)
+
+    asyncio.run(scenario())
+
+
+def test_lookup_raises_not_found_for_a_well_formed_but_unissued_health_id() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service = _service(session, FakeAuthProvider())
+            unissued = generate_health_id()
+
+            with pytest.raises(PatientNotFoundError):
+                await service.lookup_by_health_id(unissued)
+
+    asyncio.run(scenario())
+
+
+def test_lookup_says_nothing_about_what_the_caller_may_do() -> None:
+    """The service answers identity only. Authorization is the router's role gate and, for
+    the upload that follows, the records module's own rules — this returns the same row to
+    anyone who reaches it, which is why the role gate above it carries the weight."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service = _service(session, FakeAuthProvider())
+            registered = await service.register(
+                IDENTITY, full_name="Asha Rao", date_of_birth=None, gender=None
+            )
+
+            found = await service.lookup_by_health_id(registered.patient.health_id)
+
+            assert not hasattr(found, "permissions")
+            assert found.health_id == registered.patient.health_id
 
     asyncio.run(scenario())

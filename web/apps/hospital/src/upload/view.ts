@@ -1,53 +1,24 @@
 // Upload form rules and the wording around them. Pure functions, no React.
 //
-// Two jobs: normalise and shape-check the Health ID before a round trip, and say what a
-// draft is still missing. Everything a server decides — whether the ID belongs to a real
-// patient, whether the file is an accepted type, whether the hospital may upload at all — is
-// left to the server, and its answer is what the form shows.
+// The Health ID is no longer part of this draft. It belongs to patient-lookup/, because an
+// upload may not proceed on a typed ID at all — only on a *confirmed patient*, which is a
+// lookup result plus an explicit acknowledgement. Keeping the two apart is what makes
+// "confirmed for patient A, uploaded for patient B" unrepresentable rather than merely
+// unlikely.
+//
+// What is left here is what describes the document: the file, its category, when the care
+// happened, and an optional description.
 
 import { todayIsoDate } from "@pulseos/ui";
 
+import type { PatientIdentity } from "@/patient-lookup/view";
+
 import type { RecordMetadata } from "./api";
 
-/** ADR-012 stores canonical uppercase; a reception desk types whatever it types. */
-export function normalizeHealthId(input: string): string {
-  return input.trim().toUpperCase();
-}
+export type UploadField = "file" | "categoryCode" | "dateOfService";
 
-/**
- * Format-only check: the prefix, a four-digit year, and seven characters of body plus
- * check character.
- *
- * Deliberately *not* the ISO 7064 check-character verification the backend performs — that
- * algorithm lives in one place (app/modules/patients/health_id.py) and a TypeScript copy
- * would be free to drift. This is the same rule the doctor portal applies, and it catches a
- * malformed ID before a round trip; the server remains the authority on whether an ID is
- * real, and answers 422 when it is not.
- */
-const HEALTH_ID_SHAPE = /^PHI-IND-\d{4}-[0-9A-Z]{7}$/;
-
-export function looksLikeHealthId(input: string): boolean {
-  return HEALTH_ID_SHAPE.test(normalizeHealthId(input));
-}
-
-export const INVALID_HEALTH_ID =
-  "That is not a Pulse Health ID. The format is PHI-IND-YYYY-XXXXXXC.";
-
-/** The standing warning above the form.
- *
- * A hospital administrator cannot look a patient up before uploading — no endpoint lets them
- * — and there is no endpoint that edits or deletes a record afterwards. So the Health ID is
- * the only thing standing between a document and the wrong patient's history, and it is
- * worth one sentence saying so. */
-export const HEALTH_ID_CAUTION =
-  "The document is filed against this Health ID and cannot be edited or removed afterwards. " +
-  "Read it back from the patient's card before uploading.";
-
-export type UploadField = "patientHealthId" | "file" | "categoryCode" | "dateOfService";
-
-/** What the administrator has typed so far. `file` is null until one is chosen. */
+/** What the administrator has chosen so far. `file` is null until one is picked. */
 export interface UploadDraft {
-  patientHealthId: string;
   file: File | null;
   categoryCode: string | null;
   dateOfService: string;
@@ -56,7 +27,6 @@ export interface UploadDraft {
 
 export function emptyDraft(): UploadDraft {
   return {
-    patientHealthId: "",
     file: null,
     categoryCode: null,
     // Most uploads are same-day; the field is bounded above by today either way.
@@ -66,7 +36,6 @@ export function emptyDraft(): UploadDraft {
 }
 
 export const FIELD_LABELS: Readonly<Record<UploadField, string>> = {
-  patientHealthId: "Pulse Health ID",
   file: "Document",
   categoryCode: "Kind of document",
   dateOfService: "Date of service",
@@ -75,13 +44,6 @@ export const FIELD_LABELS: Readonly<Record<UploadField, string>> = {
 /** Why one field cannot be sent, or null when it can. */
 export function fieldProblem(field: UploadField, draft: UploadDraft): string | null {
   switch (field) {
-    case "patientHealthId": {
-      const value = normalizeHealthId(draft.patientHealthId);
-      if (value.length === 0) {
-        return `${FIELD_LABELS.patientHealthId} is required.`;
-      }
-      return looksLikeHealthId(value) ? null : INVALID_HEALTH_ID;
-    }
     case "file":
       return draft.file === null ? "Choose a file to upload." : null;
     case "categoryCode":
@@ -99,9 +61,10 @@ export function fieldProblem(field: UploadField, draft: UploadDraft): string | n
   }
 }
 
-const FIELDS: readonly UploadField[] = ["patientHealthId", "file", "categoryCode", "dateOfService"];
+const FIELDS: readonly UploadField[] = ["file", "categoryCode", "dateOfService"];
 
-/** Every field's problem, keyed by field — empty when the draft is sendable. */
+/** Every field's problem, keyed by field — empty when the draft describes a sendable
+ * document. Says nothing about *whose* document it is; see {@link uploadBlockedReason}. */
 export function draftProblems(draft: UploadDraft): Readonly<Partial<Record<UploadField, string>>> {
   const problems: Partial<Record<UploadField, string>> = {};
   for (const field of FIELDS) {
@@ -117,10 +80,61 @@ export function isSendable(draft: UploadDraft): boolean {
   return Object.keys(draftProblems(draft)).length === 0;
 }
 
+// -- the upload gate ---------------------------------------------------------------------
+//
+// Every condition that must hold before a document can be filed, in one place and in the
+// order an administrator would hit them. Separate from the draft rules because most of these
+// are not about the document at all: two are about the hospital, one is about the patient,
+// and only the last is about the form.
+
+export interface UploadGate {
+  /** ADR-015: a PENDING hospital is refused by the API with 409. */
+  hospitalCanOperate: boolean;
+  /** The record-category vocabulary loaded; nothing can be categorised without it. */
+  categoriesAvailable: boolean;
+  /** A successful lookup that the administrator has explicitly confirmed. */
+  patientConfirmed: boolean;
+  draft: UploadDraft;
+}
+
+export const PENDING_HOSPITAL_BLOCKED =
+  "Your hospital is not verified yet, so it cannot upload records.";
+export const CATEGORIES_BLOCKED =
+  "Record categories could not be loaded, so uploads are unavailable right now.";
+export const PATIENT_NOT_CONFIRMED =
+  "Find the patient by their Pulse Health ID and confirm their name before uploading.";
+export const DRAFT_INCOMPLETE = "Complete the document details before uploading.";
+
+/** Why this upload cannot proceed, or null when it can. First blocker wins, so the
+ * administrator is told the one thing to do next rather than everything at once. */
+export function uploadBlockedReason(gate: UploadGate): string | null {
+  if (!gate.hospitalCanOperate) {
+    return PENDING_HOSPITAL_BLOCKED;
+  }
+  if (!gate.categoriesAvailable) {
+    return CATEGORIES_BLOCKED;
+  }
+  if (!gate.patientConfirmed) {
+    return PATIENT_NOT_CONFIRMED;
+  }
+  return isSendable(gate.draft) ? null : DRAFT_INCOMPLETE;
+}
+
+export function canUpload(gate: UploadGate): boolean {
+  return uploadBlockedReason(gate) === null;
+}
+
+// -- the receipt -------------------------------------------------------------------------
+
 /** What the receipt shows after a successful upload. */
 export interface ReceiptView {
   recordId: string;
   patientHealthId: string;
+  /** The confirmed patient's name, so the operator can verify what they filed and for whom.
+   * Taken from the lookup this upload was authorised by, never from the upload response —
+   * `POST /records` returns no patient, and widening it for display would put a name on a
+   * response that has never needed one. */
+  patientName: string;
   category: string;
   dateOfService: string;
   filename: string;
@@ -132,13 +146,14 @@ export const UNKNOWN_HOSPITAL = "Your hospital";
 
 export function toReceiptView(
   record: RecordMetadata,
-  patientHealthId: string,
+  patient: PatientIdentity,
   formatDate: (iso: string) => string,
   formatSize: (bytes: number) => string,
 ): ReceiptView {
   return {
     recordId: record.id,
-    patientHealthId,
+    patientHealthId: patient.healthId,
+    patientName: patient.fullName,
     category: record.categoryDisplayName,
     dateOfService: formatDate(record.dateOfService),
     filename: record.originalFilename,

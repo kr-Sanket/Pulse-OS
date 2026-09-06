@@ -27,6 +27,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   directory instead of two divergent ones.
 
 ### Added
+- **Hospital patient lookup, and upload confirmation (ADR-021).** New backend endpoint
+  `GET /api/v1/patients/lookup?healthId=`, owned by the `patients` module, HOSPITAL_ADMIN-only,
+  answering `{healthId, fullName}` and nothing else — the RBAC matrix row that had never been
+  built (docs/DOMAIN_MODEL.md §3, "existence + name confirmation only"). It closes the safety
+  gap Slice 3 shipped with: `POST /records` files a document against a Health ID, no endpoint
+  edits or deletes a record afterwards, and an administrator had no way to check whose history
+  they were about to write to.
+  The service validates with `is_valid_health_id` **before** it queries, so a mistyped ID is
+  refused as malformed rather than as "no such patient" — ADR-012's check character doing the
+  offline typo detection it was specified for, and two genuinely different instructions to the
+  person at the desk. No new table and no new repository method: `get_by_health_id` already
+  existed. `/records/existence` is untouched — still DOCTOR-only, still presence-only, pinned
+  by a contract test.
+  In the hospital portal the upload page becomes two steps: find the patient, tick "I confirm
+  this is the intended patient", *then* the document form opens. The confirmation is a value
+  in a pure state machine (`patient-lookup/view.ts`), so the rule that matters — **a
+  confirmation dies with the Health ID that earned it** — is one tested function rather than
+  four setState calls that have to be read together. Editing the ID by one character, a failed
+  lookup, or starting a new search all clear it; re-typing the same ID in a different case
+  does not. `useRecordUpload.submit` takes the confirmed patient as an argument rather than
+  reading it from anywhere, so uploading for an unconfirmed patient is unrepresentable.
+  The receipt now names the patient, sourced from the lookup — `POST /records` returns no
+  patient and was **not** widened to add one. PENDING hospitals stay blocked exactly as
+  before, and outrank every other blocker in the new `uploadBlockedReason` gate.
+  Backend tests 368 → 390; web 346 → 375. api-client regenerated: the spec diff is exactly one
+  path and one schema, with zero drift elsewhere.
 - **Hospital portal — Slice 4, uploaded records.** `GET /records` (server-scoped for a
   HOSPITAL_ADMIN to that hospital's own uploads, ADR-013 layer 2), `GET /records/{id}` and
   `POST /records/{id}/download-url`, in `uploads/{api,view,useUploads}` with dumb components

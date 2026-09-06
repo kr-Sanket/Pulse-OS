@@ -2,79 +2,85 @@ import { expect, test } from "vitest";
 
 import { todayIsoDate } from "@pulseos/ui";
 
+import type { PatientIdentity } from "@/patient-lookup/view";
+
 import type { RecordMetadata } from "./api";
 import {
-  HEALTH_ID_CAUTION,
-  INVALID_HEALTH_ID,
+  CATEGORIES_BLOCKED,
+  DRAFT_INCOMPLETE,
+  PATIENT_NOT_CONFIRMED,
+  PENDING_HOSPITAL_BLOCKED,
   UNKNOWN_HOSPITAL,
+  canUpload,
   draftProblems,
   emptyDraft,
   fieldProblem,
   isSendable,
-  looksLikeHealthId,
-  normalizeHealthId,
   toReceiptView,
+  uploadBlockedReason,
   type UploadDraft,
+  type UploadGate,
 } from "./view";
 
 const FILE = new File(["x"], "report.pdf", { type: "application/pdf" });
 
 const VALID: UploadDraft = {
-  patientHealthId: "PHI-IND-2026-7K3M99X",
   file: FILE,
   categoryCode: "CBC",
   dateOfService: "2026-07-01",
   description: "",
 };
 
+const PATIENT: PatientIdentity = {
+  healthId: "PHI-IND-2026-7K3M99X",
+  fullName: "Asha Rao",
+};
+
 function withDraft(overrides: Partial<UploadDraft>): UploadDraft {
   return { ...VALID, ...overrides };
 }
 
-test("a Health ID is normalised the way ADR-012 stores it", () => {
-  expect(normalizeHealthId("  phi-ind-2026-7k3m99x  ")).toBe("PHI-IND-2026-7K3M99X");
-});
+function gateWith(overrides: Partial<UploadGate> = {}): UploadGate {
+  return {
+    hospitalCanOperate: true,
+    categoriesAvailable: true,
+    patientConfirmed: true,
+    draft: VALID,
+    ...overrides,
+  };
+}
 
-test("the shape check accepts a real ID and rejects a malformed one", () => {
-  expect(looksLikeHealthId("phi-ind-2026-7k3m99x")).toBe(true);
-  expect(looksLikeHealthId("PHI-IND-2026-7K3M99")).toBe(false);
-  expect(looksLikeHealthId("ABC-IND-2026-7K3M99X")).toBe(false);
-  expect(looksLikeHealthId("PHI-IND-26-7K3M99X")).toBe(false);
-});
-
-test("the shape check does not pretend to verify the check character", () => {
-  // ISO 7064 lives in app/modules/patients/health_id.py and is deliberately not copied here.
-  // A well-formed ID with the wrong check character passes locally and is the server's 422.
-  expect(looksLikeHealthId("PHI-IND-2026-7K3M99A")).toBe(true);
-});
+// -- the document draft ------------------------------------------------------------------
 
 test("a complete draft is sendable and reports no problems", () => {
   expect(draftProblems(VALID)).toEqual({});
   expect(isSendable(VALID)).toBe(true);
 });
 
-test("an empty draft blocks on everything except the date, which defaults to today", () => {
-  const draft = emptyDraft();
-
-  expect(draft.dateOfService).toBe(todayIsoDate());
-  expect(Object.keys(draftProblems(draft)).sort()).toEqual([
+test("the draft no longer carries a Health ID — an upload runs on a confirmed patient", () => {
+  // The identifier lives in patient-lookup/, so "typed an ID" and "confirmed a patient"
+  // cannot be confused for one another.
+  expect(Object.keys(emptyDraft()).sort()).toEqual([
     "categoryCode",
+    "dateOfService",
+    "description",
     "file",
-    "patientHealthId",
   ]);
 });
 
-test("a malformed Health ID is caught before the round trip", () => {
-  expect(fieldProblem("patientHealthId", withDraft({ patientHealthId: "nonsense" }))).toBe(
-    INVALID_HEALTH_ID,
-  );
-  expect(isSendable(withDraft({ patientHealthId: "nonsense" }))).toBe(false);
+test("an empty draft blocks on file and category; the date defaults to today", () => {
+  const draft = emptyDraft();
+
+  expect(draft.dateOfService).toBe(todayIsoDate());
+  expect(Object.keys(draftProblems(draft)).sort()).toEqual(["categoryCode", "file"]);
 });
 
 test("a future service date is refused locally, because the API refuses it too", () => {
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
-  expect(fieldProblem("dateOfService", withDraft({ dateOfService: tomorrow }))).toContain(
+  // The bound is a *local* calendar date (todayIsoDate), so the future date here is built
+  // from a fixed far-future value rather than from a UTC instant: deriving "tomorrow" by
+  // adding 24h to Date.now() and slicing the ISO string compares UTC against local, and
+  // silently passes for readers east of Greenwich late in the day.
+  expect(fieldProblem("dateOfService", withDraft({ dateOfService: "2099-01-01" }))).toContain(
     "cannot be in the future",
   );
   expect(fieldProblem("dateOfService", withDraft({ dateOfService: todayIsoDate() }))).toBeNull();
@@ -84,50 +90,99 @@ test("the description is optional — it is the only field the API accepts as ab
   expect(isSendable(withDraft({ description: "" }))).toBe(true);
 });
 
-test("the caution says the two things an administrator cannot discover for themselves", () => {
-  // There is no patient lookup for a hospital admin, and no endpoint edits or deletes a
-  // record, so a wrong Health ID is unrecoverable from this portal.
-  expect(HEALTH_ID_CAUTION).toContain("cannot be edited or removed");
-  expect(HEALTH_ID_CAUTION).toContain("Read it back");
+// -- the upload gate ---------------------------------------------------------------------
+
+test("everything in place means the upload may proceed", () => {
+  expect(canUpload(gateWith())).toBe(true);
+  expect(uploadBlockedReason(gateWith())).toBeNull();
 });
 
-test("the receipt names the patient the document was filed against", () => {
-  const record = {
-    id: "rec-1",
-    categoryDisplayName: "Complete Blood Count",
-    dateOfService: "2026-07-01",
-    originalFilename: "cbc.pdf",
-    sizeBytes: 2048,
-    uploadedByHospital: { hid: "HID-0001", name: "Tata Main Hospital" },
-  } as RecordMetadata;
+test("upload is blocked until a patient has been confirmed", () => {
+  const gate = gateWith({ patientConfirmed: false });
 
+  expect(canUpload(gate)).toBe(false);
+  expect(uploadBlockedReason(gate)).toBe(PATIENT_NOT_CONFIRMED);
+});
+
+test("a PENDING hospital stays blocked, and is told so first", () => {
+  // ADR-015: the API answers 409. The existing canOperate behaviour is unchanged by this
+  // slice, and it outranks every other blocker because nothing else can fix it.
+  const gate = gateWith({
+    hospitalCanOperate: false,
+    patientConfirmed: false,
+    draft: emptyDraft(),
+  });
+
+  expect(canUpload(gate)).toBe(false);
+  expect(uploadBlockedReason(gate)).toBe(PENDING_HOSPITAL_BLOCKED);
+});
+
+test("a PENDING hospital is blocked even with a confirmed patient and a complete draft", () => {
+  expect(canUpload(gateWith({ hospitalCanOperate: false }))).toBe(false);
+});
+
+test("a missing category vocabulary blocks the upload", () => {
+  const gate = gateWith({ categoriesAvailable: false });
+
+  expect(uploadBlockedReason(gate)).toBe(CATEGORIES_BLOCKED);
+});
+
+test("a confirmed patient with an incomplete document is blocked on the document", () => {
+  const gate = gateWith({ draft: emptyDraft() });
+
+  expect(canUpload(gate)).toBe(false);
+  expect(uploadBlockedReason(gate)).toBe(DRAFT_INCOMPLETE);
+});
+
+test("the first blocker wins, so the operator is told one thing to do next", () => {
+  const everythingWrong: UploadGate = {
+    hospitalCanOperate: false,
+    categoriesAvailable: false,
+    patientConfirmed: false,
+    draft: emptyDraft(),
+  };
+
+  expect(uploadBlockedReason(everythingWrong)).toBe(PENDING_HOSPITAL_BLOCKED);
+});
+
+// -- the receipt -------------------------------------------------------------------------
+
+const RECORD = {
+  id: "rec-1",
+  categoryDisplayName: "Complete Blood Count",
+  dateOfService: "2026-07-01",
+  originalFilename: "cbc.pdf",
+  sizeBytes: 2048,
+  uploadedByHospital: { hid: "HID-0001", name: "Tata Main Hospital" },
+} as RecordMetadata;
+
+test("the receipt names the confirmed patient, not just the Health ID", () => {
+  // The whole point of the slice: an operator must be able to see who they filed for.
   const view = toReceiptView(
-    record,
-    "PHI-IND-2026-7K3M99X",
+    RECORD,
+    PATIENT,
     () => "1 Jul 2026",
     () => "2 KB",
   );
 
+  expect(view.patientName).toBe("Asha Rao");
   expect(view.patientHealthId).toBe("PHI-IND-2026-7K3M99X");
   expect(view.recordId).toBe("rec-1");
-  expect(view.category).toBe("Complete Blood Count");
   expect(view.uploadedTo).toBe("Tata Main Hospital");
 });
 
+test("the receipt's patient comes from the lookup, never from the upload response", () => {
+  // POST /records returns no patient at all; it was deliberately not widened to add one.
+  expect(Object.keys(RECORD)).not.toContain("patientHealthId");
+});
+
 test("a receipt without an uploading hospital still names somewhere truthful", () => {
-  const record = {
-    id: "rec-2",
-    categoryDisplayName: "X-Ray",
-    dateOfService: "2026-07-01",
-    originalFilename: "x.pdf",
-    sizeBytes: 1,
-    uploadedByHospital: null,
-  } as RecordMetadata;
+  const locker = { ...RECORD, uploadedByHospital: null } as RecordMetadata;
 
   expect(
     toReceiptView(
-      record,
-      "PHI-IND-2026-7K3M99X",
+      locker,
+      PATIENT,
       () => "",
       () => "",
     ).uploadedTo,

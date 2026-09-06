@@ -179,3 +179,33 @@ def test_granted_record_listing_reports_the_scope_beside_the_page() -> None:
         "items",
         "nextCursor",
     }
+
+
+def test_patient_lookup_is_present_and_declares_its_failures() -> None:
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/patients/lookup"]["get"]
+    assert set(operation["responses"]) >= {"200", "422"}
+    (parameter,) = operation["parameters"]
+    assert parameter["name"] == "healthId"
+    assert parameter["in"] == "query" and parameter["required"] is True
+
+
+def test_patient_lookup_response_discloses_identity_confirmation_only() -> None:
+    """The contract guard for the endpoint's whole purpose: a Health ID and a name, and
+    nothing that would turn identity confirmation into a patient-data read."""
+    schemas = _spec()["components"]["schemas"]
+
+    assert set(schemas["PatientLookupResponse"]["properties"]) == {"healthId", "fullName"}
+    leaked = {"dateOfBirth", "gender", "createdAt", "id", "userId", "phone", "email"}
+    assert leaked.isdisjoint(schemas["PatientLookupResponse"]["properties"])
+
+
+def test_records_existence_contract_is_unchanged_by_the_lookup() -> None:
+    """The clinician discovery endpoint has its own disclosure contract and is deliberately
+    not widened or repurposed by the hospital lookup: still DOCTOR-only, still presence."""
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/records/existence"]["get"]
+    (parameter,) = operation["parameters"]
+
+    assert parameter["name"] == "patientHealthId"
+    assert set(spec["components"]["schemas"]["RecordExistenceResponse"]["properties"]) == {"items"}

@@ -1070,6 +1070,25 @@
         "title": "HospitalVerificationStatus",
         "type": "string"
       },
+      "PatientLookupResponse": {
+        "description": "Identity confirmation for a hospital, and deliberately nothing else.\n\nTwo fields, both already known to whoever is holding the patient's card: the Health ID\nthey typed, echoed back in canonical form, and the name to read back to them. Date of\nbirth, gender, contact details, the internal UUID and every record fact are absent \u2014\nthe question this answers is \"is this the person in front of me\", not \"who is this\nperson\" (docs/DOMAIN_MODEL.md \u00a73: hospital admin gets existence + name confirmation\nonly). Widening it has to be a deliberate edit to this class.",
+        "properties": {
+          "fullName": {
+            "title": "Fullname",
+            "type": "string"
+          },
+          "healthId": {
+            "title": "Healthid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "healthId",
+          "fullName"
+        ],
+        "title": "PatientLookupResponse",
+        "type": "object"
+      },
       "PatientProfileResponse": {
         "properties": {
           "createdAt": {
@@ -2560,6 +2579,51 @@
         "summary": "Verify Hospital",
         "tags": [
           "hospitals"
+        ]
+      }
+    },
+    "/api/v1/patients/lookup": {
+      "get": {
+        "description": "Confirm which patient a Pulse Health ID identifies, by name.\n\nThe safety step in front of ``POST /records``: a hospital files a document against a\nHealth ID, nothing can move or delete it afterwards, and until this existed an\nadministrator had no way to check whose history they were about to write to. A valid\nHealth ID belonging to the wrong patient was therefore an unrecoverable mistake.\n\nRoles: HOSPITAL_ADMIN only. Not DOCTOR \u2014 clinicians discover patients through\n``GET /records/existence``, which has a different disclosure contract and is left\nuntouched. Not SYSTEM_ADMIN \u2014 platform operations never require patient identity\n(docs/SECURITY.md). Not PATIENT \u2014 a patient looking up other patients is the\nenumeration ADR-012 exists to prevent.\n\nDiscloses exactly the Health ID in canonical form and the patient's name, which is the\n\"existence + name confirmation only\" row of the RBAC matrix (docs/DOMAIN_MODEL.md \u00a73)\nand no more: no date of birth, no contact details, no internal id, and nothing medical.\n**This confirms an identity; it authorizes nothing.** The upload that follows is\nauthorized on its own terms by the records module, which still requires a VERIFIED\nhospital and re-resolves the Health ID itself.\n\nConsent requirement: none \u2014 no record is read, so there is nothing for\n``consent.enforce`` to rule on. Nothing here is audited, for the same reason\n``/records/existence`` is not: no record was accessed and no truthful ``AuditAction``\nmember exists. That question is open for both endpoints (.claude/TODO.md).\n\n**Rate limiting: this is a Health-ID oracle and a future rate-limiting surface**, in\nthe same family as ``POST /access-requests`` and ``GET /records/existence`` (finding\nM3-D). It is narrower than either \u2014 HOSPITAL_ADMIN only, and a malformed ID is refused\nbefore the database is touched \u2014 but it is the first endpoint that returns a *name*,\nso it belongs in the same bucket when that lands.\n\nFailure modes: 401, 403 (wrong role), 422 (malformed Health ID, or no patient matches\nit \u2014 reported distinctly, because ADR-012's check character makes \"you typed it wrong\"\nand \"this person is not on PulseOS\" genuinely different answers).",
+        "operationId": "lookup_patient_api_v1_patients_lookup_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "healthId",
+            "required": true,
+            "schema": {
+              "maxLength": 20,
+              "minLength": 1,
+              "title": "Healthid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatientLookupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lookup Patient",
+        "tags": [
+          "patients"
         ]
       }
     },

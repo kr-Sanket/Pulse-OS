@@ -1,15 +1,29 @@
-"""Patients endpoints: registration and own-profile read (M0.3 part 3a)."""
+"""Patients endpoints: registration, own-profile read (M0.3 part 3a), and the
+hospital-facing identity lookup that guards an upload (docs/DOMAIN_MODEL.md §3)."""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
-from app.modules.auth.dependencies import RequirePatient, VerifiedIdentity, to_http_error
+from app.modules.auth.dependencies import (
+    RequireHospitalAdmin,
+    RequirePatient,
+    VerifiedIdentity,
+    to_http_error,
+)
 from app.modules.auth.domain import AuthenticatedUser
 from app.modules.auth.errors import AuthError
 from app.modules.patients.dependencies import PatientServiceDep
-from app.modules.patients.errors import RegistrationConflictError
-from app.modules.patients.schemas import PatientProfileResponse, PatientRegistrationRequest
+from app.modules.patients.errors import (
+    InvalidHealthIdError,
+    PatientNotFoundError,
+    RegistrationConflictError,
+)
+from app.modules.patients.schemas import (
+    PatientLookupResponse,
+    PatientProfileResponse,
+    PatientRegistrationRequest,
+)
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
@@ -63,3 +77,55 @@ async def read_own_profile(
     if patient is None:
         raise HTTPException(status_code=404, detail="Patient profile not found.")
     return PatientProfileResponse.model_validate(patient)
+
+
+@router.get("/lookup", response_model=PatientLookupResponse)
+async def lookup_patient(
+    user: Annotated[AuthenticatedUser, Depends(RequireHospitalAdmin)],
+    service: PatientServiceDep,
+    health_id: Annotated[str, Query(alias="healthId", min_length=1, max_length=20)],
+) -> PatientLookupResponse:
+    """Confirm which patient a Pulse Health ID identifies, by name.
+
+    The safety step in front of ``POST /records``: a hospital files a document against a
+    Health ID, nothing can move or delete it afterwards, and until this existed an
+    administrator had no way to check whose history they were about to write to. A valid
+    Health ID belonging to the wrong patient was therefore an unrecoverable mistake.
+
+    Roles: HOSPITAL_ADMIN only. Not DOCTOR — clinicians discover patients through
+    ``GET /records/existence``, which has a different disclosure contract and is left
+    untouched. Not SYSTEM_ADMIN — platform operations never require patient identity
+    (docs/SECURITY.md). Not PATIENT — a patient looking up other patients is the
+    enumeration ADR-012 exists to prevent.
+
+    Discloses exactly the Health ID in canonical form and the patient's name, which is the
+    "existence + name confirmation only" row of the RBAC matrix (docs/DOMAIN_MODEL.md §3)
+    and no more: no date of birth, no contact details, no internal id, and nothing medical.
+    **This confirms an identity; it authorizes nothing.** The upload that follows is
+    authorized on its own terms by the records module, which still requires a VERIFIED
+    hospital and re-resolves the Health ID itself.
+
+    Consent requirement: none — no record is read, so there is nothing for
+    ``consent.enforce`` to rule on. Nothing here is audited, for the same reason
+    ``/records/existence`` is not: no record was accessed and no truthful ``AuditAction``
+    member exists. That question is open for both endpoints (.claude/TODO.md).
+
+    **Rate limiting: this is a Health-ID oracle and a future rate-limiting surface**, in
+    the same family as ``POST /access-requests`` and ``GET /records/existence`` (finding
+    M3-D). It is narrower than either — HOSPITAL_ADMIN only, and a malformed ID is refused
+    before the database is touched — but it is the first endpoint that returns a *name*,
+    so it belongs in the same bucket when that lands.
+
+    Failure modes: 401, 403 (wrong role), 422 (malformed Health ID, or no patient matches
+    it — reported distinctly, because ADR-012's check character makes "you typed it wrong"
+    and "this person is not on PulseOS" genuinely different answers).
+    """
+    try:
+        patient = await service.lookup_by_health_id(health_id)
+    except InvalidHealthIdError as exc:
+        raise HTTPException(status_code=422, detail="That is not a valid Pulse Health ID.") from exc
+    except PatientNotFoundError as exc:
+        raise HTTPException(
+            status_code=422, detail="No patient on PulseOS has that Health ID."
+        ) from exc
+    return PatientLookupResponse.model_validate(patient)

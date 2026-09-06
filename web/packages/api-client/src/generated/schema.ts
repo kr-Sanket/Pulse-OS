@@ -477,6 +477,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/patients/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lookup Patient
+         * @description Confirm which patient a Pulse Health ID identifies, by name.
+         *
+         *     The safety step in front of ``POST /records``: a hospital files a document against a
+         *     Health ID, nothing can move or delete it afterwards, and until this existed an
+         *     administrator had no way to check whose history they were about to write to. A valid
+         *     Health ID belonging to the wrong patient was therefore an unrecoverable mistake.
+         *
+         *     Roles: HOSPITAL_ADMIN only. Not DOCTOR — clinicians discover patients through
+         *     ``GET /records/existence``, which has a different disclosure contract and is left
+         *     untouched. Not SYSTEM_ADMIN — platform operations never require patient identity
+         *     (docs/SECURITY.md). Not PATIENT — a patient looking up other patients is the
+         *     enumeration ADR-012 exists to prevent.
+         *
+         *     Discloses exactly the Health ID in canonical form and the patient's name, which is the
+         *     "existence + name confirmation only" row of the RBAC matrix (docs/DOMAIN_MODEL.md §3)
+         *     and no more: no date of birth, no contact details, no internal id, and nothing medical.
+         *     **This confirms an identity; it authorizes nothing.** The upload that follows is
+         *     authorized on its own terms by the records module, which still requires a VERIFIED
+         *     hospital and re-resolves the Health ID itself.
+         *
+         *     Consent requirement: none — no record is read, so there is nothing for
+         *     ``consent.enforce`` to rule on. Nothing here is audited, for the same reason
+         *     ``/records/existence`` is not: no record was accessed and no truthful ``AuditAction``
+         *     member exists. That question is open for both endpoints (.claude/TODO.md).
+         *
+         *     **Rate limiting: this is a Health-ID oracle and a future rate-limiting surface**, in
+         *     the same family as ``POST /access-requests`` and ``GET /records/existence`` (finding
+         *     M3-D). It is narrower than either — HOSPITAL_ADMIN only, and a malformed ID is refused
+         *     before the database is touched — but it is the first endpoint that returns a *name*,
+         *     so it belongs in the same bucket when that lands.
+         *
+         *     Failure modes: 401, 403 (wrong role), 422 (malformed Health ID, or no patient matches
+         *     it — reported distinctly, because ADR-012's check character makes "you typed it wrong"
+         *     and "this person is not on PulseOS" genuinely different answers).
+         */
+        get: operations["lookup_patient_api_v1_patients_lookup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/patients/me": {
         parameters: {
             query?: never;
@@ -1266,6 +1319,23 @@ export interface components {
          * @enum {string}
          */
         HospitalVerificationStatus: "PENDING" | "VERIFIED";
+        /**
+         * PatientLookupResponse
+         * @description Identity confirmation for a hospital, and deliberately nothing else.
+         *
+         *     Two fields, both already known to whoever is holding the patient's card: the Health ID
+         *     they typed, echoed back in canonical form, and the name to read back to them. Date of
+         *     birth, gender, contact details, the internal UUID and every record fact are absent —
+         *     the question this answers is "is this the person in front of me", not "who is this
+         *     person" (docs/DOMAIN_MODEL.md §3: hospital admin gets existence + name confirmation
+         *     only). Widening it has to be a deliberate edit to this class.
+         */
+        PatientLookupResponse: {
+            /** Fullname */
+            fullName: string;
+            /** Healthid */
+            healthId: string;
+        };
         /** PatientProfileResponse */
         PatientProfileResponse: {
             /**
@@ -2272,6 +2342,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HospitalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lookup_patient_api_v1_patients_lookup_get: {
+        parameters: {
+            query: {
+                healthId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatientLookupResponse"];
                 };
             };
             /** @description Validation Error */

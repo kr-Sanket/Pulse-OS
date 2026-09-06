@@ -1,8 +1,10 @@
-// The five fields the API accepts for a hospital upload, and nothing else.
+// The document half of an upload: what is being filed, not who it is for.
 //
-// Presentational: the draft, its problems and the in-flight state all arrive as props. The
-// Health ID leads because it is the field that decides whose history the document joins, and
-// it carries the standing caution from upload/view.ts.
+// The Health ID and the confirmation live in PatientLookupPanel above this form, because an
+// upload proceeds against a *confirmed patient* rather than a typed identifier. This form is
+// disabled outright until that confirmation exists, so the two cannot get out of step.
+//
+// Presentational: the draft, its problems and the in-flight state all arrive as props.
 
 import { Upload } from "lucide-react";
 import type { FormEvent } from "react";
@@ -20,16 +22,18 @@ import {
   type RecordCategory,
 } from "@pulseos/ui";
 
-import { ACCEPTED_TYPES, MAX_DESCRIPTION_LENGTH, MAX_HEALTH_ID_LENGTH } from "@/upload/api";
-import { FIELD_LABELS, HEALTH_ID_CAUTION, type UploadDraft, type UploadField } from "@/upload/view";
+import { ACCEPTED_TYPES, MAX_DESCRIPTION_LENGTH } from "@/upload/api";
+import { FIELD_LABELS, type UploadDraft, type UploadField } from "@/upload/view";
 
 export interface UploadFormProps {
   draft: UploadDraft;
   problems: Readonly<Partial<Record<UploadField, string>>>;
   categories: readonly RecordCategory[];
   uploading: boolean;
-  /** False while the hospital is still PENDING verification — the API would answer 409. */
+  /** False until a patient is confirmed, or while the hospital cannot upload at all. */
   enabled: boolean;
+  /** Why the form is closed, shown in place of the button's usual affordance. */
+  blockedReason: string | null;
   /** Why the API refused the last attempt, if it did. */
   error: string | null;
   onFieldChange: <K extends keyof UploadDraft>(field: K, value: UploadDraft[K]) => void;
@@ -42,6 +46,7 @@ export function UploadForm({
   categories,
   uploading,
   enabled,
+  blockedReason,
   error,
   onFieldChange,
   onSubmit,
@@ -55,27 +60,6 @@ export function UploadForm({
 
   return (
     <form className="space-y-5" onSubmit={submit}>
-      <div className="space-y-2">
-        <Label htmlFor="patientHealthId">{FIELD_LABELS.patientHealthId}</Label>
-        <Input
-          id="patientHealthId"
-          value={draft.patientHealthId}
-          onChange={(event) => onFieldChange("patientHealthId", event.target.value)}
-          placeholder="PHI-IND-2026-7K3M99X"
-          maxLength={MAX_HEALTH_ID_LENGTH}
-          disabled={disabled}
-          autoComplete="off"
-          spellCheck={false}
-          aria-invalid={problems.patientHealthId !== undefined}
-          aria-describedby="patientHealthId-hint"
-          className="h-10 font-mono tracking-tight uppercase"
-        />
-        <p id="patientHealthId-hint" className="text-muted-foreground text-xs leading-relaxed">
-          {HEALTH_ID_CAUTION}
-        </p>
-        <FieldProblem problem={problems.patientHealthId} />
-      </div>
-
       <div className="space-y-2">
         <Label htmlFor="file">{FIELD_LABELS.file}</Label>
         <Input
@@ -151,10 +135,17 @@ export function UploadForm({
         </p>
       )}
 
-      <Button type="submit" className="w-full justify-center gap-2" disabled={disabled}>
-        <Upload className="size-4" aria-hidden />
-        {uploading ? "Uploading…" : "Upload document"}
-      </Button>
+      <div className="space-y-2">
+        <Button type="submit" className="w-full justify-center gap-2" disabled={disabled}>
+          <Upload className="size-4" aria-hidden />
+          {uploading ? "Uploading…" : "Upload Record"}
+        </Button>
+        {blockedReason === null ? null : (
+          <p className="text-muted-foreground text-center text-xs leading-relaxed">
+            {blockedReason}
+          </p>
+        )}
+      </div>
     </form>
   );
 }
