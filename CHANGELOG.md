@@ -27,6 +27,57 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   directory instead of two divergent ones.
 
 ### Added
+- **Hospital portal — Slice 4, uploaded records.** `GET /records` (server-scoped for a
+  HOSPITAL_ADMIN to that hospital's own uploads, ADR-013 layer 2), `GET /records/{id}` and
+  `POST /records/{id}/download-url`, in `uploads/{api,view,useUploads}` with dumb components
+  and a detail page at `/uploads/:recordId`. Server order is preserved rather than re-sorted —
+  a partial page re-sorted by service date would put an old record on top and imply it was the
+  most recent thing the hospital uploaded. An empty page is its own outcome variant, so an
+  empty list can never be rendered, and a `nextCursor` produces the same truncation note the
+  other portals use.
+  **The listing cannot say whose record a row is, and says so rather than faking it.**
+  `RecordMetadataResponse` carries no patient identifier of any kind — verified against the
+  generated schema — so both screens carry one sentence attributing the absence to the API
+  instead of leaving a reader to read it as a missing column. This is the gap that makes
+  after-the-fact confirmation of a Slice 3 upload impossible, and it is a backend question, not
+  a UI one.
+  The 404 wording names neither "no such record" nor "another hospital's record", because the
+  API conflates them deliberately and naming one would confirm the other.
+- **The record vocabulary and the download state machine moved into `@pulseos/ui`.** Origin,
+  uploading hospital, file type, processing state and the whole `RecordMetadataResponse` →
+  detail-view mapping now live in `lib/records.ts`; `DownloadState`, `POPUP_BLOCKED` and the
+  two decisions behind the button live in `lib/download.ts`. A record does not change meaning
+  with its reader — the doctor portal reads what a patient consented to share, the hospital
+  reads what it uploaded, and both are looking at the same response — so one document
+  described two ways by two PulseOS screens would be a defect, not a nuance. The doctor
+  portal's `record/view.ts` is now re-exports; its 124 tests pass untouched.
+  `canStartDownload` and `downloadOutcome` are functions rather than inline conditions
+  specifically so the duplicate-click guard is unit-testable without a DOM: the server records
+  a download when it *issues* the link, so a second click writes a second entry on the
+  patient's trail for one intention, and a `disabled` attribute alone cannot prevent it
+  because it only settles on the next render. Both portals' hooks now share them.
+- **Hospital portal — Slice 3, upload for a Health ID.** The hospital half of
+  `POST /api/v1/records` (multipart), in `upload/{api,view,useRecordUpload}` with dumb
+  components: Health ID, file, category, date of service, optional description, then a receipt
+  naming the patient the document was filed against.
+  **The Health ID is the whole risk surface here, and the UI is built around that.** A hospital
+  administrator cannot look a patient up — `/records/existence` is DOCTOR-only — and no
+  endpoint edits or deletes a record afterwards, so a well-formed ID belonging to the wrong
+  patient is unrecoverable from this portal. The field therefore leads the form, carries a
+  standing caution to read the ID back from the patient's card, and the receipt repeats the ID
+  rather than redirecting away. Shape validation matches the doctor portal's — prefix, year,
+  seven characters — and deliberately stops short of ISO 7064, which lives once in
+  `patients/health_id.py`; a test pins that a wrong check character passes locally and is left
+  to the server's 422. A PENDING hospital gets the form disabled with its verification notice
+  instead of a 409 after the file has been transferred, and each of the eight failure statuses
+  is worded as something a receptionist can act on.
+- **`toFormData` and `todayIsoDate` promoted into `@pulseos/ui`.** Both were about to have a
+  second copy — the hospital upload sends the same multipart shape to the same endpoint as the
+  patient locker, and needs the same local-timezone "today" for the same reason (deriving it
+  from an ISO string uses UTC and, west of Greenwich in the evening, offers a "today" the API
+  rejects as future-dated). The patient app re-exports both from its own `records/{api,view}`,
+  so nothing else there moved. Behaviour-neutral and measured: patient bundle byte-identical in
+  size (653,301 B), CSS hash unchanged, its 121 tests untouched.
 - **Hospital portal — Slice 2, doctor management.** The roster (`GET /hospitals/me/doctors`)
   plus activate and deactivate, in `doctors/{api,view,useDoctors}` with dumb components — the
   only surface anywhere for ADR-015 step 3. Sectioned so whoever is waiting on the

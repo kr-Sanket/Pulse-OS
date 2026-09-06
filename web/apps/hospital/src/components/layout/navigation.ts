@@ -5,10 +5,16 @@
 // with its heading via aria-labelledby, so the grouping reaches assistive technology and is
 // not merely visual.
 //
-// Only what the portal actually routes to. Uploads and the record listing arrive with
-// their own slices and their own entries.
+// Only what the portal actually routes to.
 
-import { Building2, LayoutDashboard, Stethoscope, type LucideIcon } from "lucide-react";
+import {
+  Building2,
+  FolderOpen,
+  LayoutDashboard,
+  Stethoscope,
+  Upload,
+  type LucideIcon,
+} from "lucide-react";
 
 export interface NavItem {
   /** Route path, matched exactly for "/" and by prefix otherwise. */
@@ -33,6 +39,10 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       // No count badge on the pending doctors: there is no aggregate endpoint, and a live
       // count would mean the layout fetching the roster on every route.
       { to: "/doctors", label: "Doctors", title: "Doctors", icon: Stethoscope },
+      { to: "/upload", label: "Upload a Record", title: "Upload a record", icon: Upload },
+      // No count badge: there is no aggregate endpoint, and a live count would mean the
+      // layout fetching the listing on every route.
+      { to: "/uploads", label: "Uploaded Records", title: "Uploaded records", icon: FolderOpen },
     ],
   },
   {

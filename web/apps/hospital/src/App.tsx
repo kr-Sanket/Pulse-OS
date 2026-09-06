@@ -13,6 +13,9 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { DoctorsPage } from "./pages/DoctorsPage";
 import { HospitalPage } from "./pages/HospitalPage";
 import { LoginPage } from "./pages/LoginPage";
+import { UploadDetailPage } from "./pages/UploadDetailPage";
+import { UploadPage } from "./pages/UploadPage";
+import { UploadsPage } from "./pages/UploadsPage";
 import { RegisterPage } from "./pages/RegisterPage";
 
 export function App() {
@@ -45,6 +48,10 @@ export function App() {
           >
             <Route path="/" element={<DashboardPage />} />
             <Route path="/doctors" element={<DoctorsPage />} />
+            <Route path="/upload" element={<UploadPage />} />
+            <Route path="/uploads" element={<UploadsPage />} />
+            {/* Addressed by record id alone, so a pasted URL still opens the record. */}
+            <Route path="/uploads/:recordId" element={<UploadDetailPage />} />
             <Route path="/hospital" element={<HospitalPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

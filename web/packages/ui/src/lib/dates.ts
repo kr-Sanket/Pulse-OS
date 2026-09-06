@@ -79,3 +79,14 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
   }
   return RELATIVE.format(Math.round(seconds / MONTH), "month");
 }
+
+/** Today as yyyy-mm-dd in the reader's own time zone — an upload form's default and its
+ * ceiling. Deriving it from an ISO string would use UTC and, west of Greenwich in the
+ * evening, offer a "today" the API would reject as being in the future. */
+export function todayIsoDate(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = `${now.getMonth() + 1}`.padStart(2, "0");
+  const day = `${now.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}

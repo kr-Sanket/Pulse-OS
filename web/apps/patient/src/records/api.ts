@@ -11,7 +11,7 @@
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
 
-import { attempt, failure, statusFailure, type ApiResult } from "@pulseos/ui";
+import { attempt, failure, statusFailure, toFormData, type ApiResult } from "@pulseos/ui";
 
 export type RecordMetadata = components["schemas"]["RecordMetadataResponse"];
 export type RecordPage = components["schemas"]["RecordListResponse"];
@@ -20,6 +20,9 @@ export type DownloadUrl = components["schemas"]["DownloadUrlResponse"];
 // The category vocabulary is shared with Consent and lives in lib/; re-exported here so
 // this module stays the one place the Records page imports its API from.
 export { categoryLabel, categoryLabels, listCategories, type RecordCategory } from "@pulseos/ui";
+// Multipart serialiser for the upload below; shared because both portals that upload send
+// the same shape. Re-exported so this module stays the one place the Records page imports from.
+export { toFormData } from "@pulseos/ui";
 export type { ApiResult } from "@pulseos/ui";
 
 /** Asked for on every listing: the API caps a page at 100 and the page has no pager. */
@@ -94,18 +97,6 @@ export interface RecordUpload {
   /** ISO calendar date (yyyy-mm-dd), as the date input produces it. */
   dateOfService: string;
   description: string | null;
-}
-
-/** Multipart, not JSON: openapi-fetch hands the body to this serializer instead. */
-export function toFormData(body: unknown): FormData {
-  const form = new FormData();
-  for (const [field, value] of Object.entries(body as Record<string, unknown>)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    form.append(field, value instanceof Blob ? value : String(value));
-  }
-  return form;
 }
 
 /** Upload one document to the patient's own locker. `patientHealthId` is deliberately

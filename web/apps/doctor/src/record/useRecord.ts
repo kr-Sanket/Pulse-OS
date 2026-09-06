@@ -13,9 +13,10 @@ import { useApiResource } from "@pulseos/ui";
 import { api } from "@/api";
 
 import { createDownloadUrl, getRecord } from "./api";
+import { canStartDownload, downloadOutcome } from "@pulseos/ui";
+
 import {
   DOWNLOAD_IDLE,
-  POPUP_BLOCKED,
   toRecordDetailView,
   type DownloadState,
   type RecordDetailView,
@@ -48,7 +49,7 @@ export function useRecord(recordId: string): RecordResource {
     // The URL is presigned, short-lived, and served as an attachment, so opening it
     // downloads the file and leaves the portal mounted in this tab.
     const opened = window.open(result.data.url, "_blank", "noopener");
-    setDownload(opened === null ? { kind: "failed", message: POPUP_BLOCKED } : DOWNLOAD_IDLE);
+    setDownload(downloadOutcome(opened !== null));
   }
 
   return {
@@ -59,7 +60,7 @@ export function useRecord(recordId: string): RecordResource {
     startDownload: () => {
       // The guard is here rather than on the button so a second click cannot slip through
       // between renders: one intention must not become two audited downloads.
-      if (download.kind !== "preparing") {
+      if (canStartDownload(download)) {
         void run();
       }
     },

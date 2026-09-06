@@ -39,7 +39,7 @@ export function categoryStyle(code: string): CategoryStyle {
 // Date and size formatting are portal-wide and live in the shared package; re-exported
 // here because the records components and their tests import everything they render
 // through this module.
-export { formatCalendarDate, formatFileSize, formatInstantDate } from "@pulseos/ui";
+export { formatCalendarDate, formatFileSize, formatInstantDate, todayIsoDate } from "@pulseos/ui";
 
 /** Who the record came from. A locker upload has no hospital — the patient added it. */
 export function providerLabel(record: RecordMetadata): string {
@@ -71,15 +71,4 @@ export function matchesQuery(record: RecordMetadata, query: string): boolean {
     record.categoryDisplayName,
     providerLabel(record),
   ].some((field) => field.toLowerCase().includes(needle));
-}
-
-/** Today as yyyy-mm-dd in the reader's own time zone — the upload form's default and its
- * ceiling. Deriving it from an ISO string would use UTC and, west of Greenwich in the
- * evening, offer a "today" the API would reject as being in the future. */
-export function todayIsoDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = `${now.getMonth() + 1}`.padStart(2, "0");
-  const day = `${now.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
