@@ -12,6 +12,7 @@ import { HospitalLayout } from "./components/layout/HospitalLayout";
 import { DashboardPage } from "./pages/DashboardPage";
 import { HospitalPage } from "./pages/HospitalPage";
 import { LoginPage } from "./pages/LoginPage";
+import { RegisterPage } from "./pages/RegisterPage";
 
 export function App() {
   return (
@@ -19,6 +20,16 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          {/* Onboarding needs a signed-in account but no hospital, so it sits behind the
+              guard and outside the navigation shell. */}
+          <Route
+            path="/register"
+            element={
+              <ProtectedRoute>
+                <RegisterPage />
+              </ProtectedRoute>
+            }
+          />
           {/* "/" is the canonical dashboard URL and "/dashboard" is the spelling people type.
               Redirecting rather than rendering the page twice keeps one URL authoritative, so
               the sidebar's active state, the top-bar title and the browser history cannot

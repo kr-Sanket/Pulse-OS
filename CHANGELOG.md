@@ -27,6 +27,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   directory instead of two divergent ones.
 
 ### Added
+- **Hospital portal — Slice 1, identity and registration.** `GET /hospitals/me` behind
+  `profile/{api,view,useHospitalProfile}` and `POST /hospitals/register` behind
+  `register/{api,view,useHospitalRegistration}`, in the layering the other portals use: the
+  generated client is touched only by `api.ts`, every string the UI shows is worded in
+  `view.ts`, and the components are dumb. 403 and 404 on `/hospitals/me` are read as
+  *unregistered* rather than as failures, so a fresh account is routed to onboarding instead of
+  an error screen — the pattern the doctor portal established. Screens: a dashboard and a My
+  Hospital page (name, `HID-XXXX`, address, administrator, registration date, verification
+  badge) plus an onboarding page outside the navigation shell.
+  **The PENDING state is stated in terms of what it blocks** — doctors cannot register to the
+  hospital and no records can be uploaded — because those are the two things ADR-015 actually
+  refuses, and a badge that only said "Pending" would leave an administrator guessing why
+  nothing works. Verification is reported, never offered: only a SYSTEM_ADMIN can grant it, so
+  a button here would always 403. The registration form warns that it creates a *new* hospital;
+  there is no endpoint that adds a second administrator to an existing one, so an unwarned
+  administrator would silently end up with a duplicate organisation under a different HID.
+  Also fixes a Slice 0 gap: `apps/hospital/tsconfig.json` had no `@/*` path mapping — Vite had
+  the alias, TypeScript did not, and Slice 0 used no `@/` imports so nothing surfaced it.
+  Web tests 255 → 277. No backend, API, OpenAPI or generated-client changes.
+- **Hospital portal — Slice 0, the application shell.** The third portal is no longer an M0.1
+  scaffold: Tailwind v4 + `@pulseos/ui/tokens.css` + the `@source` line the shared primitives
+  need, `src/api.ts` (the single client instance), Google sign-in via the shared
+  `AuthContextProvider`, `ProtectedRoute` around `HospitalLayout`, and a Sidebar/TopBar shell
+  driven by one `navigation.ts`. Routes `/login`, `/`, `/hospital`, with `/dashboard`
+  redirecting to `/` so one URL stays canonical. No new dependencies — everything resolved from
+  the existing lockfile. The auth layer and every UI primitive come from `@pulseos/ui`; nothing
+  was duplicated to make this portal work, which was the point of hoisting the kit first.
 - **M4.3 `GET /api/v1/granted-records` (ADR-020)** — the step the consent flow was missing: a
   clinician holding a grant could not obtain a single `record_id`, because `GET /records` is
   patient/hospital-only, `/records/existence` returns no identifiers, `/consent-grants` is
