@@ -12,11 +12,10 @@
 import { HeartPulse } from "lucide-react";
 import { Navigate } from "react-router-dom";
 
-import { LoadingScreen } from "@pulseos/ui";
+import { Card, CardContent, LoadingScreen } from "@pulseos/ui";
 
 import { ErrorState } from "@/components/common/ErrorState";
 import { SectionCard } from "@/components/shell/SectionCard";
-import { Card, CardContent } from "@/components/ui/card";
 import { ClinicianIdentityCard } from "@/profile/components/ClinicianIdentityCard";
 import { StatusNotice } from "@/profile/components/StatusNotice";
 import { useDoctorProfile } from "@/profile/useDoctorProfile";

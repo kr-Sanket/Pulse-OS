@@ -6,8 +6,7 @@
 
 import { FolderOpen, Upload } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button, Card, CardContent } from "@pulseos/ui";
 
 export interface EmptyRecordsStateProps {
   /** A filter or search term is narrowing the list, rather than the account being empty. */

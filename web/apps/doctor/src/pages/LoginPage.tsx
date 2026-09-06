@@ -5,10 +5,7 @@ import { HeartPulse } from "lucide-react";
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
 
-import { LoadingScreen, useAuth } from "@pulseos/ui";
-
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button, Card, CardContent, LoadingScreen, useAuth } from "@pulseos/ui";
 
 export function LoginPage() {
   const { user, initializing, signIn } = useAuth();

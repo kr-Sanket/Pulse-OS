@@ -10,10 +10,8 @@ import { Building2, Check, X } from "lucide-react";
 import { Detail } from "@/components/common/Detail";
 import { IconChip } from "@/components/dashboard/IconChip";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Badge, Button, Card, CardContent, Separator } from "@pulseos/ui";
+
 import type { DecisionKind } from "@/consent/api";
 import type { ConsentRequestView } from "@/consent/view";
 

@@ -17,8 +17,8 @@ import { ActiveGrantCard } from "@/components/grants/ActiveGrantCard";
 import { GrantSummaryCard } from "@/components/grants/GrantSummaryCard";
 import { GrantsSkeleton } from "@/components/grants/GrantsSkeleton";
 import { PrivacyReminderCard } from "@/components/grants/PrivacyReminderCard";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@pulseos/ui";
+
 import { useGrants } from "@/grants/useGrants";
 import { EXPIRING_SOON_DAYS, type GrantGroupView } from "@/grants/view";
 

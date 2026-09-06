@@ -11,7 +11,8 @@
 import { Download, Loader2, TriangleAlert } from "lucide-react";
 
 import { SectionCard } from "@/components/shell/SectionCard";
-import { Button } from "@/components/ui/button";
+import { Button } from "@pulseos/ui";
+
 import type { DownloadState } from "@/record/view";
 
 export interface RecordActionsProps {

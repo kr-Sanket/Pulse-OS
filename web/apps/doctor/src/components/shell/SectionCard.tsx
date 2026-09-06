@@ -4,9 +4,7 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { cn } from "@pulseos/ui";
-
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, cn } from "@pulseos/ui";
 
 export interface SectionCardProps {
   title: string;

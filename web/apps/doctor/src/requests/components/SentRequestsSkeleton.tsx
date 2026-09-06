@@ -1,9 +1,7 @@
 // Placeholder cards while the listing loads. Mirrors SentRequestCard's geometry — chip,
 // title row, the fact grid — so the page does not jump when the real requests land.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Separator, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_CARDS = ["first", "second"];
 const PLACEHOLDER_FACTS = ["purpose", "records", "requested", "deadline"];

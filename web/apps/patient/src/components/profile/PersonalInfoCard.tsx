@@ -4,7 +4,8 @@
 // identity provider. The rest have no backend column yet and say so — see profile/view.ts.
 
 import { Detail } from "@/components/common/Detail";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@pulseos/ui";
+
 import { personalInfoFor, type ProfileIdentity } from "@/profile/view";
 import type { PatientProfile } from "@pulseos/api-client";
 

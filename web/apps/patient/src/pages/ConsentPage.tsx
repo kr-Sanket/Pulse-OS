@@ -17,8 +17,8 @@ import { ConsentInboxSkeleton } from "@/components/consent/ConsentInboxSkeleton"
 import { ConsentInfoCard } from "@/components/consent/ConsentInfoCard";
 import { DecidedConsentCard } from "@/components/consent/DecidedConsentCard";
 import { PendingRequestCard } from "@/components/consent/PendingRequestCard";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@pulseos/ui";
+
 import { useConsentInbox } from "@/consent/useConsentInbox";
 import type { RequestBucket, RequestBuckets } from "@/consent/view";
 

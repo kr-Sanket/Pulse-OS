@@ -5,8 +5,8 @@
 import { ArrowRight, ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Badge, Skeleton } from "@pulseos/ui";
+
 import type { ActivityEntry } from "@/dashboard/view";
 
 import { IconChip } from "./IconChip";

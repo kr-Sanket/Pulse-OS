@@ -7,9 +7,8 @@
 import { UserPlus } from "lucide-react";
 import type { FormEvent } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button, Input, Label } from "@pulseos/ui";
+
 import {
   MAX_FULL_NAME_LENGTH,
   MAX_HOSPITAL_HID_LENGTH,

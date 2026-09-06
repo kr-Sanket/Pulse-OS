@@ -22,7 +22,6 @@ import { RecordFilters } from "@/components/records/RecordFilters";
 import { RecordListSkeleton } from "@/components/records/RecordListSkeleton";
 import { ErrorState } from "@/components/common/ErrorState";
 import { UploadRecordDialog } from "@/components/records/UploadRecordDialog";
-import { Button } from "@/components/ui/button";
 import {
   createDownloadUrl,
   getRecord,
@@ -30,7 +29,7 @@ import {
   listRecords,
   type RecordMetadata,
 } from "@/records/api";
-import { useApiResource } from "@pulseos/ui";
+import { Button, useApiResource } from "@pulseos/ui";
 import { matchesQuery } from "@/records/view";
 
 interface DownloadFailure {

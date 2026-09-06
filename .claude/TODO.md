@@ -138,8 +138,6 @@ Each is a stated security or correctness gap. **M3-D is now the most urgent** �
 - Synthetic medical-record generator for realistic seed/eval data (needed by M5 evals).
 - Content sniffing (magic bytes) on uploads — currently trusts the declared content type after
   allowlisting; revisit in the M7 security pass.
-- Hoist the shadcn UI kit into `@pulseos/ui` — do it when the hospital portal makes a third
-  copy of the primitives.
 - Per-hospital breakdown on `GET /records/existence` (SYSTEM_ARCHITECTURE:67 mentions it;
   shipped category-only because naming the organisations is a disclosure the patient has not
   consented to).

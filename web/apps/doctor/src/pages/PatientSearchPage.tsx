@@ -9,8 +9,8 @@ import { useEffect, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { SectionCard } from "@/components/shell/SectionCard";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@pulseos/ui";
+
 import { CategoryResults } from "@/existence/components/CategoryResults";
 import { PatientSearchForm } from "@/existence/components/PatientSearchForm";
 import { useRecordExistence } from "@/existence/useRecordExistence";

@@ -9,7 +9,8 @@ import { Navigate, useNavigate } from "react-router-dom";
 
 import { ErrorState } from "@/components/common/ErrorState";
 import { SectionCard } from "@/components/shell/SectionCard";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@pulseos/ui";
+
 import { PatientSearchForm } from "@/existence/components/PatientSearchForm";
 import { ClinicianIdentityCard } from "@/profile/components/ClinicianIdentityCard";
 import { ClinicianIdentitySkeleton } from "@/profile/components/ClinicianIdentitySkeleton";

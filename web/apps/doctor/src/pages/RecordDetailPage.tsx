@@ -13,7 +13,8 @@ import { ArrowLeft } from "lucide-react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { ErrorState } from "@/components/common/ErrorState";
-import { Button } from "@/components/ui/button";
+import { Button } from "@pulseos/ui";
+
 import { RecordActions } from "@/record/components/RecordActions";
 import { RecordMetadataCard } from "@/record/components/RecordMetadataCard";
 import { RecordSkeleton } from "@/record/components/RecordSkeleton";

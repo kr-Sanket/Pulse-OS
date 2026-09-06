@@ -21,8 +21,8 @@ import { ReviewQueueCard } from "@/components/dashboard/ReviewQueueCard";
 import { SectionCard } from "@/components/dashboard/SectionCard";
 import { StatCard } from "@/components/dashboard/StatCard";
 import { StatCardSkeleton } from "@/components/dashboard/StatCardSkeleton";
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Skeleton } from "@pulseos/ui";
+
 import { useDashboard } from "@/dashboard/useDashboard";
 import { firstNameOf, HERO, QUICK_ACTIONS } from "@/dashboard/view";
 

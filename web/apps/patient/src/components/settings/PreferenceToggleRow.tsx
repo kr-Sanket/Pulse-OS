@@ -4,7 +4,8 @@
 // can restore them together. The switch is named by its label and described by the line
 // under it, since a Radix switch is a button and cannot be wrapped by a <label>.
 
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@pulseos/ui";
+
 import type { PreferenceToggle } from "@/data/settings";
 
 export interface PreferenceToggleRowProps {

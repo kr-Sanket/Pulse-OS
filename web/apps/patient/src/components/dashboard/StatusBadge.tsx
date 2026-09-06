@@ -3,8 +3,7 @@
 
 import type { ReactNode } from "react";
 
-import { Badge } from "@/components/ui/badge";
-import { cn } from "@pulseos/ui";
+import { Badge, cn } from "@pulseos/ui";
 
 export type Tone = "success" | "warning" | "info" | "destructive" | "neutral" | "primary";
 

@@ -4,7 +4,8 @@
 import { ShieldQuestion } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@pulseos/ui";
+
 import type { ReviewRequest } from "@/dashboard/view";
 
 import { SectionCard } from "./SectionCard";

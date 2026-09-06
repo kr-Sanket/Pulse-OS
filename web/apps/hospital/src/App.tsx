@@ -1,10 +1,42 @@
-// M0.1 scaffold shell — real screens arrive with their milestones (.claude/ROADMAP.md).
+// Hospital portal routes.
+//
+// /login is public. Everything else renders inside HospitalLayout behind ProtectedRoute:
+// the guard wraps the layout once, so each page below is a plain <Outlet /> child and no
+// page repeats the auth check.
+
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
+import { AuthContextProvider, ProtectedRoute } from "@pulseos/ui";
+
+import { HospitalLayout } from "./components/layout/HospitalLayout";
+import { DashboardPage } from "./pages/DashboardPage";
+import { HospitalPage } from "./pages/HospitalPage";
+import { LoginPage } from "./pages/LoginPage";
 
 export function App() {
   return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem" }}>
-      <h1>PulseOS — Hospital Portal</h1>
-      <p>Engineering scaffold (M0.1). No features yet.</p>
-    </main>
+    <AuthContextProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          {/* "/" is the canonical dashboard URL and "/dashboard" is the spelling people type.
+              Redirecting rather than rendering the page twice keeps one URL authoritative, so
+              the sidebar's active state, the top-bar title and the browser history cannot
+              disagree about where the user is. */}
+          <Route path="/dashboard" element={<Navigate to="/" replace />} />
+          <Route
+            element={
+              <ProtectedRoute>
+                <HospitalLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/hospital" element={<HospitalPage />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthContextProvider>
   );
 }

@@ -11,7 +11,7 @@
 import { Bell, Menu, Search } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@pulseos/ui";
 
 import { titleForPath } from "./navigation";
 

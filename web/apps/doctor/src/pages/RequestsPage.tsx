@@ -11,9 +11,8 @@ import { Inbox, Send } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { ErrorState } from "@/components/common/ErrorState";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Badge, Button, Card, CardContent } from "@pulseos/ui";
+
 import { SentRequestCard } from "@/requests/components/SentRequestCard";
 import { SentRequestsSkeleton } from "@/requests/components/SentRequestsSkeleton";
 import { useSentRequests } from "@/requests/useSentRequests";

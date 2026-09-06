@@ -3,8 +3,7 @@
 
 import { RotateCcw, TriangleAlert } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button, Card, CardContent } from "@pulseos/ui";
 
 export interface ProfileErrorStateProps {
   message: string;

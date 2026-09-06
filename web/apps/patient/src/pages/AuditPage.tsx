@@ -20,8 +20,8 @@ import { AuditSummaryCard } from "@/components/audit/AuditSummaryCard";
 import { AuditTimelineItem } from "@/components/audit/AuditTimelineItem";
 import { AuditTimelineSkeleton } from "@/components/audit/AuditTimelineSkeleton";
 import { ErrorState } from "@/components/common/ErrorState";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@pulseos/ui";
+
 import { useAudit } from "@/audit/useAudit";
 
 export function AuditPage() {

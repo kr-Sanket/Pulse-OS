@@ -12,8 +12,8 @@ import { ArrowLeft, FolderOpen } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import { ErrorState } from "@/components/common/ErrorState";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge, Button } from "@pulseos/ui";
+
 import { EmptyGrantedRecords } from "@/granted/components/EmptyGrantedRecords";
 import { GrantedRecordList } from "@/granted/components/GrantedRecordList";
 import { GrantedRecordsSkeleton } from "@/granted/components/GrantedRecordsSkeleton";

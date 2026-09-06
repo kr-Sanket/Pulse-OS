@@ -1,0 +1,17 @@
+/* Global stylesheet for the hospital portal.
+ *
+ * Identical wiring to the other two portals: Tailwind CSS v4 configured from CSS only, with
+ * the PulseOS palette imported from the shared package so the three surfaces cannot drift
+ * apart (ADR-003).
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@pulseos/ui/tokens.css";
+
+/* The shadcn primitives live in @pulseos/ui, and Tailwind v4's automatic source detection
+ * skips node_modules — which is where pnpm's workspace symlink puts the package. Without
+ * this line the primitives' utility classes are never generated and every button, card and
+ * badge renders unstyled. Pointed at the package source directly rather than at the symlink
+ * so the path does not depend on how the workspace is linked. */
+@source "../../../packages/ui/src";

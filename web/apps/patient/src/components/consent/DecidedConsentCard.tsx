@@ -9,8 +9,8 @@ import { Building2, Eye } from "lucide-react";
 
 import { IconChip } from "@/components/dashboard/IconChip";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button, Card, CardContent } from "@pulseos/ui";
+
 import type { ConsentRequestView } from "@/consent/view";
 
 export interface DecidedConsentCardProps {

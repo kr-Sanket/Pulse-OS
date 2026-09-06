@@ -9,9 +9,8 @@ import { UserRound } from "lucide-react";
 import { Detail } from "@/components/common/Detail";
 import { IconChip } from "@/components/shell/IconChip";
 import { StatusBadge } from "@/components/shell/StatusBadge";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Badge, Card, CardContent, Separator } from "@pulseos/ui";
+
 import type { SentRequestView } from "@/requests/view";
 
 export interface SentRequestCardProps {

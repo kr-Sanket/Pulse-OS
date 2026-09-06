@@ -8,7 +8,7 @@
 // A Radix switch is a button and cannot be wrapped by a <label>, so it is named and
 // described by the two lines beside it, the same way the Settings toggles are.
 
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@pulseos/ui";
 
 export interface AuditActivityToggleProps {
   checked: boolean;

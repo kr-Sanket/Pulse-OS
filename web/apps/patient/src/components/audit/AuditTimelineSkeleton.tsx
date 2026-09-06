@@ -2,8 +2,7 @@
 // connector, card with a two-fact grid and a timestamp row — so the timeline does not jump
 // when the real events land.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_ITEMS = ["first", "second", "third"];
 const PLACEHOLDER_FACTS = ["records", "hash"];

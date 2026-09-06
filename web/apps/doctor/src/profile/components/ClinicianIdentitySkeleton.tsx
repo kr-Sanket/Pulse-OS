@@ -1,9 +1,7 @@
 // Placeholder for the identity card while GET /doctors/me is in flight. Shaped like the
 // card it stands in for, so neither page reflows when the profile lands.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Separator, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_FACTS = ["hospital", "specialty", "registration"];
 

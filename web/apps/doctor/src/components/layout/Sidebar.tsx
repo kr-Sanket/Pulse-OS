@@ -5,11 +5,16 @@
 import { HeartPulse, LogOut } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
-import { cn, initialsFor, useAuth } from "@pulseos/ui";
-
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+  Button,
+  cn,
+  initialsFor,
+  Separator,
+  useAuth,
+} from "@pulseos/ui";
 
 import { NAV_SECTIONS, navSectionId } from "./navigation";
 

@@ -7,7 +7,8 @@
 import { UserRound } from "lucide-react";
 
 import { IconChip } from "@/components/dashboard/IconChip";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@pulseos/ui";
+
 import { EMERGENCY_CONTACT_EMPTY } from "@/profile/view";
 
 export function EmergencyContactCard() {

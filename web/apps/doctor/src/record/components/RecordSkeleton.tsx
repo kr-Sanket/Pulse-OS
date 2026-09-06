@@ -2,9 +2,7 @@
 // file card — badge row, separator, two-column fact grid, then the action block — so the
 // page does not jump when the record lands.
 
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardHeader, Separator, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_FACTS = ["service", "uploaded", "origin", "hospital", "filename", "file"];
 

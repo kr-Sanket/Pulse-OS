@@ -9,7 +9,8 @@ import { Building2 } from "lucide-react";
 
 import { IconChip } from "@/components/dashboard/IconChip";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@pulseos/ui";
+
 import type { Tone } from "@/components/dashboard/StatusBadge";
 import type { GrantGroupView } from "@/grants/view";
 

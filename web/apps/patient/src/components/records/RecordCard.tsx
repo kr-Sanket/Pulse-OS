@@ -7,9 +7,6 @@
 import { Building2, CalendarDays } from "lucide-react";
 
 import { IconChip } from "@/components/dashboard/IconChip";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import type { RecordMetadata } from "@/records/api";
 import {
   categoryStyle,
@@ -18,7 +15,7 @@ import {
   recordDescription,
   recordTitle,
 } from "@/records/view";
-import { cn } from "@pulseos/ui";
+import { Badge, Button, Card, CardContent, cn } from "@pulseos/ui";
 
 export interface RecordCardProps {
   record: RecordMetadata;

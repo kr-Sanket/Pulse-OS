@@ -15,7 +15,7 @@ import { Pencil } from "lucide-react";
 
 import type { PatientProfile } from "@pulseos/api-client";
 
-import { useAuth } from "@pulseos/ui";
+import { Button, useAuth } from "@pulseos/ui";
 import { EmergencyContactCard } from "@/components/profile/EmergencyContactCard";
 import { PersonalInfoCard } from "@/components/profile/PersonalInfoCard";
 import { ProfileErrorState } from "@/components/profile/ProfileErrorState";
@@ -23,7 +23,6 @@ import { ProfileInfoCard } from "@/components/profile/ProfileInfoCard";
 import { ProfileSkeleton } from "@/components/profile/ProfileSkeleton";
 import { ProfileSummaryCard } from "@/components/profile/ProfileSummaryCard";
 import { SecurityCard } from "@/components/profile/SecurityCard";
-import { Button } from "@/components/ui/button";
 import { useProfile } from "@/profile/useProfile";
 import { accountFacts, resolveIdentity, type SignedInIdentity } from "@/profile/view";
 

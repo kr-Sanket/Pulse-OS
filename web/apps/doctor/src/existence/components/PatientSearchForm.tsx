@@ -4,9 +4,7 @@
 import { Search } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button, Input, Label } from "@pulseos/ui";
 
 export interface PatientSearchFormProps {
   /** Prefills the field — the dashboard hands a Health ID over through the URL. */

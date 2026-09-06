@@ -9,10 +9,8 @@
 import { Download, Printer, Share2 } from "lucide-react";
 
 import { IconChip } from "@/components/dashboard/IconChip";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Badge, Button, Card, CardContent, Separator } from "@pulseos/ui";
+
 import type { RecordMetadata } from "@/records/api";
 import {
   categoryStyle,

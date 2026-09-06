@@ -9,18 +9,19 @@ import { Check, Send, ShieldCheck } from "lucide-react";
 import type { FormEvent } from "react";
 
 import type { RecordCategory } from "@/existence/api";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
+  Badge,
+  Button,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+  Label,
+  Textarea,
+} from "@pulseos/ui";
+
 import { MAX_PURPOSE_LENGTH } from "@/requests/api";
 import { purposeRemaining } from "@/requests/view";
 import type { SubmitState } from "@/requests/useAccessRequest";

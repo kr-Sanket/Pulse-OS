@@ -12,8 +12,8 @@
 import { FolderOpen, ShieldQuestion } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button, Card, CardContent } from "@pulseos/ui";
+
 import { joinCategories } from "@/granted/view";
 
 export type EmptyGrantedRecordsProps =

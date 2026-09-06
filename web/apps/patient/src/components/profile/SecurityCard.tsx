@@ -7,7 +7,8 @@
 
 import { Detail } from "@/components/common/Detail";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@pulseos/ui";
+
 import { securityFacts, type ProfileIdentity } from "@/profile/view";
 
 export interface SecurityCardProps {

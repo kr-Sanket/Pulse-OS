@@ -10,8 +10,8 @@ import { IdCard } from "lucide-react";
 import { Detail } from "@/components/common/Detail";
 import { IconChip } from "@/components/shell/IconChip";
 import { StatusBadge } from "@/components/shell/StatusBadge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Card, CardContent, Separator } from "@pulseos/ui";
+
 import type { DoctorIdentityView } from "@/profile/view";
 
 export interface ClinicianIdentityCardProps {

@@ -7,9 +7,8 @@
 
 import { Search } from "lucide-react";
 
-import { Skeleton } from "@/components/ui/skeleton";
 import type { RecordCategory } from "@/records/api";
-import { cn } from "@pulseos/ui";
+import { cn, Skeleton } from "@pulseos/ui";
 
 export interface RecordFiltersProps {
   categories: readonly RecordCategory[];

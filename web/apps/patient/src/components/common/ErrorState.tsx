@@ -6,8 +6,7 @@
 
 import { RotateCcw, TriangleAlert } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Button, Card, CardContent } from "@pulseos/ui";
 
 export interface ErrorStateProps {
   /** What could not be loaded, as a sentence. */

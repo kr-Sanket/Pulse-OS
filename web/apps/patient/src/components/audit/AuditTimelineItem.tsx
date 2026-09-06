@@ -12,8 +12,8 @@ import { CalendarDays, Clock } from "lucide-react";
 import { Detail } from "@/components/common/Detail";
 import { IconChip } from "@/components/dashboard/IconChip";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Badge, Card, CardContent } from "@pulseos/ui";
+
 import type { AuditEventView } from "@/audit/view";
 
 export interface AuditTimelineItemProps {

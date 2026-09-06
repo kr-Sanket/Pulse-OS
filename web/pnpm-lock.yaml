@@ -105,16 +105,25 @@ importers:
       '@pulseos/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      lucide-react:
+        specifier: ^1.38.0
+        version: 1.38.0(react@19.2.7)
       react:
         specifier: ^19.1.0
         version: 19.2.7
       react-dom:
         specifier: ^19.1.0
         version: 19.2.7(react@19.2.7)
+      react-router-dom:
+        specifier: ^7.18.3
+        version: 7.18.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
     devDependencies:
       '@pulseos/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@tailwindcss/vite':
+        specifier: ^4.3.3
+        version: 4.3.3(vite@6.4.3(@types/node@26.4.0)(jiti@2.7.0)(lightningcss@1.32.0))
       '@types/react':
         specifier: ^19.1.0
         version: 19.2.17
@@ -124,12 +133,24 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^4.3.0
         version: 4.7.0(vite@6.4.3(@types/node@26.4.0)(jiti@2.7.0)(lightningcss@1.32.0))
+      shadcn:
+        specifier: ^4.19.1
+        version: 4.19.1(typescript@5.9.3)
+      tailwindcss:
+        specifier: ^4.3.3
+        version: 4.3.3
+      tw-animate-css:
+        specifier: ^1.4.0
+        version: 1.4.0
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
       vite:
         specifier: ^6.0.0
         version: 6.4.3(@types/node@26.4.0)(jiti@2.7.0)(lightningcss@1.32.0)
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.4.0)(vite@6.4.3(@types/node@26.4.0)(jiti@2.7.0)(lightningcss@1.32.0))
 
   apps/patient:
     dependencies:
@@ -227,12 +248,21 @@ importers:
       '@pulseos/api-client':
         specifier: workspace:*
         version: link:../api-client
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
       firebase:
         specifier: ^12.18.0
         version: 12.18.0
+      lucide-react:
+        specifier: ^1.38.0
+        version: 1.38.0(react@19.2.7)
+      radix-ui:
+        specifier: ^1.6.7
+        version: 1.6.7(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react:
         specifier: ^19.1.0
         version: 19.2.7

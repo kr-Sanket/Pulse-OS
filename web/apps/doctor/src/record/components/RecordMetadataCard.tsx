@@ -13,8 +13,8 @@ import { FileText } from "lucide-react";
 import { Detail } from "@/components/common/Detail";
 import { SectionCard } from "@/components/shell/SectionCard";
 import { StatusBadge } from "@/components/shell/StatusBadge";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { Badge, Separator } from "@pulseos/ui";
+
 import type { RecordDetailView } from "@/record/view";
 
 export interface RecordMetadataCardProps {

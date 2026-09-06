@@ -6,9 +6,7 @@ import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@pulseos/ui";
+import { Button, Card, CardContent, CardHeader, CardTitle, cn } from "@pulseos/ui";
 
 export interface SectionCardAction {
   label: string;

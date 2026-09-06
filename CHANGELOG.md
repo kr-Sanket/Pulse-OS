@@ -5,6 +5,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+### Changed
+- **The shadcn primitives are now shared** (`@pulseos/ui/src/components/ui/`), taken out of both
+  portals before the hospital portal made a third copy — the trigger TODO.md had recorded. All
+  nine primitives the two portals both held were **byte-identical**, so this is one
+  implementation promoted, not a merge: `avatar`, `badge`, `button`, `card`, `dialog`, `input`,
+  `label`, `separator`, `skeleton`, plus patient-only `select`/`switch` and doctor-only
+  `checkbox`/`textarea`, 13 in total. 69 files repointed to the barrel; `@/components/ui/*` no
+  longer resolves in either app. The apps' `components.json` moved to the package so
+  `shadcn add` cannot silently recreate a duplicate, and the primitives' `cn` import became
+  relative — a `@/` path inside a shared package resolves against the *consuming app's* `src`,
+  which is the one way this refactor could have broken at runtime.
+  **Each app now needs `@source "../../../packages/ui/src"` in its `index.css`:** Tailwind v4
+  scans files rather than the import graph and skips `node_modules`, where pnpm's workspace
+  symlink puts the package — without that line every primitive renders unstyled.
+  Behaviour-neutral, and measured as such: 249 web tests unchanged, both JS bundles unchanged
+  in size with each portal's `data-slot` inventory proving the unused primitives tree-shake
+  out, and a per-rule diff of the generated CSS showing **zero rules removed or altered** in
+  either portal. The CSS grows (+1.7 kB patient, +9.1 kB doctor, uncompressed) purely by
+  additions for primitives that portal does not yet render — the cost of scanning one shared
+  directory instead of two divergent ones.
+
 ### Added
 - **M4.3 `GET /api/v1/granted-records` (ADR-020)** — the step the consent flow was missing: a
   clinician holding a grant could not obtain a single `record_id`, because `GET /records` is

@@ -9,9 +9,7 @@
 import { HeartPulse, LogOut } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
-import { useAuth } from "@pulseos/ui";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage, Button, useAuth } from "@pulseos/ui";
 import { cn } from "@pulseos/ui";
 
 import { initialsFor } from "@pulseos/ui";

@@ -2,8 +2,7 @@
 // chip, title row, meta row, description, action — so the list does not jump when the real
 // data lands.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_ROWS = ["first", "second", "third"];
 

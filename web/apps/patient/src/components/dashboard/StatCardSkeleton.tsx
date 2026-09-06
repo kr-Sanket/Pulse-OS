@@ -1,8 +1,7 @@
 // Placeholder for one figure while its source loads. Mirrors StatCard's geometry — label
 // row, value, note — so the four-up row does not resize when the numbers arrive.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Skeleton } from "@pulseos/ui";
 
 export function StatCardSkeleton() {
   return (

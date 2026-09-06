@@ -2,9 +2,7 @@
 // title row, badge, the three-column fact grid — so the page does not jump when the real
 // records land.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Separator, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_CARDS = ["first", "second", "third"];
 const PLACEHOLDER_FACTS = ["service", "origin", "added"];

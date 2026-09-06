@@ -4,12 +4,17 @@
 // Name, Health ID and member-since come from GET /patients/me; email and photo from the
 // identity provider, which is the only thing that knows them.
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { Detail } from "@/components/common/Detail";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { initialsFor } from "@pulseos/ui";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+  Card,
+  CardContent,
+  initialsFor,
+  Separator,
+} from "@pulseos/ui";
 import type { AccountFacts, ProfileIdentity } from "@/profile/view";
 
 export interface ProfileSummaryCardProps {

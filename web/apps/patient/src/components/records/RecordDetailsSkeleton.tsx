@@ -1,9 +1,7 @@
 // Placeholder for the summary panel while GET /records/{id} is in flight, shaped like
 // RecordDetailsPanel so the column keeps its width and the page does not reflow.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Separator, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_ROWS = ["hospital", "service-date", "added", "file", "size", "description"];
 

@@ -3,7 +3,7 @@
 
 import type { LucideIcon } from "lucide-react";
 
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@pulseos/ui";
 
 import { SectionCard } from "./SectionCard";
 

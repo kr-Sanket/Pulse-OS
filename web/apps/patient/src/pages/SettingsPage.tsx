@@ -13,7 +13,8 @@ import { DataControlsCard } from "@/components/settings/DataControlsCard";
 import { LocaleCard } from "@/components/settings/LocaleCard";
 import { PreferenceGroupCard } from "@/components/settings/PreferenceGroupCard";
 import { SettingsInfoCard } from "@/components/settings/SettingsInfoCard";
-import { Button } from "@/components/ui/button";
+import { Button } from "@pulseos/ui";
+
 import {
   PREFERENCE_GROUPS,
   defaultPreferences,

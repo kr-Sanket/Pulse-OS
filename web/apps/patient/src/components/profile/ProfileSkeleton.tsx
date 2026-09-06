@@ -2,9 +2,7 @@
 // cards it stands in for — summary, personal information, then the two-up row — so the
 // page does not reflow when the real data lands.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Separator, Skeleton } from "@pulseos/ui";
 
 const SUMMARY_FACTS = ["health-id", "status", "member-since"];
 const PERSONAL_FIELDS = ["name", "email", "phone", "dob", "gender", "blood", "id", "nationality"];

@@ -13,11 +13,8 @@ import { FolderOpen, Send, ShieldQuestion } from "lucide-react";
 import { ErrorState } from "@/components/common/ErrorState";
 import { IconChip } from "@/components/shell/IconChip";
 import { SectionCard } from "@/components/shell/SectionCard";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Button, Card, CardContent, Checkbox, Label, Skeleton } from "@pulseos/ui";
+
 import type { SearchOutcome } from "@/existence/view";
 
 export interface CategorySelection {

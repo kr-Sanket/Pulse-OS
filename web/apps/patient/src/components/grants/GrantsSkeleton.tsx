@@ -2,9 +2,7 @@
 // title row, the four-fact grid, two actions — so the list does not jump when the real
 // grants land.
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, Separator, Skeleton } from "@pulseos/ui";
 
 const PLACEHOLDER_CARDS = ["first", "second"];
 const PLACEHOLDER_FACTS = ["purpose", "records", "granted", "expires"];
