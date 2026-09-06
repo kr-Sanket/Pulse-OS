@@ -40,11 +40,6 @@ Ordered by dependency. Each item is demonstrable on its own.
       names, is arguably something a patient should see; the lookup discloses more (a name), so
       one ruling should cover both. Adding a member is ADR-sized (ADR-018 is the precedent); a
       test currently pins the *absence* for existence.
-- [ ] BE: **local-dev identity script** (`scripts/dev_link_identity.py`) to attach a real
-      Firebase UID to a seeded staff row, replacing the raw SQL currently needed to obtain a
-      hospital-admin token. Must be loud, local-only and never importable by app code —
-      `auth/seed.py` refuses to plant login-capable identities *on purpose*, so this walks
-      around a deliberate guard and needs a conscious decision.
 - [ ] BE: **no code path provisions `Role.SYSTEM_ADMIN`**, so `POST /hospitals/{hid}/verify`
       has no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in
       demos because the three simulated hospitals are seeded `VERIFIED`.

@@ -8,6 +8,24 @@ Operational scripts (owned here, run from repo root):
   `web/packages/api-client/src/generated/schema.ts` (openapi-typescript). Also available
   as `make api-client`. Generated output is machine-owned — never hand-edit; review the
   `openapi.json` diff in PRs (unintended spec drift = wrong PR).
+- **`dev_link_identity.py`** — **local development only.** Attaches a real Firebase UID to
+  an existing *seeded* identity, so a Google account can sign in as e.g. the TMH demo
+  hospital admin without hand-written SQL. Creates nothing (no user, hospital, admin,
+  doctor or patient) and never chooses a role — the role comes from the row that already
+  exists. Refuses to run unless `PULSEOS_ENVIRONMENT=local` **and** the database host is
+  this machine; there is no `--force`, deliberately. Start with `--list`.
+
+  ```bash
+  backend/.venv/bin/python scripts/dev_link_identity.py --list
+  backend/.venv/bin/python scripts/dev_link_identity.py \
+      --user-email admin.tmh@demo.pulseos.test --firebase-uid <REAL_FIREBASE_UID>
+  ```
+
+  **Caution before re-running `seed.py`.** While a seeded row carries a real UID the seed
+  can no longer find it by its `synthetic:` subject, so it inserts a *second* user and a
+  *second* hospital-admin row for the same hospital (`hospital_admins.hospital_id` is not
+  unique). There is deliberately no unlink command yet — restoring the original subject is
+  a destructive edit to a row a real account is signing in with, and needs its own slice.
 - **`seed.py`** — idempotent reference-data seed: the 3 simulated hospitals
   (HID-0001..0003) + the record-category vocabulary. Safe to run any number of times;
   never duplicates or mutates existing rows. Requires a migrated DB

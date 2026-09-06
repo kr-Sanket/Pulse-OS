@@ -27,6 +27,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   directory instead of two divergent ones.
 
 ### Added
+- **`scripts/dev_link_identity.py`** — the local-development identity linker TODO §1 asked
+  for, replacing the hand-written SQL previously needed to sign in as a seeded hospital
+  admin. It rewrites `users.firebase_uid` on **one already-seeded row** and stamps the
+  PulseOS claims through the auth module's own port; it creates nothing, deletes nothing,
+  and never chooses a role — the role comes from the row that already exists, so there is
+  no flag that could provision one.
+  **Two independent safety checks, neither reachable by a flag:** `PULSEOS_ENVIRONMENT`
+  must be exactly `local`, *and* the database host must be this machine. The second exists
+  because the first fails open — `Settings.environment` defaults to `local`, so a
+  deployment that forgot to set it would look like a laptop, whereas the database it points
+  at cannot be faked by forgetting something. There is deliberately no `--force`; `--yes`
+  only skips the confirmation prompt, and a test asserts no `force` flag exists.
+  Claims are provisioned **inside the same transaction** as the row change, mirroring the
+  invariant registration already holds, so a provider failure rolls the link back rather
+  than leaving an account half-linked. `--skip-claims` covers the no-Firebase-credentials
+  case, and `--list` shows what is linkable. **No reverse operation is offered:** restoring
+  a seeded subject is a destructive edit to a row a real account is signing in with, so it
+  is left to its own slice rather than bundled in here.
+  **Known hazard, documented rather than worked around:** a seeded row carrying a real UID
+  is invisible to
+  `scripts/seed.py`, which then inserts a duplicate user *and* a duplicate hospital-admin
+  row for the same hospital (`hospital_admins.hospital_id` carries no unique constraint) —
+  a hazard the old SQL workaround left completely unguarded and one this script documents
+  rather than silently works around. Backend tests 390 → 413.
 - **Hospital patient lookup, and upload confirmation (ADR-021).** New backend endpoint
   `GET /api/v1/patients/lookup?healthId=`, owned by the `patients` module, HOSPITAL_ADMIN-only,
   answering `{healthId, fullName}` and nothing else — the RBAC matrix row that had never been
