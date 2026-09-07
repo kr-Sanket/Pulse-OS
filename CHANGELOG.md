@@ -63,6 +63,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   row for the same hospital (`hospital_admins.hospital_id` carries no unique constraint) —
   a hazard the old SQL workaround left completely unguarded and one this script documents
   rather than silently works around. Backend tests 390 → 432.
+- **Hospital portal — Slice 6c, the audit history page.** `/audit` in the hospital portal,
+  over 6b's `GET /hospitals/me/audit-logs`, in the portal's usual layering
+  (`audit/{api,view,useAudit}` + dumb components). Reachable whatever the hospital's
+  verification state — reading what was recorded is not an operational action — and the page
+  gates on nothing, loading no hospital profile at all: the one thing it would learn (no
+  admin profile) is something the audit endpoint already says for itself with a 404.
+  **The first real pager in the project.** Every other listing asks for a hundred rows and
+  admits the truncation in a footnote; a compliance view is the first place where "and the
+  rest is not shown" is not good enough. The hook accumulates pages, echoes the opaque
+  cursor back and never constructs one, de-duplicates on id, and guards concurrent loads
+  with a ref rather than the busy flag — which settles a render late, and would append a
+  page twice. It is kept local, not promoted: one screen needs it, and a pagination hook
+  designed against a single caller would be a guess at the second one's needs. A failure
+  *after* the first page leaves the loaded rows on screen rather than replacing a compliance
+  view with an error.
+  **The response is treated as the whole truth.** Nothing fetches the record behind a row to
+  enrich it: that would re-disclose precisely what 6b's allow-list withholds, and would write
+  a `RECORD_VIEWED` to the patient's trail for every row rendered. A record target shows a
+  short handle and no description; an absent one shows nothing rather than a placeholder. The
+  actor is a name, falling back to a role — never a user id. An action this build does not
+  recognise renders as "Audit event" rather than its raw code, and the row is still shown,
+  because dropping an audit entry is not an option.
+  The page states what the log does **not** cover (listings, Health-ID lookups, doctor
+  activation, registration are all outside the patient-subject trail per ADR-022/023), and
+  the empty state says no activity was *recorded* rather than that no records were accessed —
+  the log knows what it captured, not what happened. Web tests 376 → 405. Frontend only: no
+  backend, schema, migration or OpenAPI change, and the generated client already carried the
+  endpoint from 6b.
 - **Historical hospital attribution and a versioned audit-hash scheme (ADR-023, migration
   0005).** Hospitals had audit *events* after 6a but no way to read them: `audit_logs` carried
   no hospital, and the only alternative — joining the actor's **current** affiliation — would

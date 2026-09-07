@@ -11,6 +11,7 @@ import {
   Building2,
   FolderOpen,
   LayoutDashboard,
+  ScrollText,
   Stethoscope,
   Upload,
   type LucideIcon,
@@ -47,7 +48,12 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   },
   {
     title: "Account",
-    items: [{ to: "/hospital", label: "My Hospital", title: "Your hospital", icon: Building2 }],
+    items: [
+      { to: "/hospital", label: "My Hospital", title: "Your hospital", icon: Building2 },
+      // Available whatever the hospital's verification state: reading what was recorded is
+      // not an operational action, and the page gates on nothing.
+      { to: "/audit", label: "Audit History", title: "Audit history", icon: ScrollText },
+    ],
   },
 ];
 

@@ -9,6 +9,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthContextProvider, ProtectedRoute } from "@pulseos/ui";
 
 import { HospitalLayout } from "./components/layout/HospitalLayout";
+import { AuditPage } from "./pages/AuditPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DoctorsPage } from "./pages/DoctorsPage";
 import { HospitalPage } from "./pages/HospitalPage";
@@ -53,6 +54,7 @@ export function App() {
             {/* Addressed by record id alone, so a pasted URL still opens the record. */}
             <Route path="/uploads/:recordId" element={<UploadDetailPage />} />
             <Route path="/hospital" element={<HospitalPage />} />
+            <Route path="/audit" element={<AuditPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
