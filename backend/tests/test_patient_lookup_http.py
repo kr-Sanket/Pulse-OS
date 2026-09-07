@@ -9,6 +9,7 @@ a disclosure test, because the whole design of the response is what it leaves ou
 import re
 
 import pytest
+from app.core.ratelimit import InMemoryRateLimiter
 from app.modules.auth.domain import Role
 from app.modules.auth.fake import FakeAuthProvider
 from app.modules.patients.health_id import generate_health_id, is_valid_health_id
@@ -244,3 +245,88 @@ def test_a_system_admin_may_not_look_up_a_patient(
     assert client.get(
         LOOKUP, params={"healthId": patient_health_id}, headers=_bearer("sys")
     ).status_code in {403, 401}
+
+
+# -- rate limiting (ADR-024, M3-D) -----------------------------------------------------------
+
+
+def _exhaust(client: TestClient, headers: dict[str, str], health_id: str, times: int) -> None:
+    for _ in range(times):
+        client.get(LOOKUP, params={"healthId": health_id}, headers=headers)
+
+
+def test_lookup_is_rate_limited_after_its_bucket_is_spent(
+    client: TestClient,
+    admin_headers: dict[str, str],
+    patient_health_id: str,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    limit = rate_limiter.limit_for("patient_lookup").limit
+    _exhaust(client, admin_headers, patient_health_id, limit)
+
+    refused = client.get(LOOKUP, params={"healthId": patient_health_id}, headers=admin_headers)
+
+    assert refused.status_code == 429
+    assert refused.headers["Retry-After"].isdigit()
+    assert int(refused.headers["Retry-After"]) >= 1
+    assert refused.headers["content-type"].startswith("application/problem+json")
+
+
+def test_the_lookup_bucket_is_the_approved_twenty_per_minute(
+    client: TestClient,
+    admin_headers: dict[str, str],
+    patient_health_id: str,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    """Twenty succeed, the twenty-first does not."""
+    assert rate_limiter.limit_for("patient_lookup").limit == 20
+    _exhaust(client, admin_headers, patient_health_id, 19)
+
+    assert (
+        client.get(LOOKUP, params={"healthId": patient_health_id}, headers=admin_headers)
+    ).status_code == 200
+    assert (
+        client.get(LOOKUP, params={"healthId": patient_health_id}, headers=admin_headers)
+    ).status_code == 429
+
+
+def test_a_rate_limited_lookup_reveals_nothing_about_the_health_id(
+    client: TestClient,
+    admin_headers: dict[str, str],
+    patient_health_id: str,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    """The invariant the limiter exists to preserve: once throttled, a Health ID that
+    resolves and one that does not must be indistinguishable.
+
+    Asserted semantically rather than byte-for-byte — status, title, detail, the presence of
+    Retry-After, and the absence of any identifier or counter.
+    """
+    unissued = generate_health_id()
+    _exhaust(client, admin_headers, patient_health_id, 20)
+
+    real = client.get(LOOKUP, params={"healthId": patient_health_id}, headers=admin_headers)
+    fake = client.get(LOOKUP, params={"healthId": unissued}, headers=admin_headers)
+
+    assert real.status_code == fake.status_code == 429
+    assert real.json()["title"] == fake.json()["title"]
+    assert real.json()["detail"] == fake.json()["detail"]
+    assert "Retry-After" in real.headers and "Retry-After" in fake.headers
+    for response, health_id in ((real, patient_health_id), (fake, unissued)):
+        body = response.text
+        assert health_id not in body
+        assert "Asha" not in body  # the patient's name never appears
+        assert "patient_lookup" not in body  # nor the bucket
+        assert "20" not in response.json()["detail"]  # nor any count
+
+
+def test_the_limiter_does_not_disturb_authentication_or_authorization(
+    client: TestClient, fake_auth: FakeAuthProvider, patient_health_id: str
+) -> None:
+    """401 and 403 still precede the limiter, so a refused caller spends no quota."""
+    assert client.get(LOOKUP, params={"healthId": patient_health_id}).status_code == 401
+    patient = _refreshed(fake_auth, "patient", "fb-patient")
+    assert (
+        client.get(LOOKUP, params={"healthId": patient_health_id}, headers=patient).status_code
+        == 403
+    )

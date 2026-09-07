@@ -7,6 +7,7 @@ owns the domain-error → RFC 7807 translation; HTTP details are already generic
 provider internals can leak (docs/SECURITY.md).
 """
 
+import logging
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any
 
@@ -14,6 +15,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_session
+from app.core.ratelimit import RateLimiter, get_rate_limiter
 from app.modules.auth.accounts import UserAccountService
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.errors import (
@@ -28,6 +30,8 @@ from app.modules.auth.errors import (
 from app.modules.auth.provider import AuthenticationProvider, VerifiedToken
 from app.modules.auth.repository import UserRepository
 from app.modules.auth.service import AuthService
+
+logger = logging.getLogger(__name__)
 
 # RFC 6750: 401 responses advertise the expected scheme.
 _CHALLENGE = {"WWW-Authenticate": "Bearer"}
@@ -131,3 +135,45 @@ RequirePatient = require_role(Role.PATIENT)
 RequireDoctor = require_role(Role.DOCTOR)
 RequireHospitalAdmin = require_role(Role.HOSPITAL_ADMIN)
 RequireSystemAdmin = require_role(Role.SYSTEM_ADMIN)
+
+
+def rate_limited(bucket: str) -> RoleDependency:
+    """Build a dependency that spends one unit of ``bucket`` for the calling user (ADR-024).
+
+    Declared **after** the role gate on a route, so the order is authenticate → authorize →
+    limit → service. Three consequences follow from that, all intended:
+
+    * the subject is the caller's PulseOS ``user_id``, which only exists once the token has
+      been verified — the reason this is a dependency and not middleware, since Starlette
+      middleware runs before any of it;
+    * a caller refused by the role gate never reaches the limiter and spends nothing;
+    * the limiter runs before the service resolves any Health ID, so a 429 cannot depend on
+      whether a patient exists. That property is structural rather than merely tested.
+
+    Every outcome spends quota — a 404 or 422 costs the same as a hit. Counting successes
+    alone would leave enumeration unthrottled, since probing an ID that matches nobody is
+    precisely the request an attacker makes.
+
+    Returns the caller so the dependency composes like the role gates it sits beside.
+    """
+
+    async def limit_gate(
+        user: CurrentUser,
+        limiter: Annotated[RateLimiter, Depends(get_rate_limiter)],
+    ) -> AuthenticatedUser:
+        decision = await limiter.check(bucket, f"u:{user.user_id}")
+        if not decision.allowed:
+            logger.warning(
+                "request rate limited",
+                extra={"bucket": bucket, "user_id": str(user.user_id)},
+            )
+            # Detail and body are identical for every bucket and every caller: a 429 must
+            # not become the side channel the limiter exists to close.
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Try again shortly.",
+                headers={"Retry-After": str(decision.retry_after_seconds)},
+            )
+        return user
+
+    return limit_gate

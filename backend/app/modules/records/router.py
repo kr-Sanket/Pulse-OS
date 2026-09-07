@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import JSONResponse
 
 from app.core.errors import problem_response
-from app.modules.auth.dependencies import CurrentUser, require_role
+from app.modules.auth.dependencies import CurrentUser, rate_limited, require_role
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.records.dependencies import (
     RecordServiceDep,
@@ -190,9 +190,14 @@ async def list_records(
     )
 
 
-@records_router.get("/existence", response_model=RecordExistenceResponse)
+@records_router.get(
+    "/existence",
+    response_model=RecordExistenceResponse,
+    responses={429: {"description": "Rate limit exceeded"}},
+)
 async def list_record_existence(
     user: Clinician,
+    _limit: Annotated[AuthenticatedUser, Depends(rate_limited("record_existence"))],
     service: RecordServiceDep,
     patient_health_id: Annotated[str, Query(alias="patientHealthId", min_length=1, max_length=20)],
 ) -> RecordExistenceResponse:
@@ -266,9 +271,14 @@ async def create_download_url(
     return DownloadUrlResponse(url=link.url, expires_in_seconds=link.expires_in_seconds)
 
 
-@granted_records_router.get("", response_model=GrantedRecordListResponse)
+@granted_records_router.get(
+    "",
+    response_model=GrantedRecordListResponse,
+    responses={429: {"description": "Rate limit exceeded"}},
+)
 async def list_granted_records(
     user: Clinician,
+    _limit: Annotated[AuthenticatedUser, Depends(rate_limited("granted_records"))],
     service: RecordServiceDep,
     request_context: RequestContextDep,
     patient_health_id: Annotated[str, Query(alias="patientHealthId", min_length=1, max_length=20)],

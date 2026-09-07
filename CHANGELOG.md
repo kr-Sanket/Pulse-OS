@@ -63,6 +63,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   row for the same hospital (`hospital_admins.hospital_id` carries no unique constraint) —
   a hazard the old SQL workaround left completely unguarded and one this script documents
   rather than silently works around. Backend tests 390 → 432.
+- **Rate limiting on the Health-ID and discovery surfaces (ADR-024, closes finding M3-D).**
+  Four endpoints were unthrottled, one of which returns a patient's **name**; ADR-012 chose
+  random Health IDs to defeat enumeration, and without a limiter that defence was half-built.
+  Now: `patient_lookup` 20/60s, `record_existence` 30/60s, `granted_records` 30/60s,
+  `access_request_create` 10/60s, keyed on the caller's PulseOS `user_id`.
+  **A per-route dependency, not middleware — and the guideline was wrong.** API_GUIDELINES
+  said "per user at the middleware layer", but Starlette middleware runs before routing and
+  dependency resolution, so no authenticated user exists there; the two halves of that
+  sentence cannot both hold without verifying the token twice per request. `rate_limited()`
+  sits in `auth/dependencies.py` beside the role gates, and the guideline is amended.
+  Order is authenticate → authorize → limit → service, which buys three properties: the
+  subject is a verified identity, a caller refused by the role gate spends nothing, and **the
+  limiter runs before any Health ID is resolved**, so a 429 cannot vary with whether a patient
+  exists. **Every outcome spends quota** — a 404 costs the same as a hit, because probing an
+  ID that matches nobody is exactly the request an attacker makes.
+  Fixed window, `INCR` + `EXPIRE NX` in one pipeline: `INCR` is atomic and returns the
+  post-increment value, so the read-then-write race cannot occur, and the window index is
+  part of the key, which turns a lost TTL into a bounded memory leak rather than a lockout.
+  `Retry-After` is arithmetic, not a second round trip. **Fail-open**, following ADR-014's
+  precedent that Redis is advisory here — a blip must not take consent requests offline — with
+  the outage log throttled to one line per 30s.
+  The 429 body is identical for every bucket and caller: no bucket name, no counts, no Health
+  ID. Declared in OpenAPI on exactly the four protected operations (the only spec diff; no
+  schema added, no parameter added). Configuration is two variables, and malformed limits
+  raise at **startup** rather than per request — a limit that silently fell back to a default
+  because of a typo is a security control that lies.
+  **Explicitly not covered:** unauthenticated/pre-auth throttling, which needs IP keying and
+  therefore trusted-proxy semantics; `X-Forwarded-For` is client-controlled and is not
+  trusted. Deferred to ADR-009. Backend tests 461 → 497.
 - **Hospital portal — Slice 6c, the audit history page.** `/audit` in the hospital portal,
   over 6b's `GET /hospitals/me/audit-logs`, in the portal's usual layering
   (`audit/{api,view,useAudit}` + dumb components). Reachable whatever the hospital's

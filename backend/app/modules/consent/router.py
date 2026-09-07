@@ -19,7 +19,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from app.modules.auth.dependencies import RequireDoctor, RequireHospitalAdmin, RequirePatient
+from app.modules.auth.dependencies import (
+    RequireDoctor,
+    RequireHospitalAdmin,
+    RequirePatient,
+    rate_limited,
+)
 from app.modules.auth.domain import AuthenticatedUser
 from app.modules.consent.dependencies import (
     PROBLEM,
@@ -88,6 +93,8 @@ _NO_PROFILE: ResponseSpec = {
     404: {"description": "No profile for this account", "content": PROBLEM}
 }
 _INVALID: ResponseSpec = {422: {"description": "Validation failed", "content": PROBLEM}}
+#: Declared only on rate-limited routes (ADR-024), so the spec says which they are.
+_RATE_LIMITED: ResponseSpec = {429: {"description": "Rate limit exceeded", "content": PROBLEM}}
 
 
 def _to_staff_display(person: PersonDisplay | None) -> StaffDisplayResponse | None:
@@ -276,11 +283,13 @@ def _to_grant_list_response(
         403: {"description": "Not a doctor, or the clinician is not active", "content": PROBLEM},
         **_NO_PROFILE,
         **_INVALID,
+        **_RATE_LIMITED,
     },
 )
 async def create_access_request(
     body: AccessRequestCreateRequest,
     user: DoctorUser,
+    _limit: Annotated[AuthenticatedUser, Depends(rate_limited("access_request_create"))],
     service: ConsentServiceDep,
     vocabulary: CategoryVocabularyDep,
     request_context: RequestContextDep,

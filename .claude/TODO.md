@@ -22,18 +22,12 @@
 
 Ordered by dependency. Each item is demonstrable on its own.
 
-- [ ] FE: **doctor portal slice 2 — request access.** From the existence results, select
-      categories and `POST /access-requests`; show `/access-requests/sent`. This closes the
-      loop with the already-built patient consent inbox and makes the M3 gate demonstrable end
-      to end for the first time. *Blocked by nothing — the backend is complete.*
-- [ ] BE: **rate limiting** (Redis buckets, stricter on auth). Was deferred since M0.3 and is
-      now load-bearing: `POST /access-requests`, `GET /records/existence` **and**
-      `GET /patients/lookup` are all unthrottled Health-ID oracles (finding M3-D). The lookup
-      is the most sensitive of the three — it is the only one that returns a patient's *name*
-      — though also the narrowest (HOSPITAL_ADMIN only, and a malformed ID is refused before
-      the database is touched). `GET /granted-records` needs the same bucket, though it is not
-      an oracle: it answers only where a live grant already exists, and every probe without one
-      writes an `ACCESS_DENIED`.
+- [ ] BE: **unauthenticated/pre-auth throttling.** ADR-024 closed M3-D for *authenticated*
+      abuse on the four Health-ID/discovery surfaces. An unauthenticated flood is still
+      unthrottled and costs one Firebase verification each. Needs IP keying, which needs
+      trusted-proxy semantics — there is no `ProxyHeadersMiddleware` and `X-Forwarded-For` is
+      client-controlled, so this is blocked on **ADR-009** (deployment target). The key
+      format already reserves `ip:{addr}`.
 - [ ] BE: **organisation/actor-scoped operational log.** Three deferred items now point at
       this one missing artifact, and it should be designed once rather than three times:
       the hospital record-*listing* event (spans many patients, so unrepresentable in a
@@ -44,12 +38,6 @@ Ordered by dependency. Each item is demonstrable on its own.
 - [ ] BE: **no code path provisions `Role.SYSTEM_ADMIN`**, so `POST /hospitals/{hid}/verify`
       has no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in
       demos because the three simulated hospitals are seeded `VERIFIED`.
-- [ ] FE: **hospital audit page (slice 6c)** — the last unbuilt hospital capability in the
-      RBAC matrix ("View audit log: Hospital Admin ⭕ their hospital's actions only"). The
-      backend is done: `GET /api/v1/hospitals/me/audit-logs`, HOSPITAL_ADMIN-only, scoped
-      server-side, cursor-paginated (ADR-023). The page must say that a hospital's log begins
-      at migration 0005 — pre-migration events carry no attribution and are absent by design,
-      which would otherwise read as an empty hospital.
 - [ ] BE: **`notifications` module** — in-app notification on request created / decided /
       revoked, delivered through arq. Currently an empty `__init__.py`; access requests arrive
       silently.
@@ -59,7 +47,7 @@ Ordered by dependency. Each item is demonstrable on its own.
 
 ## 2. Deferred M3 review findings (backend)
 
-Each is a stated security or correctness gap. **M3-D is now the most urgent** — see §1.
+Each is a stated security or correctness gap. M3-D is closed by ADR-024.
 
 - [ ] BE: **systemic** — no security event survives a failed request; ADR-017 covers the two
       read paths only. The durable fix (independent audit sink or outbox) needs its own ADR and
@@ -80,7 +68,7 @@ Each is a stated security or correctness gap. **M3-D is now the most urgent** �
       OD-1 unclaimed patients NO; OD-2 grant expiry 90d as an injected service default
       (`DEFAULT_GRANT_TTL`), overridable per approval; OD-3 grant exposes health profile —
       **not implemented either way**, so a ruling still changes code. See DOMAIN_MODEL.md §5.
-- [ ] PO: Review ADR-015 and **ADR-016…023** — all implemented per their documented rationale.
+- [ ] PO: Review ADR-015 and **ADR-016…024** — all implemented per their documented rationale.
 - [ ] PO: **ADR-009** deployment target (Render vs AWS) — still a placeholder, and M7 has no
       api/worker Dockerfile without it.
 - [ ] PO: **ADR-010** Flutter timing — still a placeholder; `mobile/` is a README.

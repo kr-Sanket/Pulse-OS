@@ -691,6 +691,80 @@ once rather than three times. 6c is unblocked for the UI only.
 
 ---
 
+## ADR-024 — Rate limiting: a per-route dependency, fixed windows over Redis, fail-open
+
+**Date:** 2026-09-07 · **Status:** Accepted (M3-D) · **Extends:** ADR-013, ADR-014 ·
+**Amends:** docs/API_GUIDELINES.md §AuthN/AuthZ
+
+**Context:** Three endpoints answered whether a Pulse Health ID exists, unthrottled, and one
+of them returns the patient's **name** (ADR-021). ADR-012 chose random Health IDs precisely
+to defeat enumeration; without a limiter that defence was half-built. Finding M3-D had been
+open since M0.3 and widened with every slice that added a discovery surface.
+
+**Decision:**
+
+1. **A dependency, not middleware — and this contradicts a guideline, deliberately.**
+   API_GUIDELINES said *"rate limiting per user at the middleware layer"*, but Starlette
+   middleware runs **before** routing and dependency resolution, so no authenticated user
+   exists there. "Per user" and "at the middleware layer" cannot both hold unless the token
+   is verified a second time per request — duplicating the one dependency auth deliberately
+   made single. The limiter is therefore `rate_limited(bucket)` in `auth/dependencies.py`,
+   declared per route beside the role gates it resembles. The guideline is amended to say
+   *dependency layer*.
+
+2. **Order: authenticate → authorize → limit → service.** Three consequences, all wanted:
+   the subject is the caller's PulseOS `user_id`; a caller refused by the role gate spends
+   nothing; and the limiter runs **before the service resolves any Health ID**, so a 429
+   cannot vary with whether a patient exists. That last property is structural, not merely
+   tested.
+
+3. **Four buckets, keyed `u:{user_id}`** — `patient_lookup` 20/60s (the only endpoint
+   returning a name), `record_existence` 30/60s, `granted_records` 30/60s,
+   `access_request_create` 10/60s. **Every outcome spends quota**: a 404 or 422 costs the
+   same as a hit, because probing an ID that matches nobody is exactly the request an
+   attacker makes, and counting successes alone would leave enumeration unthrottled.
+
+4. **Fixed window, `INCR` + `EXPIRE NX` in one pipeline.** `INCR` is atomic and returns the
+   post-increment value, so the read-then-write race cannot occur; `EXPIRE NX` rides along,
+   so there is no round trip between counting and setting the lifetime. The window index is
+   part of the key, which makes expiry a cleanup detail rather than a correctness one: a
+   counter that somehow lost its TTL is never consulted again, so the worst case is a bounded
+   memory leak, never a lockout. `Retry-After` is arithmetic — no extra round trip.
+   A fixed window permits up to 2× the limit across a boundary; for a control measured in
+   hundreds of requests that is irrelevant, and a sliding window would be sophistication
+   without a reason.
+
+5. **Fail-open**, following ADR-014's precedent that Redis is advisory here: an enqueue
+   failure never fails the originating request, and neither does a limiter failure. A blip
+   must not take consent requests, discovery and lookup offline; `/ready` reports Redis
+   independently, so the outage stays visible. The outage log is throttled to one line per
+   30s per process.
+
+6. **429 reuses the existing problem+json path** — `HTTPException(429, headers={"Retry-After":
+   ...})` through the handler that already propagates headers. Integer seconds. The body is
+   **identical for every bucket and every caller**: no bucket name, no counts, no Health ID.
+   A 429 must not become the side channel the limiter exists to close. Declared in OpenAPI on
+   exactly the four protected operations.
+
+7. **Configuration:** `PULSEOS_RATE_LIMIT_ENABLED` and `PULSEOS_RATE_LIMITS`, a JSON map of
+   `bucket -> "limit/window"` overriding a typed default table. Malformed configuration
+   raises at startup, never per request: a limit that silently fell back to a default because
+   of a typo is a security control that lies.
+
+**Scope, stated so the gap is not mistaken for coverage:** *M3-D protects authenticated abuse
+on the four selected Health-ID/discovery surfaces. Unauthenticated/pre-authentication
+throttling is deferred until trusted proxy/IP semantics and the deployment target are
+established.* There is no `ProxyHeadersMiddleware` and no `forwarded_allow_ips`, so
+`X-Forwarded-For` is fully client-controlled and **is not trusted**. IP keying is reserved in
+the key format (`ip:{addr}`) and unimplemented; it is blocked on ADR-009.
+
+**Consequences:** every future route opts in with one dependency, so M5's expensive AI
+endpoints inherit throttling by declaration rather than by retrofit. Unauthenticated floods
+still cost one Firebase verification each — a real remaining gap, recorded in TODO. Counters
+are per bucket per user per window, and shared across API workers because Redis is shared.
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.

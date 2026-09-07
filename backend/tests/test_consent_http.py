@@ -20,6 +20,7 @@ import pytest
 from app.core.db import Base, create_session_factory, get_db_session
 from app.core.errors import register_exception_handlers
 from app.core.middleware import RequestContextMiddleware
+from app.core.ratelimit import UnlimitedRateLimiter, get_rate_limiter
 from app.modules.auth.dependencies import get_auth_provider
 from app.modules.auth.domain import Role
 from app.modules.auth.fake import FakeAuthProvider
@@ -191,6 +192,9 @@ def world(consent_app: FastAPI) -> Iterator[World]:
     )
     vocabulary = FakeCategoryVocabularySource(ids["categories"])
 
+    # This suite builds its own app, so conftest's autouse override does not reach it
+    # and app.state carries no limiter (TODO §4: fold these pins into test_openapi).
+    consent_app.dependency_overrides[get_rate_limiter] = lambda: UnlimitedRateLimiter()
     consent_app.dependency_overrides[get_db_session] = override_session
     consent_app.dependency_overrides[get_auth_provider] = lambda: fake_auth
     consent_app.dependency_overrides[get_clinician_directory] = lambda: clinicians

@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     # Record uploads: hard size cap enforced before anything is stored (15 MiB).
     records_max_upload_bytes: int = 15 * 1024 * 1024
 
+    # Rate limiting (ADR-024). Off installs a limiter that allows everything, which is what
+    # tests and credential-free dev use; bucket names are still validated either way.
+    rate_limit_enabled: bool = True
+    # Overrides for app/core/ratelimit.py's DEFAULT_LIMITS, as "limit/window-seconds" per
+    # bucket. Env format is JSON, like cors_origins:
+    #   PULSEOS_RATE_LIMITS={"patient_lookup":"40/60"}
+    # Only the named buckets change; the rest keep their defaults.
+    rate_limits: dict[str, str] = {}
+
 
 @lru_cache
 def get_settings() -> Settings:

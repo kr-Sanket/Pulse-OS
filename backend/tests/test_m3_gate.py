@@ -16,10 +16,12 @@ from uuid import UUID
 import httpx
 import pytest
 from app.core.queue import InMemoryJobQueue
+from app.core.ratelimit import InMemoryRateLimiter
 from app.modules.auth.domain import Role
 from app.modules.auth.fake import FakeAuthProvider
 from app.modules.auth.models import User
 from app.modules.consent.repository import AuditLogRepository
+from app.modules.patients.health_id import generate_health_id
 from app.modules.patients.seed import seed_synthetic_patients
 from app.modules.records.fake import FakeObjectStorage
 from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin, MedicalRecord
@@ -31,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from tests.support import run_with_session
 
+API = "/api/v1"
 RECORDS = "/api/v1/records"
 REQUESTS = "/api/v1/access-requests"
 GRANTS = "/api/v1/consent-grants"
@@ -613,3 +616,90 @@ def test_the_patient_trail_is_unaffected_by_the_hospital_view(
     # The patient sees their own read *and* the hospital's upload; the hospital sees only
     # the upload. Same rows, two truthful scopes.
     assert patient_actions == ["RECORD_VIEWED", "RECORD_UPLOADED"]
+
+
+# -- rate limiting on the remaining protected surfaces (ADR-024, M3-D) -----------------------
+
+EXISTENCE = f"{RECORDS}/existence"
+
+
+def test_records_existence_is_rate_limited_at_thirty_per_minute(
+    client: TestClient, cast: Cast, rate_limiter: InMemoryRateLimiter
+) -> None:
+    assert rate_limiter.limit_for("record_existence").limit == 30
+    params = {"patientHealthId": HEALTH_ID}
+    for _ in range(30):
+        assert client.get(EXISTENCE, params=params, headers=cast.doctor_cmc).status_code == 200
+
+    refused = client.get(EXISTENCE, params=params, headers=cast.doctor_cmc)
+
+    assert refused.status_code == 429
+    assert int(refused.headers["Retry-After"]) >= 1
+
+
+def test_granted_records_is_rate_limited_at_thirty_per_minute(
+    client: TestClient, cast: Cast, rate_limiter: InMemoryRateLimiter
+) -> None:
+    assert rate_limiter.limit_for("granted_records").limit == 30
+    params = {"patientHealthId": HEALTH_ID}
+    for _ in range(30):
+        assert (
+            client.get(GRANTED_RECORDS, params=params, headers=cast.doctor_cmc).status_code == 200
+        )
+
+    refused = client.get(GRANTED_RECORDS, params=params, headers=cast.doctor_cmc)
+
+    assert refused.status_code == 429
+
+
+def test_access_request_creation_is_rate_limited_at_ten_per_minute(
+    client: TestClient, cast: Cast, rate_limiter: InMemoryRateLimiter
+) -> None:
+    assert rate_limiter.limit_for("access_request_create").limit == 10
+    body = {"patientHealthId": HEALTH_ID, "categoryCodes": ["CBC"], "purpose": "care"}
+    for _ in range(10):
+        assert client.post(REQUESTS, json=body, headers=cast.doctor_cmc).status_code == 201
+
+    refused = client.post(REQUESTS, json=body, headers=cast.doctor_cmc)
+
+    assert refused.status_code == 429
+
+
+def test_the_four_buckets_are_independent_of_one_another(
+    client: TestClient, cast: Cast, rate_limiter: InMemoryRateLimiter
+) -> None:
+    """Spending one endpoint's quota must not close another's."""
+    params = {"patientHealthId": HEALTH_ID}
+    for _ in range(31):
+        client.get(EXISTENCE, params=params, headers=cast.doctor_cmc)
+    assert client.get(EXISTENCE, params=params, headers=cast.doctor_cmc).status_code == 429
+
+    assert client.get(GRANTED_RECORDS, params=params, headers=cast.doctor_cmc).status_code == 200
+
+
+def test_unprotected_routes_are_untouched_by_the_limiter(
+    client: TestClient, cast: Cast, rate_limiter: InMemoryRateLimiter
+) -> None:
+    """Only the four declared surfaces are limited; nothing else acquired a quota."""
+    for _ in range(40):
+        assert client.get(f"{API}/record-categories", headers=cast.doctor_cmc).status_code == 200
+    for _ in range(40):
+        assert client.get(RECORDS, headers=cast.admin_tmh).status_code == 200
+
+
+def test_a_throttled_discovery_reveals_nothing_about_the_health_id(
+    client: TestClient, cast: Cast, rate_limiter: InMemoryRateLimiter
+) -> None:
+    """Once throttled, a Health ID that resolves and one that does not answer identically."""
+    unissued = generate_health_id()
+    for _ in range(30):
+        client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=cast.doctor_cmc)
+
+    real = client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=cast.doctor_cmc)
+    fake = client.get(EXISTENCE, params={"patientHealthId": unissued}, headers=cast.doctor_cmc)
+
+    assert real.status_code == fake.status_code == 429
+    assert real.json()["title"] == fake.json()["title"]
+    assert real.json()["detail"] == fake.json()["detail"]
+    assert HEALTH_ID not in real.text and unissued not in fake.text
+    assert "record_existence" not in real.text

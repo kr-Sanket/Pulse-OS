@@ -256,3 +256,34 @@ def test_the_patient_audit_contract_is_unchanged_by_the_hospital_view() -> None:
         "occurredAt",
         "eventHash",
     }
+
+
+def test_the_four_rate_limited_endpoints_declare_429() -> None:
+    """The spec must say which surfaces are throttled (ADR-024): a client that cannot see
+    429 in the contract has no reason to handle it."""
+    paths = _spec()["paths"]
+    protected = (
+        ("/api/v1/patients/lookup", "get"),
+        ("/api/v1/records/existence", "get"),
+        ("/api/v1/granted-records", "get"),
+        ("/api/v1/access-requests", "post"),
+    )
+
+    for path, method in protected:
+        assert "429" in paths[path][method]["responses"], f"{method.upper()} {path}"
+
+
+def test_unprotected_endpoints_do_not_claim_a_429_they_cannot_return() -> None:
+    paths = _spec()["paths"]
+
+    assert "429" not in paths["/api/v1/record-categories"]["get"]["responses"]
+    assert "429" not in paths["/api/v1/audit-logs"]["get"]["responses"]
+    assert "429" not in paths["/api/v1/records"]["get"]["responses"]
+
+
+def test_rate_limiting_added_no_request_parameter() -> None:
+    """The limiter keys on the authenticated identity, so nothing about it is client-supplied
+    — no bucket, no quota, nothing a caller could tamper with."""
+    operation = _spec()["paths"]["/api/v1/patients/lookup"]["get"]
+
+    assert {parameter["name"] for parameter in operation["parameters"]} == {"healthId"}

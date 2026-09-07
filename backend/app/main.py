@@ -21,6 +21,7 @@ from app.core.health import router as health_router
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.core.queue import ArqJobQueue
+from app.core.ratelimit import build_rate_limiter
 from app.modules.auth.firebase import FirebaseAuthProvider
 from app.modules.auth.router import router as auth_router
 from app.modules.consent.router import (
@@ -53,7 +54,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.object_storage = S3ObjectStorage(settings)
     job_queue = ArqJobQueue(settings.redis_url)
     app.state.job_queue = job_queue
+    # Shares Redis with arq but not its connection: arq owns a pool shaped for job
+    # dispatch, and one INCR per request has different lifetime needs (ADR-024).
+    rate_limiter = build_rate_limiter(settings)
+    app.state.rate_limiter = rate_limiter
     yield
+    await rate_limiter.aclose()
     await job_queue.aclose()
     await engine.dispose()
 

@@ -9,6 +9,7 @@ from app.modules.auth.dependencies import (
     RequireHospitalAdmin,
     RequirePatient,
     VerifiedIdentity,
+    rate_limited,
     to_http_error,
 )
 from app.modules.auth.domain import AuthenticatedUser
@@ -79,9 +80,14 @@ async def read_own_profile(
     return PatientProfileResponse.model_validate(patient)
 
 
-@router.get("/lookup", response_model=PatientLookupResponse)
+@router.get(
+    "/lookup",
+    response_model=PatientLookupResponse,
+    responses={429: {"description": "Rate limit exceeded"}},
+)
 async def lookup_patient(
     user: Annotated[AuthenticatedUser, Depends(RequireHospitalAdmin)],
+    _limit: Annotated[AuthenticatedUser, Depends(rate_limited("patient_lookup"))],
     service: PatientServiceDep,
     health_id: Annotated[str, Query(alias="healthId", min_length=1, max_length=20)],
 ) -> PatientLookupResponse:

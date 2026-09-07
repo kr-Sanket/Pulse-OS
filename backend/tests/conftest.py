@@ -4,6 +4,11 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 from app.core.db import Base, create_session_factory, get_db_session
 from app.core.queue import InMemoryJobQueue
+from app.core.ratelimit import (
+    InMemoryRateLimiter,
+    UnlimitedRateLimiter,
+    get_rate_limiter,
+)
 from app.main import create_app
 from app.modules.auth.dependencies import get_auth_provider
 from app.modules.auth.fake import FakeAuthProvider
@@ -51,6 +56,25 @@ def fake_queue(app: FastAPI) -> InMemoryJobQueue:
     queue = InMemoryJobQueue()
     app.dependency_overrides[get_job_queue] = lambda: queue
     return queue
+
+
+@pytest.fixture(autouse=True)
+def unlimited(app: FastAPI) -> None:
+    """Rate limiting off for every test that does not ask for it.
+
+    Autouse and permissive on purpose: without it each suite would silently acquire a quota,
+    and a test that failed after its 21st request would look like a product bug. Tests that
+    exercise throttling ask for ``rate_limiter`` instead, which replaces this.
+    """
+    app.dependency_overrides[get_rate_limiter] = lambda: UnlimitedRateLimiter()
+
+
+@pytest.fixture
+def rate_limiter(app: FastAPI) -> InMemoryRateLimiter:
+    """A real fixed-window limiter, counting in memory. Replaces ``unlimited``."""
+    limiter = InMemoryRateLimiter()
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    return limiter
 
 
 @pytest.fixture

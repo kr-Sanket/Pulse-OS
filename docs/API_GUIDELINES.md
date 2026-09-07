@@ -36,7 +36,10 @@
   request body.
 - Every route declares its allowed roles via dependency; record/consent reads additionally pass
   the consent-enforcement dependency (SYSTEM_ARCHITECTURE.md §Isolation rule 3).
-- Rate limiting per user at the middleware layer (Redis); stricter buckets on auth and AI endpoints.
+- Rate limiting per user at the **dependency** layer (Redis), declared per route beside the
+  role gates — middleware runs before authentication, so per-user keying is impossible there
+  (ADR-024). Stricter buckets on the Health-ID/discovery surfaces, and on AI endpoints when
+  they land. Rate-limited operations declare `429` in the spec.
 
 ## Consistency & Safety
 

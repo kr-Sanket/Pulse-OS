@@ -1711,6 +1711,12 @@
               "application/problem+json": {}
             },
             "description": "Validation failed"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "Create Access Request",
@@ -2394,6 +2400,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "List Granted Records",
@@ -2768,6 +2777,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "Lookup Patient",
@@ -3029,6 +3041,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "List Record Existence",
