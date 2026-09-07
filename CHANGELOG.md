@@ -42,7 +42,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   Claims are provisioned **inside the same transaction** as the row change, mirroring the
   invariant registration already holds, so a provider failure rolls the link back rather
   than leaving an account half-linked. `--skip-claims` covers the no-Firebase-credentials
-  case, and `--list` shows what is linkable. **No reverse operation is offered:** restoring
+  case, and `--list` shows what is linkable.
+  It can additionally correct the PulseOS profile of an identity it has linked —
+  `--full-name` and `--email`, **HOSPITAL_ADMIN only** — because linking deliberately
+  changes `firebase_uid` alone, which left a real developer signing in behind the seeded
+  demo name "Ravi Prasad (Demo Admin)". Four rules keep that from becoming a profile
+  editor: the flags require `--firebase-uid`; the row must already be, or be becoming in
+  the same run, that UID's identity; patient and doctor rows are refused outright; and
+  there are two fixed fields with no `--set`. The Firebase account is never written to —
+  external authentication identity and domain profile data stay separate, which is the
+  distinction the mismatch tempted us to collapse. Because `--email` mutates the column
+  `--user-email` looks up by, resolution now also accepts `--firebase-uid`, and an email
+  already held by another `users` row is refused rather than creating an identity nothing
+  can unambiguously name. **No reverse operation is offered:** restoring
   a seeded subject is a destructive edit to a row a real account is signing in with, so it
   is left to its own slice rather than bundled in here.
   **Known hazard, documented rather than worked around:** a seeded row carrying a real UID
@@ -50,7 +62,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   `scripts/seed.py`, which then inserts a duplicate user *and* a duplicate hospital-admin
   row for the same hospital (`hospital_admins.hospital_id` carries no unique constraint) —
   a hazard the old SQL workaround left completely unguarded and one this script documents
-  rather than silently works around. Backend tests 390 → 413.
+  rather than silently works around. Backend tests 390 → 432.
+- **Audit emission policy, and the events that were missing (ADR-022).** Investigating the
+  hospital audit view found that hospital admins emitted **nothing**: `_authorize_read`
+  returns at ADR-013 layer 2 *before* `consent.enforce`, so neither allowed nor refused
+  hospital reads were recorded (finding M3-E), and `RECORD_UPLOADED` had sat in
+  DOMAIN_MODEL §1's vocabulary since M0.2 and in `AuditAction` since M3 **with no writer at
+  all** — a document could enter a patient's history leaving no trace of who put it there.
+  Now emitted: `RECORD_UPLOADED` on every upload (hospital *and* patient locker — the
+  vocabulary is unqualified, and a trail recording only one would lie by omission about the
+  other), and `RECORD_VIEWED` / `RECORD_DOWNLOADED` / `ACCESS_DENIED` on hospital-admin
+  reads. The *decision* stays in `records`, which alone knows who uploaded what; what
+  changed is that both outcomes reach the trail, ending an asymmetry where a clinician's
+  refused read was visible to the patient and a hospital's was not.
+  **M3-B is ruled:** SYSTEM_ARCHITECTURE rule 3 means *non-owner* — a patient listing their
+  own records is not audited, because logging the subject reading their own index grows the
+  trail without bound while saying nothing about access. The hospital *listing* is a genuine
+  non-owner read and still cannot be expressed: its page spans many patients while
+  `audit_logs.patient_id` is singular and NOT NULL.
+  Deferred with reasons recorded rather than rediscovered: patient lookup (NOT NULL
+  `patient_id` means only *successful* probes are recordable, so the log would miss the
+  enumeration it exists to catch); doctor activate/deactivate and hospital registration
+  (no patient subject at all — administrative events that do not belong in a patient-visible
+  trail).
+  `records` gains a fourth seam, `RecordAuditor`, with two purpose-named methods rather than
+  one general "write an event", so it cannot reach the rest of the vocabulary. The audit
+  write sits inside the upload transaction after the object store succeeds, so a failed
+  upload leaves no event. **No schema change, no migration, no index, no `event_hash`
+  change.** Backend tests 432 → 442.
 - **Hospital patient lookup, and upload confirmation (ADR-021).** New backend endpoint
   `GET /api/v1/patients/lookup?healthId=`, owned by the `patients` module, HOSPITAL_ADMIN-only,
   answering `{healthId, fullName}` and nothing else — the RBAC matrix row that had never been

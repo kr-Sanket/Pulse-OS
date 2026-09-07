@@ -34,20 +34,28 @@ Ordered by dependency. Each item is demonstrable on its own.
       the database is touched). `GET /granted-records` needs the same bucket, though it is not
       an oracle: it answers only where a live grant already exists, and every probe without one
       writes an `ACCESS_DENIED`.
-- [ ] BE/PO: **decide whether discovery is audited.** `GET /records/existence` and
-      `GET /patients/lookup` write no audit event — no record was accessed and no truthful
-      `AuditAction` member exists. A doctor probing Health IDs, or a hospital resolving them to
-      names, is arguably something a patient should see; the lookup discloses more (a name), so
-      one ruling should cover both. Adding a member is ADR-sized (ADR-018 is the precedent); a
-      test currently pins the *absence* for existence.
+- [ ] BE/PO: **decide whether discovery is audited** — deferred again by ADR-022, now with
+      a sharper reason. `GET /records/existence` and `GET /patients/lookup` write nothing, and
+      the blocker is not just the missing vocabulary member: `audit_logs.patient_id` is
+      NOT NULL, so only *successful* probes could be recorded and the log would
+      systematically miss the enumeration it would exist to catch. Settle it with 6b, where
+      nullable-subject events can be considered properly. A test pins the *absence* for
+      existence.
+- [ ] BE: **audit slice 6b — hospital attribution.** Add `actor_hospital_id` to `audit_logs`
+      (recorded at write time; never a join through the actor's *current* hospital, which
+      would move history when staff transfer) plus the actor index the schema comment already
+      anticipates. Needs its own ADR: `event_hash` covers every column but `created_at`, so a
+      new hashed column changes the canonical payload shape for rows written after it, and
+      the table is append-only. Unblocks the hospital record-listing event and the hospital
+      audit endpoint + UI (6c).
 - [ ] BE: **no code path provisions `Role.SYSTEM_ADMIN`**, so `POST /hospitals/{hid}/verify`
       has no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in
       demos because the three simulated hospitals are seeded `VERIFIED`.
-- [ ] BE/FE: **hospital-scoped audit view** — the last unbuilt hospital capability in the
-      RBAC matrix ("View audit log: Hospital Admin ⭕ their hospital's actions only").
-      `GET /audit-logs` is `RequirePatient`, so there is no endpoint behind it yet. The rest
-      of the hospital portal is built (shell, identity, doctor management, upload with
-      patient confirmation per ADR-021, uploaded records).
+- [ ] BE/FE: **hospital-scoped audit view (slice 6c)** — the last unbuilt hospital
+      capability in the RBAC matrix ("View audit log: Hospital Admin ⭕ their hospital's
+      actions only"). `GET /audit-logs` is `RequirePatient`, so there is no endpoint yet.
+      **Blocked on 6b**: scoping requires hospital attribution recorded at event time.
+      Events themselves now exist (ADR-022). The rest of the hospital portal is built.
 - [ ] BE: **`notifications` module** — in-app notification on request created / decided /
       revoked, delivered through arq. Currently an empty `__init__.py`; access requests arrive
       silently.
@@ -59,16 +67,11 @@ Ordered by dependency. Each item is demonstrable on its own.
 
 Each is a stated security or correctness gap. **M3-D is now the most urgent** — see §1.
 
-- [ ] BE: **M3-B (narrowed by ADR-020)** — `GET /records` returns full metadata and writes
-      **no** audit event. SYSTEM_ARCHITECTURE rule 3 covers "metadata-beyond-existence";
-      CHECKLIST:26 requires an entry for every read. The clinician half is now settled:
-      `GET /granted-records` writes one `RECORDS_LISTED` per request, so the rule holds without
-      exception for **non-owner** listings. What remains is the owner/hospital-admin case, whose
-      argument is genuinely weaker (the caller is the subject, or the uploader) — so this is now
-      a ruling on whether rule 3 should say "non-owner", not an unaudited clinician read.
-- [ ] BE: **M3-E** — hospital-admin denials are unaudited (layer 2 refuses before the choke
-      point) while clinician denials are logged. One ruling should settle this and the
-      hidden-record refusal together.
+- [ ] BE: **M3-B remainder — the hospital record *listing* event.** ADR-022 settled the
+      rest (rule 3 means non-owner; reads, downloads, denials and uploads now emit). A
+      hospital's listing spans many patients while `audit_logs.patient_id` is singular and
+      NOT NULL, so no truthful single row expresses it — and ADR-020 already refused
+      one-row-per-record. Blocked on 6b's hospital attribution.
 - [ ] BE: **systemic** — no security event survives a failed request; ADR-017 covers the two
       read paths only. The durable fix (independent audit sink or outbox) needs its own ADR and
       changes DOMAIN_MODEL §1's same-transaction rule.
@@ -88,7 +91,7 @@ Each is a stated security or correctness gap. **M3-D is now the most urgent** �
       OD-1 unclaimed patients NO; OD-2 grant expiry 90d as an injected service default
       (`DEFAULT_GRANT_TTL`), overridable per approval; OD-3 grant exposes health profile —
       **not implemented either way**, so a ruling still changes code. See DOMAIN_MODEL.md §5.
-- [ ] PO: Review ADR-015 and **ADR-016…021** — all implemented per their documented rationale.
+- [ ] PO: Review ADR-015 and **ADR-016…022** — all implemented per their documented rationale.
 - [ ] PO: **ADR-009** deployment target (Render vs AWS) — still a placeholder, and M7 has no
       api/worker Dockerfile without it.
 - [ ] PO: **ADR-010** Flutter timing — still a placeholder; `mobile/` is a README.

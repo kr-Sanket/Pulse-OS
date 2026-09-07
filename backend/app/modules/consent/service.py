@@ -628,6 +628,65 @@ class ConsentService:
             )
         )
 
+    async def record_upload(
+        self,
+        actor: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        record_id: UUID,
+        request_context: str | None = None,
+    ) -> None:
+        """Append the ``RECORD_UPLOADED`` event for one stored document (M3-B, ADR-022).
+
+        ``RECORD_UPLOADED`` has been in docs/DOMAIN_MODEL.md §1's vocabulary since M0.2 and
+        in ``AuditAction`` since M3, and nothing wrote it: a document could enter a
+        patient's history leaving no trace of who put it there. This is the writer.
+
+        Audit metadata only — who, for whom, which record, when. No filename, no category
+        beyond the record reference, and nothing of the document itself: the trail says an
+        upload happened, not what was in it.
+        """
+        await self._write_audit(
+            actor,
+            action=AuditAction.RECORD_UPLOADED,
+            patient_id=patient_id,
+            target_record_id=record_id,
+            occurred_at=self._now(),
+            request_context=request_context,
+        )
+
+    async def record_direct_read(
+        self,
+        actor: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        record_id: UUID,
+        action: AuditAction,
+        allowed: bool,
+        request_context: str | None = None,
+    ) -> None:
+        """Append the event for a read authorized by a *relationship* rather than a grant.
+
+        The hospital-admin own-upload path (ADR-013 layer 2) never reaches ``enforce``,
+        because only ``records`` can evaluate "did my hospital upload this" — so until
+        ADR-022 that whole path, allowed and refused alike, wrote nothing. That was finding
+        M3-E, and the asymmetry it created was indefensible: a clinician's refused read was
+        on the patient's trail and a hospital's was not.
+
+        This does not decide anything. ``records`` has already ruled; this records the
+        ruling it made, which is why the outcome arrives as ``allowed`` rather than being
+        recomputed here. A refusal is written as ``ACCESS_DENIED`` on the same terms
+        ADR-018 set for clinicians.
+        """
+        await self._write_audit(
+            actor,
+            action=action if allowed else AuditAction.ACCESS_DENIED,
+            patient_id=patient_id,
+            target_record_id=record_id,
+            occurred_at=self._now(),
+            request_context=request_context,
+        )
+
     async def record_listing(
         self,
         requester: AuthenticatedUser,

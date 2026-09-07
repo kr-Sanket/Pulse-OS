@@ -168,7 +168,9 @@ def test_resolve_target_finds_the_seeded_identity_by_email() -> None:
                 email="admin.tmh@demo.pulseos.test",
             )
 
-            found = await linker.resolve_target(session, "admin.tmh@demo.pulseos.test")
+            found = await linker.resolve_target(
+                session, email="admin.tmh@demo.pulseos.test", firebase_uid=None
+            )
 
             assert found.firebase_uid == "synthetic:hospital-admin:hid-0001"
 
@@ -179,7 +181,9 @@ def test_resolve_target_refuses_an_unknown_email() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:
             with pytest.raises(linker.DevToolError, match="No user"):
-                await linker.resolve_target(session, "nobody@demo.pulseos.test")
+                await linker.resolve_target(
+                    session, email="nobody@demo.pulseos.test", firebase_uid=None
+                )
 
     asyncio.run(scenario())
 
@@ -225,3 +229,340 @@ def test_linking_rewrites_the_subject_and_leaves_everything_else_alone() -> None
             assert seeded.email == "admin.tmh@demo.pulseos.test"
 
     asyncio.run(scenario())
+
+
+# -- profile correction (HOSPITAL_ADMIN only) ------------------------------------------------
+
+
+def _admin_user(firebase_uid: str = "real-uid") -> Any:
+    return _user(firebase_uid)
+
+
+def test_omitting_both_profile_flags_leaves_the_profile_alone() -> None:
+    """The linker's existing behaviour must be untouched when no profile flags are given."""
+    change = linker.plan_profile_sync(
+        _admin_user(), "Ravi Prasad (Demo Admin)", full_name=None, email=None, firebase_uid="real"
+    )
+
+    assert change.changed is False
+    assert change is linker.NO_PROFILE_CHANGE
+
+
+def test_a_hospital_admin_profile_can_be_corrected() -> None:
+    change = linker.plan_profile_sync(
+        _admin_user(),
+        "Ravi Prasad (Demo Admin)",
+        full_name="Sanket Kumar",
+        email="real@example.com",
+        firebase_uid="real-uid",
+    )
+
+    assert change.changed is True
+    assert change.full_name == "Sanket Kumar"
+    assert change.email == "real@example.com"
+    assert change.previous_full_name == "Ravi Prasad (Demo Admin)"
+
+
+def test_profile_flags_without_a_firebase_uid_are_refused() -> None:
+    """The rule that stops this being a profile editor: you cannot name a row and edit it."""
+    with pytest.raises(linker.DevToolError, match="not a profile editor"):
+        linker.plan_profile_sync(
+            _admin_user(), "Ravi", full_name="Someone Else", email=None, firebase_uid=None
+        )
+
+
+@pytest.mark.parametrize("role", [Role.PATIENT, Role.DOCTOR, Role.SYSTEM_ADMIN])
+def test_only_hospital_admin_profiles_may_be_corrected(role: Role) -> None:
+    target = User(id=uuid4(), firebase_uid="real-uid", role=role, email="x@example.test")
+
+    with pytest.raises(linker.DevToolError, match="HOSPITAL_ADMIN only"):
+        linker.plan_profile_sync(
+            target, "Whoever", full_name="New Name", email=None, firebase_uid="real-uid"
+        )
+
+
+def test_a_value_equal_to_the_stored_one_is_not_reported_as_a_change() -> None:
+    target = _user("real-uid", email="real@example.com")
+
+    change = linker.plan_profile_sync(
+        target,
+        "Sanket Kumar",
+        full_name="Sanket Kumar",
+        email="real@example.com",
+        firebase_uid="real-uid",
+    )
+
+    assert change.changed is False
+
+
+def test_blank_and_oversized_profile_values_are_refused() -> None:
+    with pytest.raises(linker.DevToolError, match="must not be blank"):
+        linker.plan_profile_sync(
+            _admin_user(), "Ravi", full_name="   ", email=None, firebase_uid="real-uid"
+        )
+    with pytest.raises(linker.DevToolError, match="characters or fewer"):
+        linker.plan_profile_sync(
+            _admin_user(),
+            "Ravi",
+            full_name="x" * (linker.MAX_FULL_NAME_LENGTH + 1),
+            email=None,
+            firebase_uid="real-uid",
+        )
+
+
+def test_a_synthetic_identity_cannot_be_renamed_without_being_linked() -> None:
+    """Seed data stays seed data: renaming requires supplying the real UID, and plan_link
+    then refuses anything that is not an actual link."""
+    seeded = _user("synthetic:hospital-admin:hid-0001")
+
+    with pytest.raises(linker.DevToolError, match="not a profile editor"):
+        linker.plan_profile_sync(
+            seeded, "Ravi Prasad (Demo Admin)", full_name="Sanket", email=None, firebase_uid=None
+        )
+
+
+# -- profile correction against a real schema --------------------------------------------
+
+
+async def _seed_linked_admin(
+    session: Any, *, firebase_uid: str = "real-uid"
+) -> tuple[Any, Any, Any]:
+    """A hospital, its seeded admin profile, and that admin's user row already linked.
+
+    Built through the module seeds so the shape matches production exactly, then linked
+    the way the script links — which is the state the TMH row is actually in.
+    """
+    from app.modules.records.models import Hospital, HospitalAdmin, HospitalVerificationStatus
+
+    hospital = Hospital(
+        hid="HID-0001",
+        name="TMH Jamshedpur",
+        address="Jamshedpur",
+        verification_status=HospitalVerificationStatus.VERIFIED,
+    )
+    session.add(hospital)
+    await session.flush()
+
+    user, _ = await get_or_create_synthetic_user(
+        session,
+        firebase_uid="synthetic:hospital-admin:hid-0001",
+        role=Role.HOSPITAL_ADMIN,
+        email="admin.tmh@demo.pulseos.test",
+    )
+    admin = HospitalAdmin(
+        user_id=user.id, hospital_id=hospital.id, full_name="Ravi Prasad (Demo Admin)"
+    )
+    session.add(admin)
+    await session.flush()
+
+    user.firebase_uid = firebase_uid  # the link this tool performs
+    await session.flush()
+    return hospital, user, admin
+
+
+def test_an_already_linked_identity_resolves_by_its_firebase_uid() -> None:
+    """The TMH case: --user-email is no longer needed once the row carries a real UID."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            _, user, _ = await _seed_linked_admin(session)
+
+            found = await linker.resolve_target(session, email=None, firebase_uid="real-uid")
+
+            assert found.id == user.id
+
+    asyncio.run(scenario())
+
+
+def test_resolution_still_works_after_the_email_has_been_synchronised() -> None:
+    """The footgun this design exists to avoid: the lookup key is also a mutable field."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            _, user, admin = await _seed_linked_admin(session)
+            change = linker.plan_profile_sync(
+                user,
+                admin.full_name,
+                full_name="Sanket Kumar",
+                email="sanket@example.com",
+                firebase_uid="real-uid",
+            )
+            await linker.apply_profile_change(session, user, admin, change)
+
+            # The seeded email no longer names it, but the UID still does.
+            by_uid = await linker.resolve_target(session, email=None, firebase_uid="real-uid")
+            by_new_email = await linker.resolve_target(
+                session, email="sanket@example.com", firebase_uid=None
+            )
+
+            assert by_uid.id == user.id == by_new_email.id
+
+    asyncio.run(scenario())
+
+
+def test_conflicting_email_and_uid_are_refused_rather_than_guessed() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            _, user, _ = await _seed_linked_admin(session)
+            session.add(User(firebase_uid="other-uid", role=Role.PATIENT, email="other@x.test"))
+            await session.flush()
+
+            with pytest.raises(linker.DevToolError, match="two different identities"):
+                await linker.resolve_target(
+                    session, email="other@x.test", firebase_uid=user.firebase_uid
+                )
+
+    asyncio.run(scenario())
+
+
+def test_an_email_belonging_to_another_user_is_detected() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            _, user, _ = await _seed_linked_admin(session)
+            session.add(User(firebase_uid="other-uid", role=Role.PATIENT, email="taken@x.test"))
+            await session.flush()
+
+            taken = await linker.email_belongs_to_another_user(
+                session, "taken@x.test", exclude_user_id=user.id
+            )
+            own = await linker.email_belongs_to_another_user(
+                session, "admin.tmh@demo.pulseos.test", exclude_user_id=user.id
+            )
+
+            assert taken is True
+            # The row's own email is not a collision with itself.
+            assert own is False
+
+    asyncio.run(scenario())
+
+
+def test_correcting_the_profile_changes_two_columns_and_nothing_else() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            hospital, user, admin = await _seed_linked_admin(session)
+            before = (
+                user.id,
+                user.role,
+                user.firebase_uid,
+                admin.hospital_id,
+                hospital.verification_status,
+                hospital.name,
+            )
+
+            change = linker.plan_profile_sync(
+                user,
+                admin.full_name,
+                full_name="Sanket Kumar",
+                email="sanket@example.com",
+                firebase_uid="real-uid",
+            )
+            await linker.apply_profile_change(session, user, admin, change)
+
+            assert admin.full_name == "Sanket Kumar"
+            assert user.email == "sanket@example.com"
+            # Role, hospital, verification and the Firebase UID are untouched.
+            assert (
+                user.id,
+                user.role,
+                user.firebase_uid,
+                admin.hospital_id,
+                hospital.verification_status,
+                hospital.name,
+            ) == before
+
+    asyncio.run(scenario())
+
+
+def test_the_correction_is_transactional_and_rolls_back_on_failure() -> None:
+    """Claims are provisioned in the same transaction as the write, so a provider failure
+    must undo the profile correction too — not leave a half-corrected row behind.
+
+    Simulated by raising where ``provision_claims`` would raise: inside the transaction,
+    after the profile has been flushed.
+    """
+
+    async def scenario() -> None:
+        from app.core.db import Base
+        from app.modules.records.models import HospitalAdmin
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from tests.support import create_sqlite_test_engine
+
+        engine = create_sqlite_test_engine()
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+
+            async with factory() as session, session.begin():
+                _, user, admin = await _seed_linked_admin(session)
+                admin_id, user_id = admin.id, user.id
+
+            with pytest.raises(RuntimeError, match="simulated provider failure"):
+                async with factory() as session, session.begin():
+                    user = await session.get(User, user_id)
+                    admin = await session.get(HospitalAdmin, admin_id)
+                    assert user is not None and admin is not None
+                    change = linker.plan_profile_sync(
+                        user,
+                        admin.full_name,
+                        full_name="Sanket Kumar",
+                        email="sanket@example.com",
+                        firebase_uid="real-uid",
+                    )
+                    await linker.apply_profile_change(session, user, admin, change)
+                    raise RuntimeError("simulated provider failure")
+
+            async with factory() as session:
+                admin = await session.get(HospitalAdmin, admin_id)
+                user = await session.get(User, user_id)
+                assert admin is not None and user is not None
+                assert admin.full_name == "Ravi Prasad (Demo Admin)"
+                assert user.email == "admin.tmh@demo.pulseos.test"
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_a_hospital_admin_without_a_profile_row_is_refused() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            user, _ = await get_or_create_synthetic_user(
+                session,
+                firebase_uid="synthetic:hospital-admin:hid-0009",
+                role=Role.HOSPITAL_ADMIN,
+                email="orphan@demo.pulseos.test",
+            )
+
+            with pytest.raises(linker.DevToolError, match="no hospital-admin profile"):
+                await linker.load_admin_profile(session, user.id)
+
+    asyncio.run(scenario())
+
+
+def test_a_non_admin_is_told_the_real_reason_before_any_profile_row_is_looked_up() -> None:
+    """Ordering matters for the message: a doctor has no hospital-admin row either, and
+    reporting *that* would send a developer looking for a corrupt account instead of a
+    capability that simply does not apply to them."""
+    doctor = User(id=uuid4(), firebase_uid="real-uid", role=Role.DOCTOR, email="d@x.test")
+
+    with pytest.raises(linker.DevToolError, match="HOSPITAL_ADMIN only"):
+        linker.profile_sync_requested(doctor, full_name="Nope", email=None, firebase_uid="real-uid")
+
+
+def test_no_profile_flags_means_no_sync_requested() -> None:
+    assert (
+        linker.profile_sync_requested(
+            _admin_user(), full_name=None, email=None, firebase_uid="real-uid"
+        )
+        is False
+    )
+
+
+def test_a_uid_alone_is_enough_to_name_an_already_linked_row() -> None:
+    """--user-email is optional once linked; requiring it would make the TMH case
+    unreachable after --email has changed the address it would be named by."""
+    assert linker.profile_sync_requested(
+        _admin_user(), full_name="Sanket Kumar", email=None, firebase_uid="real-uid"
+    )

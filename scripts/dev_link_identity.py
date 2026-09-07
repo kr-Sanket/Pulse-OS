@@ -12,12 +12,33 @@ PulseOS role claims onto that subject through the auth module's own port. It cre
 nothing — no user, no hospital, no admin, no doctor, no patient — and it never chooses a
 role: the role comes from the row that already exists.
 
+It can also, in the same transaction, correct the PulseOS profile of the identity it has
+linked: ``--full-name`` and ``--email`` on a **HOSPITAL_ADMIN** row. That exists because
+linking deliberately changes only ``firebase_uid``, which leaves a real developer signing
+in behind a seeded demo name ("Ravi Prasad (Demo Admin)"). It is **not** a profile editor,
+and four rules keep it from becoming one:
+
+* the flags require ``--firebase-uid``, so there is no way to name a row and edit it;
+* the row must already be — or be becoming, in this same run — that UID's identity;
+* only HOSPITAL_ADMIN is supported; a patient or doctor row is refused outright;
+* two fixed fields, both supplied explicitly. There is no ``--set``, and no way to reach
+  any other column.
+
+The Firebase account itself is never written to: display name and email stay Firebase's,
+and PulseOS profile data stays PulseOS's. Coupling the two is precisely the mistake this
+tool must not make — it corrects local data, it does not synchronise an external identity.
+
 Run from the repo root with the backend virtualenv's Python::
 
     backend/.venv/bin/python scripts/dev_link_identity.py --list
     backend/.venv/bin/python scripts/dev_link_identity.py \\
         --user-email admin.tmh@demo.pulseos.test \\
         --firebase-uid 3E6S9A89POfQmpXUTMsifUsLJcC2
+
+    # already linked: resolve by the UID, and correct the seeded profile values
+    backend/.venv/bin/python scripts/dev_link_identity.py \\
+        --firebase-uid 3E6S9A89POfQmpXUTMsifUsLJcC2 \\
+        --full-name "Sanket Kumar" --email sanket@example.com
 
 There is deliberately no reverse operation in this slice. Be aware of what that means for
 re-seeding: while a seeded row carries a real UID, ``scripts/seed.py`` can no longer find
@@ -36,8 +57,11 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:  # pragma: no cover - import-time typing only
+    from uuid import UUID
+
     from app.core.config import Settings
     from app.modules.auth.models import User
+    from app.modules.records.models import HospitalAdmin
     from sqlalchemy.ext.asyncio import AsyncSession
 
 #: Seeded identities carry this prefix (app/modules/auth/seed.py). A row that still has it
@@ -47,6 +71,11 @@ SYNTHETIC_PREFIX: Final = "synthetic:"
 #: The only environment this script will run in. ``Settings.environment`` is the project's
 #: own signal (app/core/config.py), documented in .env.example as PULSEOS_ENVIRONMENT.
 REQUIRED_ENVIRONMENT: Final = "local"
+
+#: The API's own limits on the two profile columns this tool may write
+#: (app/modules/records/models.py HospitalAdmin.full_name, app/modules/auth/models.py User.email).
+MAX_FULL_NAME_LENGTH: Final = 120
+MAX_EMAIL_LENGTH: Final = 255
 
 #: Database hosts that are unambiguously a developer's own machine. ``postgres`` is the
 #: docker-compose service name (infra/docker-compose.yml), i.e. the same stack seen from
@@ -60,6 +89,29 @@ class DevToolError(Exception):
 
 class UnsafeEnvironmentError(DevToolError):
     """The environment is not provably a local development one. Never bypassable."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileChange:
+    """A correction to the linked hospital admin's PulseOS profile.
+
+    ``None`` on a field means "leave it alone" — the developer supplies only what they want
+    corrected, and an omitted flag is never treated as an instruction to blank a column.
+    """
+
+    full_name: str | None
+    email: str | None
+    previous_full_name: str
+    previous_email: str | None
+
+    @property
+    def changed(self) -> bool:
+        return self.full_name is not None or self.email is not None
+
+
+NO_PROFILE_CHANGE: Final = ProfileChange(
+    full_name=None, email=None, previous_full_name="", previous_email=None
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,27 +176,59 @@ async def find_seeded_identities(session: "AsyncSession") -> "list[User]":
     return list(result.scalars())
 
 
-async def resolve_target(session: "AsyncSession", email: str) -> "User":
-    """The one identity this email names, or a refusal explaining why there isn't one.
+async def resolve_target(
+    session: "AsyncSession", *, email: str | None, firebase_uid: str | None
+) -> "User":
+    """The one identity these arguments name, or a refusal explaining why there isn't one.
 
-    Matched on ``users.email``, which the seed pins per demo actor. The column carries no
-    unique constraint, so an ambiguous match is refused rather than resolved by guessing.
+    Two keys, because the tool can mutate one of them. ``users.email`` is how a *seeded*
+    identity is named — the seed pins one per demo actor — but once ``--email`` has
+    corrected it, that key no longer finds the row. ``firebase_uid`` is unique and, for an
+    already-linked identity, stable, so it is tried first and is the key that keeps working
+    after a profile sync.
+
+    A UID that matches nothing is not an error here: that is the ordinary not-yet-linked
+    case, and the email carries the lookup. Supplying both and having them disagree *is* an
+    error — that is two different rows, and guessing between them is exactly the kind of
+    mistake this script exists to prevent.
     """
     from app.modules.auth.models import User
     from sqlalchemy import select
 
+    by_uid: User | None = None
+    if firebase_uid:
+        result = await session.execute(select(User).where(User.firebase_uid == firebase_uid))
+        by_uid = result.scalar_one_or_none()
+
+    if email is None:
+        if by_uid is None:
+            raise DevToolError(
+                f"No user has the Firebase UID '{firebase_uid}'. Pass --user-email to name "
+                "the seeded identity you want to link."
+            )
+        return by_uid
+
     result = await session.execute(select(User).where(User.email == email))
     matches = list(result.scalars())
-    if not matches:
+    if len(matches) > 1:
+        # users.email carries no unique constraint, so ambiguity is possible and refused.
+        raise DevToolError(
+            f"{len(matches)} users share the email '{email}'. Refusing to guess which one."
+        )
+    by_email = matches[0] if matches else None
+
+    if by_uid is not None and by_email is not None and by_uid.id != by_email.id:
+        raise DevToolError(
+            f"--firebase-uid names '{by_uid.email}' but --user-email names '{by_email.email}'. "
+            "These are two different identities; refusing to guess which you meant."
+        )
+    target = by_uid or by_email
+    if target is None:
         raise DevToolError(
             f"No user has the email '{email}'. Run --list to see the seeded identities, "
             "or run scripts/seed.py if the database has not been seeded."
         )
-    if len(matches) > 1:
-        raise DevToolError(
-            f"{len(matches)} users share the email '{email}'. Refusing to guess which one."
-        )
-    return matches[0]
+    return target
 
 
 def plan_link(target: "User", firebase_uid: str) -> LinkOutcome:
@@ -181,6 +265,133 @@ def plan_link(target: "User", firebase_uid: str) -> LinkOutcome:
         new_uid=firebase_uid,
         changed=True,
     )
+
+
+async def load_admin_profile(session: "AsyncSession", user_id: "UUID") -> "HospitalAdmin":
+    """The hospital-admin profile row for this identity, or a refusal.
+
+    Reaching into a ``records``-owned table from a script is a boundary this tool crosses
+    knowingly and in exactly one place. ``records`` publishes no write seam for a profile
+    name — correctly, because nothing in the product may rename an administrator — so there
+    is no service to go through, and inventing one would put a capability into ``app/``
+    that only a developer's laptop should ever have.
+    """
+    from app.modules.records.models import HospitalAdmin
+    from sqlalchemy import select
+
+    result = await session.execute(select(HospitalAdmin).where(HospitalAdmin.user_id == user_id))
+    admin = result.scalar_one_or_none()
+    if admin is None:
+        raise DevToolError(
+            "This identity has the HOSPITAL_ADMIN role but no hospital-admin profile row. "
+            "Refusing to act on an inconsistent account."
+        )
+    return admin
+
+
+async def email_belongs_to_another_user(
+    session: "AsyncSession", email: str, *, exclude_user_id: "UUID"
+) -> bool:
+    """True when some *other* users row already holds this email.
+
+    ``users.email`` has no unique constraint, so nothing at the database level stops two
+    rows sharing one. Allowing it here would be self-defeating: ``resolve_target`` refuses
+    an ambiguous email, so a collision this tool created would make the row it just wrote
+    unreachable by the very key used to name it.
+    """
+    from app.modules.auth.models import User
+    from sqlalchemy import select
+
+    result = await session.execute(
+        select(User.id).where(User.email == email, User.id != exclude_user_id)
+    )
+    return result.first() is not None
+
+
+def profile_sync_requested(
+    target: "User", *, full_name: str | None, email: str | None, firebase_uid: str | None
+) -> bool:
+    """Whether a profile correction was asked for — refusing the two ways it may not be.
+
+    Separate from :func:`plan_profile_sync`, and checked *before* the admin row is loaded,
+    so a doctor or patient is told the real reason ("HOSPITAL_ADMIN only") instead of the
+    incidental one they would otherwise hit ("no hospital-admin profile row").
+    """
+    from app.modules.auth.domain import Role
+
+    if full_name is None and email is None:
+        return False
+    if not firebase_uid:
+        raise DevToolError(
+            "--full-name and --email require --firebase-uid. This tool corrects the profile "
+            "of an identity it has linked; it is not a profile editor."
+        )
+    if target.role is not Role.HOSPITAL_ADMIN:
+        raise DevToolError(
+            f"Profile correction is supported for HOSPITAL_ADMIN only; this identity is "
+            f"{target.role}. Patient and doctor profiles are out of scope for this tool."
+        )
+    return True
+
+
+def plan_profile_sync(
+    target: "User",
+    admin_full_name: str,
+    *,
+    full_name: str | None,
+    email: str | None,
+    firebase_uid: str | None,
+) -> ProfileChange:
+    """Decide what the profile correction would do, and refuse anything wider than one.
+
+    Pure, so every rule is testable without a database. The role check lives here rather
+    than at the CLI because it is a domain rule, not an argument-parsing one.
+    """
+    if not profile_sync_requested(
+        target, full_name=full_name, email=email, firebase_uid=firebase_uid
+    ):
+        return NO_PROFILE_CHANGE
+
+    corrected_name = _clean("--full-name", full_name, MAX_FULL_NAME_LENGTH)
+    corrected_email = _clean("--email", email, MAX_EMAIL_LENGTH)
+
+    # A value equal to what is already stored is not a change; reporting it as one would
+    # make a repeated run look like it did something.
+    return ProfileChange(
+        full_name=None if corrected_name == admin_full_name else corrected_name,
+        email=None if corrected_email == target.email else corrected_email,
+        previous_full_name=admin_full_name,
+        previous_email=target.email,
+    )
+
+
+def _clean(flag: str, value: str | None, max_length: int) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        raise DevToolError(f"{flag} must not be blank.")
+    if len(cleaned) > max_length:
+        raise DevToolError(f"{flag} must be {max_length} characters or fewer.")
+    return cleaned
+
+
+async def apply_profile_change(
+    session: "AsyncSession", target: "User", admin: "HospitalAdmin", change: ProfileChange
+) -> None:
+    """Write the corrected profile values. Same session, so the same transaction as the link.
+
+    Touches two columns and no others: the admin's display name (records) and the user's
+    email (auth). Role, status, hospital, verification and firebase_uid are not written
+    here, and no row is created or removed.
+    """
+    if not change.changed:
+        return
+    if change.full_name is not None:
+        admin.full_name = change.full_name
+    if change.email is not None:
+        target.email = change.email
+    await session.flush()
 
 
 async def apply_outcome(
@@ -232,9 +443,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--user-email",
-        help="the seeded identity to link, by its email (e.g. admin.tmh@demo.pulseos.test)",
+        help=(
+            "the seeded identity, by its email (e.g. admin.tmh@demo.pulseos.test). Optional "
+            "once linked: --firebase-uid alone resolves an identity this tool already linked"
+        ),
     )
     parser.add_argument("--firebase-uid", help="the real Firebase UID to attach")
+    parser.add_argument(
+        "--full-name",
+        help=(
+            "correct the linked HOSPITAL_ADMIN's PulseOS display name (requires "
+            "--firebase-uid; not a profile editor)"
+        ),
+    )
+    parser.add_argument(
+        "--email",
+        help="correct the linked identity's PulseOS email (requires --firebase-uid)",
+    )
     parser.add_argument(
         "--skip-claims",
         action="store_true",
@@ -254,14 +479,23 @@ def _print_banner(settings: "Settings") -> None:
     print(f"  database    : {database_host(settings.database_url)}")
 
 
-def _confirm(outcome: LinkOutcome, *, assume_yes: bool) -> bool:
+def _confirm(outcome: LinkOutcome, change: ProfileChange, *, assume_yes: bool) -> bool:
     print("")
     print(f"  identity    : {outcome.email} ({outcome.role})")
-    print(f"  subject now : {outcome.previous_uid}")
-    print(f"  subject new : {outcome.new_uid}")
+    if outcome.changed:
+        print(f"  subject now : {outcome.previous_uid}")
+        print(f"  subject new : {outcome.new_uid}")
+    else:
+        print(f"  subject     : {outcome.new_uid} (already linked)")
+    if change.full_name is not None:
+        print(f"  name now    : {change.previous_full_name}")
+        print(f"  name new    : {change.full_name}")
+    if change.email is not None:
+        print(f"  email now   : {change.previous_email}")
+        print(f"  email new   : {change.email}")
     if assume_yes:
         return True
-    answer = input("\nRewrite this identity's subject? [y/N] ").strip().lower()
+    answer = input("\nApply these changes? [y/N] ").strip().lower()
     return answer in {"y", "yes"}
 
 
@@ -296,28 +530,57 @@ async def run(argv: list[str]) -> int:
                     print("  none — has scripts/seed.py been run?")
                 return 0
 
-            if not args.user_email:
-                print("--user-email is required (or use --list).", file=sys.stderr)
-                return 2
-
+            # --firebase-uid is required for every mutating path: the link needs it, and
+            # the profile flags are only permitted on the identity it names. --user-email
+            # is optional once a row is linked, because the UID then resolves it.
             if not args.firebase_uid:
                 print("--firebase-uid is required (or use --list).", file=sys.stderr)
                 return 2
 
-            target = await resolve_target(session, args.user_email)
+            target = await resolve_target(
+                session, email=args.user_email, firebase_uid=args.firebase_uid
+            )
             outcome = plan_link(target, args.firebase_uid)
 
-            if not outcome.changed:
-                print(f"\n'{outcome.email}' already has subject {outcome.new_uid} — nothing to do.")
+            # Planned against the row as it stands, but only ever for the identity the
+            # supplied UID owns — plan_link has already refused every case where the row
+            # belongs to somebody else.
+            change = NO_PROFILE_CHANGE
+            admin: HospitalAdmin | None = None
+            if profile_sync_requested(
+                target, full_name=args.full_name, email=args.email, firebase_uid=args.firebase_uid
+            ):
+                admin = await load_admin_profile(session, target.id)
+                change = plan_profile_sync(
+                    target,
+                    admin.full_name,
+                    full_name=args.full_name,
+                    email=args.email,
+                    firebase_uid=args.firebase_uid,
+                )
+                if change.email is not None and await email_belongs_to_another_user(
+                    session, change.email, exclude_user_id=target.id
+                ):
+                    raise DevToolError(
+                        f"'{change.email}' already belongs to another user. Refusing to "
+                        "create a duplicate email, which would make this identity "
+                        "ambiguous to name."
+                    )
+
+            if not outcome.changed and not change.changed:
+                print(f"\n'{outcome.email}' already matches what you asked for — nothing to do.")
                 return 0
 
-            if not _confirm(outcome, assume_yes=args.yes):
+            if not _confirm(outcome, change, assume_yes=args.yes):
                 print("Aborted; nothing was changed.")
                 # Nothing was flushed, but be explicit rather than relying on that.
                 await session.rollback()
                 return 1
 
             await apply_outcome(session, target, outcome, provision_claims=not args.skip_claims)
+            if admin is not None and change.changed:
+                await apply_profile_change(session, target, admin, change)
+            linked, corrected = outcome.changed, change.changed
     except DevToolError as exc:
         print(f"\n{exc}", file=sys.stderr)
         return 1
@@ -332,6 +595,10 @@ async def run(argv: list[str]) -> int:
     finally:
         await engine.dispose()
 
+    if corrected:
+        print("\nPulseOS profile corrected. The Firebase account itself was not touched.")
+    if not linked:
+        return 0
     print(f"\nLinked. '{outcome.email}' now signs in as {outcome.new_uid}.")
     if args.skip_claims:
         print(

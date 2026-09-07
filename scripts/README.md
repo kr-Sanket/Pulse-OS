@@ -21,6 +21,22 @@ Operational scripts (owned here, run from repo root):
       --user-email admin.tmh@demo.pulseos.test --firebase-uid <REAL_FIREBASE_UID>
   ```
 
+  It can also correct the PulseOS profile of an identity it has linked — **HOSPITAL_ADMIN
+  only**, two fields, both explicit — because linking changes `firebase_uid` alone and
+  leaves a real developer signing in behind a seeded demo name:
+
+  ```bash
+  backend/.venv/bin/python scripts/dev_link_identity.py \
+      --firebase-uid <REAL_FIREBASE_UID> \
+      --full-name "Your Name" --email you@example.com
+  ```
+
+  This is not a profile editor: `--full-name`/`--email` require `--firebase-uid`, the row
+  must already be (or become, in the same run) that UID's identity, patient and doctor rows
+  are refused, and an email already held by another `users` row is refused. Once the email
+  has been corrected the seeded address no longer names the row — resolve it by
+  `--firebase-uid` from then on. The Firebase account itself is never written to.
+
   **Caution before re-running `seed.py`.** While a seeded row carries a real UID the seed
   can no longer find it by its `synthetic:` subject, so it inserts a *second* user and a
   *second* hospital-admin row for the same hospital (`hospital_admins.hospital_id` is not

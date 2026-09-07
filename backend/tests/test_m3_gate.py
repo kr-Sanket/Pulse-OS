@@ -210,6 +210,7 @@ def test_m3_gate_request_approve_read_revoke_across_two_hospitals(
     from collections import Counter
 
     trail = Counter(_audit(db_engine, cast.patient_id))
+    assert trail["RECORD_UPLOADED"] == 2  # the two hospital uploads that set the journey up
     assert trail["ACCESS_REQUESTED"] == 1
     assert trail["CONSENT_APPROVED"] == 1
     assert trail["CONSENT_REJECTED"] == 1
@@ -231,10 +232,17 @@ def test_m2_relationships_survive_the_consent_integration(
     assert client.get(RECORDS, headers=cast.admin_tmh).json()["items"][0]["id"] == record_id
     assert client.get(RECORDS, headers=cast.patient).json()["items"][0]["id"] == record_id
 
-    # The patient's own read is audited; the hospital's own-upload read is not (a layer-2
-    # decision never reaches the consent choke point) — the known CHECKLIST gap.
+    # Both reads are audited. The hospital's own-upload read is decided by layer 2 and
+    # never reaches the consent choke point, but it still reaches the trail (ADR-022,
+    # closing finding M3-E) — so the patient sees every read of their record, whoever made
+    # it and whatever authorised it. The upload that created the record is on there too.
     trail = _audit(db_engine, cast.patient_id)
-    assert trail.count("RECORD_VIEWED") == 1
+    assert trail.count("RECORD_VIEWED") == 2
+    assert trail.count("RECORD_UPLOADED") == 1
+    # Listing is still not audited for either caller: the owner/hospital listing ruling
+    # (M3-B) is that rule 3 covers non-owner reads, and a hospital-scoped listing event
+    # cannot be attributed without ADR-022's deferred hospital column.
+    assert trail.count("RECORDS_LISTED") == 0
 
 
 def test_a_suspended_clinician_loses_a_grant_it_already_holds(

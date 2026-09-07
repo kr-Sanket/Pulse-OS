@@ -16,7 +16,7 @@ from app.core.queue import InMemoryJobQueue, QueueUnavailableError
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.models import User
 from app.modules.consent.dependencies import RecordsStaffDirectory
-from app.modules.consent.models import AuditAction
+from app.modules.consent.models import AuditAction, AuditLog
 from app.modules.consent.repository import (
     AuditLogRepository,
     ConsentDecisionRepository,
@@ -59,7 +59,12 @@ from app.modules.records.repository import (
     RecordCategoryRepository,
 )
 from app.modules.records.seed import seed_reference_data
-from app.modules.records.service import RECORD_UPLOADED_TASK, FileUpload, RecordService
+from app.modules.records.service import (
+    RECORD_UPLOADED_TASK,
+    FileUpload,
+    RecordService,
+    RecordView,
+)
 from app.shared.pagination import CursorKey, decode_cursor
 from app.shared.time import utc_now
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -156,6 +161,7 @@ async def _harness(
         consent=consent,
         grant_scope=consent,
         listing_auditor=consent,
+        record_auditor=consent,
         presign_ttl_seconds=300,
         max_upload_bytes=max_upload_bytes,
         clock=clock,
@@ -411,10 +417,21 @@ def test_reads_outside_the_relationship_scope_are_404() -> None:
             # A clinician without a grant is refused, and cannot tell refusal from absence.
             with pytest.raises(RecordNotFoundError):
                 await h.service.get_for_caller(h.doctor_caller, locker_view.record.id)
-            # ...and the refusal is on the record, not silent: consent audited it.
+            # Every refusal above is on the record, not silent — including the two by a
+            # hospital admin, which ADR-022 brought onto the trail (finding M3-E). Newest
+            # first: the clinician's read, the admin's download, the admin's read, and the
+            # upload that created the record.
             trail = await h.audit.list_page_by_patient(h.patient.id, after=None, limit=10)
-            assert [row.action.value for row in trail] == ["ACCESS_DENIED"]
-            assert trail[0].target_record_id == locker_view.record.id
+            assert [row.action.value for row in trail] == [
+                "ACCESS_DENIED",
+                "ACCESS_DENIED",
+                "ACCESS_DENIED",
+                "RECORD_UPLOADED",
+            ]
+            assert {row.target_record_id for row in trail} == {locker_view.record.id}
+            # The read of a record that does not exist wrote nothing: there is no patient
+            # to attribute it to, and no data was reached.
+            assert len(trail) == 4
 
     asyncio.run(scenario())
 
@@ -473,8 +490,8 @@ def test_pagination_walks_all_records_without_overlap() -> None:
 # -- existence projection (M4.1) ---------------------------------------------------------
 
 
-async def _upload(h: Harness, code: str) -> None:
-    await h.service.upload_for_health_id(
+async def _upload(h: Harness, code: str) -> RecordView:
+    return await h.service.upload_for_health_id(
         h.admin_caller,
         patient_health_id=h.patient.health_id,
         category_code=code,
@@ -867,7 +884,9 @@ def test_an_empty_scope_is_audited_as_a_refusal() -> None:
 
             await _list_granted(h)
 
-            assert await _actions(h) == ["ACCESS_DENIED"]
+            # Newest first: the refused listing, then the upload that set the scene — which
+            # is itself an audited event since ADR-022.
+            assert await _actions(h) == ["ACCESS_DENIED", "RECORD_UPLOADED"]
 
     asyncio.run(scenario())
 
@@ -1000,5 +1019,250 @@ def test_a_listing_costs_the_same_number_of_statements_at_any_page_size() -> Non
             # harness resolves it in memory. What matters is that neither number moves with
             # the page size.)
             assert len(ten) == 6
+
+    asyncio.run(scenario())
+
+
+# -- ADR-022: the events that never reach the consent choke point ----------------------------
+
+
+async def _trail(h: Harness) -> list[AuditLog]:
+    """The patient's trail, oldest first — the order the actions happened in."""
+    rows = await h.audit.list_page_by_patient(h.patient.id, after=None, limit=99)
+    return list(reversed(rows))
+
+
+def test_a_hospital_upload_writes_exactly_one_record_uploaded_event() -> None:
+    """RECORD_UPLOADED has been in the vocabulary since M0.2 and was written by nothing:
+    a document could enter a patient's history leaving no trace of who put it there."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            view = await h.service.upload_for_health_id(
+                h.admin_caller,
+                patient_health_id=h.patient.health_id,
+                category_code="CBC",
+                date_of_service=date(2026, 3, 1),
+                description=None,
+                file=PDF,
+                request_context="req-upload",
+            )
+
+            trail = await _trail(h)
+            assert len(trail) == 1
+            event = trail[0]
+            assert event.action is AuditAction.RECORD_UPLOADED
+            assert event.actor_user_id == h.admin_caller.user_id
+            assert event.actor_role is Role.HOSPITAL_ADMIN
+            assert event.patient_id == h.patient.id
+            assert event.target_record_id == view.record.id
+            assert event.request_context == "req-upload"
+            # At most one target (docs/DOMAIN_MODEL.md §1, as relaxed by ADR-020).
+            assert (event.target_category_id, event.target_request_id) == (None, None)
+
+    asyncio.run(scenario())
+
+
+def test_the_upload_event_carries_no_clinical_payload() -> None:
+    """Audit metadata only: the trail says an upload happened, never what was in it."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            named = FileUpload(
+                filename="hiv-panel-positive.pdf",
+                content_type="application/pdf",
+                data=b"%PDF-1.7 confidential",
+            )
+
+            await h.service.upload_for_health_id(
+                h.admin_caller,
+                patient_health_id=h.patient.health_id,
+                category_code="CBC",
+                date_of_service=date(2026, 3, 1),
+                description="Routine pre-operative panel",
+                file=named,
+                request_context=None,
+            )
+
+            row = (await _trail(h))[0]
+            written = " ".join(str(value) for value in row.__dict__.values())
+            assert "hiv-panel-positive" not in written
+            assert "confidential" not in written
+            assert "pre-operative" not in written
+
+    asyncio.run(scenario())
+
+
+def test_a_patient_locker_upload_is_audited_to_the_patient_as_actor() -> None:
+    """RECORD_UPLOADED is unqualified in the vocabulary, and a trail that recorded only
+    hospital uploads would be a trail that lies by omission about the patient's own."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            view = await h.service.upload_to_own_locker(
+                h.patient_caller,
+                category_code="CBC",
+                date_of_service=date(2026, 3, 1),
+                description=None,
+                file=PDF,
+            )
+
+            event = (await _trail(h))[0]
+            assert event.action is AuditAction.RECORD_UPLOADED
+            assert event.actor_user_id == h.patient_caller.user_id
+            assert event.actor_role is Role.PATIENT
+            assert event.target_record_id == view.record.id
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_upload_writes_no_event() -> None:
+    """Failures must not create misleading success events: the storage write happens before
+    the audit write, and the transaction carries both away together if anything fails."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            h.storage.storage_error = StorageUnavailableError()
+
+            with pytest.raises(StorageUnavailableError):
+                await h.service.upload_for_health_id(
+                    h.admin_caller,
+                    patient_health_id=h.patient.health_id,
+                    category_code="CBC",
+                    date_of_service=date(2026, 3, 1),
+                    description=None,
+                    file=PDF,
+                )
+
+            assert await _trail(h) == []
+
+    asyncio.run(scenario())
+
+
+def test_a_hospitals_own_upload_read_is_now_audited() -> None:
+    """Finding M3-E, closed: the read is still decided by layer 2 and still never reaches
+    the choke point, but the patient can now see that it happened."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            view = await _upload(h, "CBC")
+
+            await h.service.get_for_caller(
+                h.admin_caller, view.record.id, request_context="req-read"
+            )
+
+            event = (await _trail(h))[-1]
+            assert event.action is AuditAction.RECORD_VIEWED
+            assert event.actor_user_id == h.admin_caller.user_id
+            assert event.actor_role is Role.HOSPITAL_ADMIN
+            assert event.target_record_id == view.record.id
+            assert event.request_context == "req-read"
+
+    asyncio.run(scenario())
+
+
+def test_a_hospital_download_is_distinguished_from_a_view() -> None:
+    """The listing / view / download distinction the vocabulary draws is preserved."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            view = await _upload(h, "CBC")
+
+            await h.service.create_download_link(h.admin_caller, view.record.id)
+
+            actions = [row.action for row in await _trail(h)]
+            assert actions == [AuditAction.RECORD_UPLOADED, AuditAction.RECORD_DOWNLOADED]
+
+    asyncio.run(scenario())
+
+
+def test_one_hospital_read_produces_exactly_one_event() -> None:
+    """No duplicate events: a metadata read must not also emit a listing or a download."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            view = await _upload(h, "CBC")
+            before = len(await _trail(h))
+
+            await h.service.get_for_caller(h.admin_caller, view.record.id)
+
+            assert len(await _trail(h)) == before + 1
+
+    asyncio.run(scenario())
+
+
+def test_a_hospital_read_of_another_hospitals_record_is_audited_as_denied() -> None:
+    """The other half of M3-E, on ADR-018's terms: a refusal the patient could not see is
+    exactly the event a patient most needs to see."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            locker = await h.service.upload_to_own_locker(
+                h.patient_caller,
+                category_code="CBC",
+                date_of_service=date(2026, 3, 1),
+                description=None,
+                file=PDF,
+            )
+
+            with pytest.raises(RecordNotFoundError):
+                await h.service.get_for_caller(h.admin_caller, locker.record.id)
+
+            event = (await _trail(h))[-1]
+            assert event.action is AuditAction.ACCESS_DENIED
+            assert event.actor_user_id == h.admin_caller.user_id
+            assert event.actor_role is Role.HOSPITAL_ADMIN
+            assert event.target_record_id == locker.record.id
+
+    asyncio.run(scenario())
+
+
+def test_reading_a_record_that_does_not_exist_writes_nothing() -> None:
+    """There is no patient to attribute it to — audit_logs.patient_id is NOT NULL — and no
+    data was reached, so there is nothing to record."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            before = await _trail(h)
+
+            with pytest.raises(RecordNotFoundError):
+                await h.service.get_for_caller(h.admin_caller, uuid4())
+
+            assert await _trail(h) == before
+
+    asyncio.run(scenario())
+
+
+def test_patient_and_clinician_read_behaviour_is_unchanged() -> None:
+    """The paths that already went through the choke point still do, once each."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            view = await _upload(h, "CBC")
+
+            await h.service.get_for_caller(h.patient_caller, view.record.id)
+            owner_event = (await _trail(h))[-1]
+
+            with pytest.raises(RecordNotFoundError):
+                await h.service.get_for_caller(h.doctor_caller, view.record.id)
+            clinician_event = (await _trail(h))[-1]
+
+            assert owner_event.action is AuditAction.RECORD_VIEWED
+            assert owner_event.actor_role is Role.PATIENT
+            assert clinician_event.action is AuditAction.ACCESS_DENIED
+            assert clinician_event.actor_role is Role.DOCTOR
 
     asyncio.run(scenario())

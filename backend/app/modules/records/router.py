@@ -103,6 +103,7 @@ async def list_record_categories(
 async def upload_record(
     user: RecordActor,
     service: RecordServiceDep,
+    request_context: RequestContextDep,
     file: Annotated[UploadFile, File()],
     category_code: Annotated[str, Form(alias="categoryCode", min_length=1, max_length=32)],
     date_of_service: Annotated[date, Form(alias="dateOfService")],
@@ -142,6 +143,7 @@ async def upload_record(
                 date_of_service=date_of_service,
                 description=description,
                 file=payload,
+                request_context=request_context,
             )
         else:  # PATIENT — the role gate admits no other role
             if patient_health_id is not None:
@@ -155,6 +157,7 @@ async def upload_record(
                 date_of_service=date_of_service,
                 description=description,
                 file=payload,
+                request_context=request_context,
             )
     except RecordsError as exc:
         raise to_http_error(exc) from exc

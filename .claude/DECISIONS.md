@@ -542,6 +542,91 @@ HOSPITAL_ADMIN-only, answering `{healthId, fullName}` and nothing else. Four par
 
 ---
 
+## ADR-022 — Audit emission policy: what a hospital records, and what the schema cannot record
+
+**Date:** 2026-09-07 · **Status:** Accepted (M4) · **Resolves:** findings M3-B, M3-E ·
+**Extends:** ADR-016, ADR-018, ADR-020
+
+**Context:** Before building a hospital-scoped audit view it was necessary to know what a
+hospital actually emits. The answer was **nothing**: every hospital-admin path bypassed the
+audit write. `_authorize_read` returns at ADR-013 layer 2 *before* `consent.enforce`, so
+neither allowed nor refused hospital reads were recorded (M3-E); `GET /records` writes no
+event (M3-B); `RECORD_UPLOADED` had been in DOMAIN_MODEL §1's vocabulary since M0.2 and in
+`AuditAction` since M3 and was **written by nothing**. A view built first would have
+rendered an empty page indefinitely.
+
+**Decision — the emission matrix.** Two constraints decide most of it. `audit_logs` has no
+hospital column, and `patient_id` is **NOT NULL**: every event must name a patient subject.
+
+| Action | Ruling | Vocabulary | In 6a |
+|---|---|---|---|
+| Record upload (hospital + locker) | **Audit** | `RECORD_UPLOADED` | ✅ |
+| Hospital own-upload read | **Audit** | `RECORD_VIEWED` | ✅ |
+| Hospital download | **Audit** | `RECORD_DOWNLOADED` | ✅ |
+| Hospital read denial | **Audit** | `ACCESS_DENIED` | ✅ |
+| Owner (patient) listing | **Do not audit** | — | ✅ (ruling only) |
+| Hospital listing | Audit, but not yet representable | `RECORDS_LISTED` | ⛔ 6b |
+| Patient Health-ID lookup | Deferred | none exists | ⛔ |
+| Doctor activate / deactivate | **Out of scope** | none | ⛔ |
+| Hospital registration | **Out of scope** | none | ⛔ |
+
+**M3-B — rule 3 means *non-owner*.** A patient listing their own records is the subject
+reading their own index: it discloses nothing to anyone else, and logging it would grow the
+trail without bound while saying nothing about *access* — the same argument
+`list_audit_events` already makes for not auditing reads of the trail itself.
+SYSTEM_ARCHITECTURE rule 3 is therefore read as covering non-owner reads, which ADR-020
+already satisfied for clinicians. The hospital half is a genuine non-owner read and **should**
+be audited — but a hospital's listing spans many patients, and `patient_id` is singular and
+NOT NULL, so no single truthful row can express it and ADR-020 already refused the
+one-row-per-record alternative. It waits for 6b.
+
+**M3-E — hospital read outcomes are audited, on ADR-018's terms.** The *decision* stays in
+`records` (only it knows who uploaded what); what changed is that both outcomes now reach the
+trail. The previous asymmetry — a clinician's refused read visible to the patient, a
+hospital's not — was indefensible for the party the log exists to serve. A read of a record
+that does not exist still writes nothing: there is no patient to attribute it to and no data
+was reached.
+
+**Patient lookup — deferred, for a reason stronger than "not yet".** It has no truthful
+vocabulary member, and adding one is ADR-sized (ADR-018/020 are the precedents). More
+decisively: `patient_id` NOT NULL means only *successful* lookups are recordable, so the
+audit would systematically miss the behaviour it would exist to catch — an actor probing
+Health IDs that resolve to nobody. A half-blind identity-disclosure log is worse than an
+acknowledged gap, because it reads as coverage. Revisit with 6b, alongside
+`/records/existence` (TODO §1), where nullable-subject events can be considered properly.
+
+**Doctor management and hospital registration — outside this log entirely.** DOMAIN_MODEL §1
+defines AuditEvent as *patient-visible* with a patient subject. Activating a doctor or
+registering a hospital involves no patient and could not be written without making
+`patient_id` nullable, which would change what the table means. These are administrative
+events and belong to a separate admin-activity log if one is ever wanted — not to a
+patient's trail.
+
+**The seam.** `records` gains a fourth protocol, `RecordAuditor`, beside `ConsentEnforcer`,
+`GrantScope` and `ListingAuditor`, implemented by the same `ConsentService`. Two
+purpose-named methods — `record_upload` and `record_direct_read` — rather than one general
+"write an event", so `records` cannot reach the rest of the vocabulary: it may record an
+upload and a relationship-authorized read, and there is no third thing it can say. Unlike
+`enforce`, these ask nothing; `records` has already decided and the outcome arrives as a
+parameter.
+
+**Consequences:**
+
+- The patient's trail is materially more complete: uploads and hospital reads were both
+  invisible to the person the log is for.
+- Upload auditing covers the **patient locker** too. `RECORD_UPLOADED` is unqualified in
+  DOMAIN_MODEL §1, and a trail recording only hospital uploads would lie by omission about
+  the patient's own.
+- The audit write sits inside the upload transaction, after the object store succeeds, so a
+  failed upload leaves no event and a later failure takes the event with it.
+- **No schema change, no migration, no index, no `event_hash` change** — every event added
+  fits the existing columns.
+- 6b still needs `actor_hospital_id` recorded at write time (never a join through the
+  actor's *current* hospital, which would move history when staff transfer) plus the actor
+  index the `audit_logs` schema comment already anticipates.
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.

@@ -135,6 +135,40 @@ class ListingAuditor(Protocol):
     ) -> None: ...
 
 
+class RecordAuditor(Protocol):
+    """How this module records the events ``consent.enforce`` never sees (ADR-022).
+
+    A fourth seam beside ``ConsentEnforcer``, ``GrantScope`` and ``ListingAuditor``, for the
+    same reason there are three: each answers a different question, and merging them would
+    let a caller reach the wrong one. These two ask nothing — they state that something
+    already happened. ``records`` decided; ``consent`` owns the trail and writes it.
+
+    Two purpose-named methods rather than one general "write an event", so this module
+    cannot reach the rest of the audit vocabulary. It may record an upload and it may record
+    a relationship-authorized read, and there is no third thing it can say.
+    """
+
+    async def record_upload(
+        self,
+        actor: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        record_id: UUID,
+        request_context: str | None = None,
+    ) -> None: ...
+
+    async def record_direct_read(
+        self,
+        actor: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        record_id: UUID,
+        action: AuditAction,
+        allowed: bool,
+        request_context: str | None = None,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class FileUpload:
     """The validated-at-the-boundary upload payload, already fully read into memory
@@ -194,6 +228,7 @@ class RecordService:
         consent: ConsentEnforcer,
         grant_scope: GrantScope,
         listing_auditor: ListingAuditor,
+        record_auditor: RecordAuditor,
         *,
         presign_ttl_seconds: int,
         max_upload_bytes: int,
@@ -207,13 +242,15 @@ class RecordService:
         self._patients = patients
         self._storage = storage
         self._queue = queue
-        # Three names, one collaborator in production (ADR-016 direction 2, ADR-020):
-        # asking permission, asking what is in scope, and recording that a listing
-        # happened are different questions, and a seam per question is what keeps the
-        # first from being answered by the second.
+        # Four names, one collaborator in production (ADR-016 direction 2, ADR-020,
+        # ADR-022): asking permission, asking what is in scope, recording that a listing
+        # happened, and recording the events that never reach the choke point are
+        # different questions, and a seam per question is what keeps the first from being
+        # answered by the second.
         self._consent = consent
         self._grant_scope = grant_scope
         self._listing_auditor = listing_auditor
+        self._record_auditor = record_auditor
         self._presign_ttl_seconds = presign_ttl_seconds
         self.max_upload_bytes = max_upload_bytes
         self._now = clock
@@ -229,6 +266,7 @@ class RecordService:
         date_of_service: date,
         description: str | None,
         file: FileUpload,
+        request_context: str | None = None,
     ) -> RecordView:
         """Hospital admin uploads a record against a patient's Health ID (the M2 gate
         flow). Requires a VERIFIED hospital (ADR-015)."""
@@ -246,6 +284,7 @@ class RecordService:
             raise UnknownPatientError()
         category = await self._resolve_category(category_code)
         record = await self._store(
+            caller,
             patient_id=patient.id,
             category=category,
             origin=RecordOrigin.HOSPITAL_UPLOAD,
@@ -253,6 +292,7 @@ class RecordService:
             date_of_service=date_of_service,
             description=description,
             file=file,
+            request_context=request_context,
         )
         return RecordView(record=record, category=category, hospital=hospital)
 
@@ -264,6 +304,7 @@ class RecordService:
         date_of_service: date,
         description: str | None,
         file: FileUpload,
+        request_context: str | None = None,
     ) -> RecordView:
         """Patient uploads to their own medical locker (RBAC: own locker only)."""
         self._validate_file(file)
@@ -272,6 +313,7 @@ class RecordService:
             raise ProfileNotFoundError()
         category = await self._resolve_category(category_code)
         record = await self._store(
+            caller,
             patient_id=patient.id,
             category=category,
             origin=RecordOrigin.PATIENT_LOCKER,
@@ -279,6 +321,7 @@ class RecordService:
             date_of_service=date_of_service,
             description=description,
             file=file,
+            request_context=request_context,
         )
         return RecordView(record=record, category=category, hospital=None)
 
@@ -505,6 +548,7 @@ class RecordService:
 
     async def _store(
         self,
+        caller: AuthenticatedUser,
         *,
         patient_id: UUID,
         category: RecordCategory,
@@ -513,6 +557,7 @@ class RecordService:
         date_of_service: date,
         description: str | None,
         file: FileUpload,
+        request_context: str | None,
     ) -> MedicalRecord:
         record_id = uuid4()
         # UUIDs only in the object key — filenames leak information (docs/SECURITY.md).
@@ -533,6 +578,14 @@ class RecordService:
             )
         )
         await self._storage.put_object(s3_key, file.data, content_type=file.content_type)
+        # After the object is stored, so the trail never claims an upload that failed —
+        # and inside the same transaction, so a later failure takes the event with it.
+        await self._record_auditor.record_upload(
+            caller,
+            patient_id=patient_id,
+            record_id=record.id,
+            request_context=request_context,
+        )
         try:
             await self._queue.enqueue(RECORD_UPLOADED_TASK, record_id=str(record_id))
         except QueueUnavailableError:
@@ -554,12 +607,26 @@ class RecordService:
             # ADR-013 layer 2, unchanged from M2: a hospital may read what it uploaded, and
             # consent has no say because the basis is the upload relationship, not a grant.
             # Only this module can evaluate that, so it does not cross the choke point.
+            #
+            # It does, however, reach the trail (ADR-022, finding M3-E). The decision is
+            # still made here; what changed is that both outcomes are now written, on the
+            # same terms ADR-018 set for clinicians — a refused read by a hospital was the
+            # one access event the patient could not see.
             admin = await self._admins.get_by_user_id(caller.user_id)
-            if (
-                admin is None
-                or record.uploaded_by_hospital_id is None
-                or record.uploaded_by_hospital_id != admin.hospital_id
-            ):
+            allowed = (
+                admin is not None
+                and record.uploaded_by_hospital_id is not None
+                and record.uploaded_by_hospital_id == admin.hospital_id
+            )
+            await self._record_auditor.record_direct_read(
+                caller,
+                patient_id=record.patient_id,
+                record_id=record.id,
+                action=action,
+                allowed=allowed,
+                request_context=request_context,
+            )
+            if not allowed:
                 raise RecordNotFoundError()
             return
         if record.is_hidden and caller.role is not Role.PATIENT:

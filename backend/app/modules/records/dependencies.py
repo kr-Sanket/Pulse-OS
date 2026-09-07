@@ -157,6 +157,7 @@ def get_record_service(
         # question it is asking, not merely which module it is asking.
         grant_scope=consent,
         listing_auditor=consent,
+        record_auditor=consent,
         presign_ttl_seconds=settings.s3_presign_ttl_seconds,
         max_upload_bytes=settings.records_max_upload_bytes,
     )
