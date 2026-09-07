@@ -19,7 +19,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
-from app.modules.auth.dependencies import RequireDoctor, RequirePatient
+from app.modules.auth.dependencies import RequireDoctor, RequireHospitalAdmin, RequirePatient
 from app.modules.auth.domain import AuthenticatedUser
 from app.modules.consent.dependencies import (
     PROBLEM,
@@ -47,6 +47,8 @@ from app.modules.consent.schemas import (
     ConsentGrantListResponse,
     ConsentGrantResponse,
     DecisionOutcomeResponse,
+    HospitalAuditEventListResponse,
+    HospitalAuditEventResponse,
     SentAccessRequestListResponse,
     SentAccessRequestResponse,
     StaffDisplayResponse,
@@ -68,8 +70,14 @@ consent_grants_router = APIRouter(prefix="/consent-grants", tags=["consent"])
 # Plural kebab-case after the table it serves (docs/API_GUIDELINES.md), alongside its
 # siblings: the trail is consent-owned, so it is this module's surface, not a new one.
 audit_logs_router = APIRouter(prefix="/audit-logs", tags=["consent"])
+# The hospital's view of the same trail (ADR-023). Mounted under /hospitals/me because the
+# scope is the caller's own hospital and the URL should say so — the `/hospitals` prefix is
+# otherwise the records module's, and ownership of the *data* decides the module while the
+# URL only decides the shape (the rule ADR-020 set).
+hospital_audit_logs_router = APIRouter(prefix="/hospitals/me/audit-logs", tags=["hospitals"])
 
 PatientUser = Annotated[AuthenticatedUser, Depends(RequirePatient)]
+HospitalAdminUser = Annotated[AuthenticatedUser, Depends(RequireHospitalAdmin)]
 DoctorUser = Annotated[AuthenticatedUser, Depends(RequireDoctor)]
 
 _UNAUTHENTICATED: ResponseSpec = {
@@ -219,6 +227,25 @@ def _to_audit_response(view: AuditView, vocabulary: CategoryVocabulary) -> Audit
         occurred_at=entry.occurred_at,
         event_hash=entry.event_hash,
         actor=_to_staff_display(view.actor),
+    )
+
+
+def _to_hospital_audit_list_response(page: AuditPage) -> HospitalAuditEventListResponse:
+    """The hospital projection: no patient id, no hash, no clinical fact (see the schema)."""
+    return HospitalAuditEventListResponse(
+        items=[
+            HospitalAuditEventResponse(
+                id=view.entry.id,
+                action=view.entry.action,
+                actor_user_id=view.entry.actor_user_id,
+                actor_role=view.entry.actor_role,
+                actor=_to_staff_display(view.actor),
+                target_record_id=view.entry.target_record_id,
+                occurred_at=view.entry.occurred_at,
+            )
+            for view in page.items
+        ],
+        next_cursor=page.next_cursor,
     )
 
 
@@ -523,3 +550,43 @@ async def list_audit_events(
     except ConsentError as exc:
         raise to_http_error(exc) from exc
     return _to_audit_list_response(page, vocabulary)
+
+
+@hospital_audit_logs_router.get("", response_model=HospitalAuditEventListResponse)
+async def list_hospital_audit_events(
+    user: HospitalAdminUser,
+    service: ConsentServiceDep,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> HospitalAuditEventListResponse:
+    """This hospital's own activity on the append-only trail, most recent event first.
+
+    The organisation's view of the log the patient reads: every upload, read, download and
+    refusal its staff generated, and every access request its clinicians raised. Ordered and
+    paginated on the application-assigned event time.
+
+    Roles: HOSPITAL_ADMIN. **The scope is the caller's own hospital, derived server-side
+    from their admin profile — there is no hospital parameter, so no administrator can read
+    another hospital's activity by changing a query string.** Attribution is the
+    ``actor_hospital_id`` recorded when each event was written (ADR-023), never the actor's
+    present affiliation, so a clinician who transfers hospitals leaves their history behind.
+
+    Discloses the action, when it happened, who did it and which record it concerned — and
+    deliberately no patient identifier, no tamper-evidence digest and no clinical fact: this
+    answers "what has my hospital done", not "who are my hospital's patients".
+
+    Two absences are expected rather than faults: patient-actor events have no hospital and
+    never appear here, and events written before migration 0005 carry no attribution, so a
+    hospital's log begins at that migration. Reading the trail is not itself audited.
+
+    Consent requirement: none — an audit entry is not record content.
+    Failure modes: 401, 403 (wrong role), 404 (no hospital-admin profile), 422 (bad cursor
+    or limit).
+    """
+    try:
+        page = await service.list_hospital_audit_events(
+            user, after=parse_cursor(cursor), limit=limit
+        )
+    except ConsentError as exc:
+        raise to_http_error(exc) from exc
+    return _to_hospital_audit_list_response(page)

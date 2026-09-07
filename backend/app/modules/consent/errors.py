@@ -49,6 +49,11 @@ class PatientProfileNotFoundError(ConsentError):
     """The caller holds PATIENT claims but no patient profile row exists."""
 
 
+class HospitalProfileNotFoundError(ConsentError):
+    """The caller holds the HOSPITAL_ADMIN role but administers no hospital, so there is no
+    scope for a hospital-scoped listing (ADR-023)."""
+
+
 class ClinicianProfileNotFoundError(ConsentError):
     """The caller holds DOCTOR claims but no clinician profile row exists."""
 

@@ -63,6 +63,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   row for the same hospital (`hospital_admins.hospital_id` carries no unique constraint) —
   a hazard the old SQL workaround left completely unguarded and one this script documents
   rather than silently works around. Backend tests 390 → 432.
+- **Historical hospital attribution and a versioned audit-hash scheme (ADR-023, migration
+  0005).** Hospitals had audit *events* after 6a but no way to read them: `audit_logs` carried
+  no hospital, and the only alternative — joining the actor's **current** affiliation — would
+  have moved history whenever staff transfer, migrating a doctor's past events into whichever
+  hospital they joined next. `actor_hospital_id` is therefore captured at write time and
+  passed as an argument, never looked up; it is **nullable** because patients generate a large
+  share of events and belong to no hospital. There is a test that re-registers a clinician at
+  a second hospital and asserts their earlier events stayed put.
+  **`hash_version` selects the whole scheme — canonicalization *and* algorithm.** v1 is
+  revision 0004's payload under SHA-256, v2 adds the new field, and **v3 is reserved for
+  ADR-019's keccak transition**, which now has a mechanism to land in rather than invalidating
+  the table. v1 **omits** the key rather than emitting it as null, which is exactly why every
+  legacy digest still reproduces; one `canonical_event_payload` serves writing and verifying,
+  so a verifier cannot drift from the writer. The version sits outside the hashed payload
+  safely: a mis-selected scheme changes the key set and so fails verification in both
+  directions, which is tested. Legacy rows keep NULL attribution and their original digests —
+  no backfill, because the only source would be the forbidden join.
+  New: `GET /api/v1/hospitals/me/audit-logs`, HOSPITAL_ADMIN-only, cursor-paginated, **with no
+  hospital parameter at all** — the scope comes from the caller's admin profile, so no query
+  string can reach another hospital. Its response is a separate allow-list from the patient's:
+  **no `patientId`** (a hospital reads its own activity, not a roster of the people it
+  touched), no digest or `hashVersion` (tamper evidence is published to the *subject* of a
+  trail), nothing clinical.
+  Still deferred, and now for one shared reason: the hospital record *listing* event and
+  audit for `/patients/lookup` and `/records/existence` all need an organisation-scoped
+  operational log, because a listing spans many patients and a failed probe has none —
+  neither fits a NOT NULL `patient_id`. `patient_id` was **not** relaxed; the patient log
+  keeps its meaning and simply gained a second truthful scope over the same rows.
+  Backend tests 442 → 461.
 - **Audit emission policy, and the events that were missing (ADR-022).** Investigating the
   hospital audit view found that hospital admins emitted **nothing**: `_authorize_read`
   returns at ADR-013 layer 2 *before* `consent.enforce`, so neither allowed nor refused

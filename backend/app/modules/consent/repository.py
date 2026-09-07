@@ -308,3 +308,28 @@ class AuditLogRepository:
             query = query.where(_keyset_filter(AuditLog.occurred_at, AuditLog.id, after))
         result = await self._session.execute(query)
         return list(result.scalars())
+
+    async def list_page_by_hospital(
+        self, hospital_id: UUID, *, after: CursorKey | None, limit: int
+    ) -> list[AuditLog]:
+        """One page of a hospital's own activity, most recent event first (ADR-023).
+
+        Filters on ``actor_hospital_id`` — the attribution captured when each event was
+        written — and never on the actor's present affiliation, so a doctor who transfers
+        leaves their history behind in the hospital they generated it at.
+
+        Two classes of row are absent by construction rather than by an extra predicate:
+        events by a patient actor, who has no hospital, and every event written before
+        migration 0005, which is unattributed and stays that way. Same order and keyset as
+        the patient listing, matching ``ix_audit_logs_actor_hospital_id_occurred_at_id``.
+        """
+        query: Select[tuple[AuditLog]] = (
+            select(AuditLog)
+            .where(AuditLog.actor_hospital_id == hospital_id)
+            .order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc())
+            .limit(limit)
+        )
+        if after is not None:
+            query = query.where(_keyset_filter(AuditLog.occurred_at, AuditLog.id, after))
+        result = await self._session.execute(query)
+        return list(result.scalars())

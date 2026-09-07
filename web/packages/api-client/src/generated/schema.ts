@@ -359,6 +359,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/hospitals/me/audit-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Hospital Audit Events
+         * @description This hospital's own activity on the append-only trail, most recent event first.
+         *
+         *     The organisation's view of the log the patient reads: every upload, read, download and
+         *     refusal its staff generated, and every access request its clinicians raised. Ordered and
+         *     paginated on the application-assigned event time.
+         *
+         *     Roles: HOSPITAL_ADMIN. **The scope is the caller's own hospital, derived server-side
+         *     from their admin profile — there is no hospital parameter, so no administrator can read
+         *     another hospital's activity by changing a query string.** Attribution is the
+         *     ``actor_hospital_id`` recorded when each event was written (ADR-023), never the actor's
+         *     present affiliation, so a clinician who transfers hospitals leaves their history behind.
+         *
+         *     Discloses the action, when it happened, who did it and which record it concerned — and
+         *     deliberately no patient identifier, no tamper-evidence digest and no clinical fact: this
+         *     answers "what has my hospital done", not "who are my hospital's patients".
+         *
+         *     Two absences are expected rather than faults: patient-actor events have no hospital and
+         *     never appear here, and events written before migration 0005 carry no attribution, so a
+         *     hospital's log begins at that migration. Reading the trail is not itself audited.
+         *
+         *     Consent requirement: none — an audit entry is not record content.
+         *     Failure modes: 401, 403 (wrong role), 404 (no hospital-admin profile), 422 (bad cursor
+         *     or limit).
+         */
+        get: operations["list_hospital_audit_events_api_v1_hospitals_me_audit_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/hospitals/me/doctors": {
         parameters: {
             query?: never;
@@ -1290,6 +1332,59 @@ export interface components {
             adminFullName: string;
             hospital: components["schemas"]["HospitalResponse"];
         };
+        /** HospitalAuditEventListResponse */
+        HospitalAuditEventListResponse: {
+            /** Items */
+            items: components["schemas"]["HospitalAuditEventResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /**
+         * HospitalAuditEventResponse
+         * @description One entry in a hospital's own activity log (ADR-023).
+         *
+         *     A separate model from ``AuditEventResponse``, not a subset of it, and for the same
+         *     reason ADR-020 gave: reuse would mean every field ever added for a patient's own view
+         *     silently reaching an organisation, with no review step. What a hospital may see here is
+         *     an allow-list, and widening it has to be a deliberate edit to this class.
+         *
+         *     **``patientId`` is absent, and that is the important omission.** The hospital is reading
+         *     its own activity, not a roster of the people it touched; the record its staff acted on
+         *     is named, and a hospital that uploaded a record already knows whose it is. Publishing a
+         *     patient identifier per row would turn an operational log into a patient index.
+         *
+         *     Also absent: ``requestContext`` (client-supplied diagnostics), ``createdAt`` (the
+         *     storage instant, for tamper investigation rather than a timeline), ``eventHash`` and
+         *     ``hashVersion`` (tamper evidence published to the *subject* of the trail, which a
+         *     hospital is not), and every clinical fact — no filename, category display, date of
+         *     service, description or file. The action and its target say what happened; nothing here
+         *     says what was in the document.
+         *
+         *     ``actorHospitalId`` is not published either: every row in this listing has the same one,
+         *     and it is the caller's own.
+         */
+        HospitalAuditEventResponse: {
+            action: components["schemas"]["AuditAction"];
+            actor: components["schemas"]["StaffDisplayResponse"] | null;
+            actorRole: components["schemas"]["Role"];
+            /**
+             * Actoruserid
+             * Format: uuid
+             */
+            actorUserId: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Occurredat
+             * Format: date-time
+             */
+            occurredAt: string;
+            /** Targetrecordid */
+            targetRecordId: string | null;
+        };
         /** HospitalRegistrationRequest */
         HospitalRegistrationRequest: {
             /** Adminfullname */
@@ -2184,6 +2279,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HospitalAdminProfileResponse"];
+                };
+            };
+        };
+    };
+    list_hospital_audit_events_api_v1_hospitals_me_audit_logs_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalAuditEventListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

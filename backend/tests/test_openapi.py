@@ -209,3 +209,50 @@ def test_records_existence_contract_is_unchanged_by_the_lookup() -> None:
 
     assert parameter["name"] == "patientHealthId"
     assert set(spec["components"]["schemas"]["RecordExistenceResponse"]["properties"]) == {"items"}
+
+
+def test_hospital_audit_endpoint_is_present_and_paginated() -> None:
+    operation = _spec()["paths"]["/api/v1/hospitals/me/audit-logs"]["get"]
+    parameters = {parameter["name"] for parameter in operation["parameters"]}
+
+    assert set(operation["responses"]) >= {"200", "422"}
+    # Cursor pagination, and **no hospital parameter**: the scope is the caller's own
+    # hospital, derived server-side, so no query string can reach another one (ADR-023).
+    assert parameters == {"cursor", "limit"}
+
+
+def test_hospital_audit_response_discloses_activity_not_patients() -> None:
+    """The allow-list guard: a hospital's operational log must not become a patient index,
+    and tamper evidence belongs to the subject of the trail."""
+    properties = _spec()["components"]["schemas"]["HospitalAuditEventResponse"]["properties"]
+
+    assert set(properties) == {
+        "id",
+        "action",
+        "actorUserId",
+        "actorRole",
+        "actor",
+        "targetRecordId",
+        "occurredAt",
+    }
+    leaked = {"patientId", "eventHash", "hashVersion", "requestContext", "actorHospitalId"}
+    assert leaked.isdisjoint(properties)
+
+
+def test_the_patient_audit_contract_is_unchanged_by_the_hospital_view() -> None:
+    """Two scopes over one table; the patient's response shape must not drift because a
+    hospital gained its own."""
+    properties = _spec()["components"]["schemas"]["AuditEventResponse"]["properties"]
+
+    assert set(properties) == {
+        "id",
+        "action",
+        "actorUserId",
+        "actorRole",
+        "actor",
+        "targetRecordId",
+        "targetCategoryCode",
+        "targetRequestId",
+        "occurredAt",
+        "eventHash",
+    }

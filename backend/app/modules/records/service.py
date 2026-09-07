@@ -154,6 +154,7 @@ class RecordAuditor(Protocol):
         *,
         patient_id: UUID,
         record_id: UUID,
+        actor_hospital_id: UUID | None = None,
         request_context: str | None = None,
     ) -> None: ...
 
@@ -165,6 +166,7 @@ class RecordAuditor(Protocol):
         record_id: UUID,
         action: AuditAction,
         allowed: bool,
+        actor_hospital_id: UUID | None = None,
         request_context: str | None = None,
     ) -> None: ...
 
@@ -293,6 +295,7 @@ class RecordService:
             description=description,
             file=file,
             request_context=request_context,
+            actor_hospital_id=hospital.id,
         )
         return RecordView(record=record, category=category, hospital=hospital)
 
@@ -322,6 +325,7 @@ class RecordService:
             description=description,
             file=file,
             request_context=request_context,
+            actor_hospital_id=None,
         )
         return RecordView(record=record, category=category, hospital=None)
 
@@ -558,6 +562,7 @@ class RecordService:
         description: str | None,
         file: FileUpload,
         request_context: str | None,
+        actor_hospital_id: UUID | None,
     ) -> MedicalRecord:
         record_id = uuid4()
         # UUIDs only in the object key — filenames leak information (docs/SECURITY.md).
@@ -584,6 +589,7 @@ class RecordService:
             caller,
             patient_id=patient_id,
             record_id=record.id,
+            actor_hospital_id=actor_hospital_id,
             request_context=request_context,
         )
         try:
@@ -624,6 +630,10 @@ class RecordService:
                 record_id=record.id,
                 action=action,
                 allowed=allowed,
+                # The hospital this administrator acts for, captured now (ADR-023). None
+                # only when the account has no admin profile at all — which is itself the
+                # refusal being recorded.
+                actor_hospital_id=admin.hospital_id if admin is not None else None,
                 request_context=request_context,
             )
             if not allowed:

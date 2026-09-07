@@ -47,11 +47,13 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -420,6 +422,11 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     target_request_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("consent_requests.id")
     )
+    # Historical hospital attribution (ADR-023), captured when the event is written and
+    # never reconstructed afterwards. Nullable because a patient actor has no hospital —
+    # and because legacy rows predate the column and must stay unattributed rather than be
+    # backfilled from an affiliation that may since have changed.
+    actor_hospital_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("hospitals.id"))
     request_context: Mapped[str | None] = mapped_column(Text())
     # Application-assigned event time: hashed, and the column the patient's log is ordered
     # and keyset-paginated on. Being application-assigned, it needs no SQLite microsecond
@@ -427,6 +434,14 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     # timestamps compared against application-bound cursor values.
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     event_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Which hashing scheme produced `event_hash` — canonicalization and algorithm together
+    # (ADR-023). v1 is revision 0004's ten-key payload under SHA-256; v2 adds
+    # `actor_hospital_id`; v3 is reserved for ADR-019's keccak transition. Deliberately not
+    # part of the hashed payload: a mis-selected scheme is self-detecting, because
+    # recomputing under the wrong one changes the key set and so changes the digest.
+    hash_version: Mapped[int] = mapped_column(
+        SmallInteger(), server_default=text("1"), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         _APPEND_ONLY_CREATED_AT, server_default=func.now(), nullable=False
     )
@@ -434,6 +449,15 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         # The patient's audit view: one scope, keyset order over the event time.
         Index("ix_audit_logs_patient_id_occurred_at_id", "patient_id", "occurred_at", "id"),
+        # The hospital's audit view (ADR-023), the same shape one scope over. Rows with no
+        # hospital — every patient-actor event, and every row written before 0005 — are
+        # simply absent from it.
+        Index(
+            "ix_audit_logs_actor_hospital_id_occurred_at_id",
+            "actor_hospital_id",
+            "occurred_at",
+            "id",
+        ),
         # The three target FKs and actor_user_id are unindexed on purpose: M3 defines no
         # query that leads with them, and none of their parents is ever deleted
         # (docs/DATABASE_DESIGN.md principle 5). Revisit when a per-record or per-actor

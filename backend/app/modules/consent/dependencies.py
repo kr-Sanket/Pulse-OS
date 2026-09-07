@@ -42,6 +42,7 @@ from app.modules.consent.errors import (
     DuplicateRequestCategoryError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
+    HospitalProfileNotFoundError,
     PatientProfileNotFoundError,
     RequestNotDecidableError,
     RequestNotFoundError,
@@ -85,7 +86,10 @@ def to_http_error(exc: ConsentError) -> HTTPException:
     grant belonging to someone else, and a read no grant covers, all answer 404 — the
     caller must not learn that the resource exists.
     """
-    if isinstance(exc, PatientProfileNotFoundError | ClinicianProfileNotFoundError):
+    if isinstance(
+        exc,
+        PatientProfileNotFoundError | ClinicianProfileNotFoundError | HospitalProfileNotFoundError,
+    ):
         return HTTPException(status_code=404, detail="Profile not found for this account.")
     if isinstance(exc, ClinicianNotActiveError):
         return HTTPException(
@@ -227,6 +231,9 @@ class RecordsStaffDirectory:
 
     async def hospital_names(self, hospital_ids: Collection[UUID]) -> Mapping[UUID, str]:
         return await self._directory.hospital_names(hospital_ids)
+
+    async def administered_hospital_id(self, user_id: UUID) -> UUID | None:
+        return await self._directory.administered_hospital_id(user_id)
 
 
 def _to_person_displays(

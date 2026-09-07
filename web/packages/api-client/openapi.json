@@ -987,6 +987,93 @@
         "title": "HospitalAdminProfileResponse",
         "type": "object"
       },
+      "HospitalAuditEventListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HospitalAuditEventResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "title": "HospitalAuditEventListResponse",
+        "type": "object"
+      },
+      "HospitalAuditEventResponse": {
+        "description": "One entry in a hospital's own activity log (ADR-023).\n\nA separate model from ``AuditEventResponse``, not a subset of it, and for the same\nreason ADR-020 gave: reuse would mean every field ever added for a patient's own view\nsilently reaching an organisation, with no review step. What a hospital may see here is\nan allow-list, and widening it has to be a deliberate edit to this class.\n\n**``patientId`` is absent, and that is the important omission.** The hospital is reading\nits own activity, not a roster of the people it touched; the record its staff acted on\nis named, and a hospital that uploaded a record already knows whose it is. Publishing a\npatient identifier per row would turn an operational log into a patient index.\n\nAlso absent: ``requestContext`` (client-supplied diagnostics), ``createdAt`` (the\nstorage instant, for tamper investigation rather than a timeline), ``eventHash`` and\n``hashVersion`` (tamper evidence published to the *subject* of the trail, which a\nhospital is not), and every clinical fact \u2014 no filename, category display, date of\nservice, description or file. The action and its target say what happened; nothing here\nsays what was in the document.\n\n``actorHospitalId`` is not published either: every row in this listing has the same one,\nand it is the caller's own.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffDisplayResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actorRole": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "actorUserId": {
+            "format": "uuid",
+            "title": "Actoruserid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "title": "Occurredat",
+            "type": "string"
+          },
+          "targetRecordId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetrecordid"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "actorUserId",
+          "actorRole",
+          "actor",
+          "targetRecordId",
+          "occurredAt"
+        ],
+        "title": "HospitalAuditEventResponse",
+        "type": "object"
+      },
       "HospitalRegistrationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2332,6 +2419,68 @@
           }
         },
         "summary": "Read Own Hospital",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/me/audit-logs": {
+      "get": {
+        "description": "This hospital's own activity on the append-only trail, most recent event first.\n\nThe organisation's view of the log the patient reads: every upload, read, download and\nrefusal its staff generated, and every access request its clinicians raised. Ordered and\npaginated on the application-assigned event time.\n\nRoles: HOSPITAL_ADMIN. **The scope is the caller's own hospital, derived server-side\nfrom their admin profile \u2014 there is no hospital parameter, so no administrator can read\nanother hospital's activity by changing a query string.** Attribution is the\n``actor_hospital_id`` recorded when each event was written (ADR-023), never the actor's\npresent affiliation, so a clinician who transfers hospitals leaves their history behind.\n\nDiscloses the action, when it happened, who did it and which record it concerned \u2014 and\ndeliberately no patient identifier, no tamper-evidence digest and no clinical fact: this\nanswers \"what has my hospital done\", not \"who are my hospital's patients\".\n\nTwo absences are expected rather than faults: patient-actor events have no hospital and\nnever appear here, and events written before migration 0005 carry no attribution, so a\nhospital's log begins at that migration. Reading the trail is not itself audited.\n\nConsent requirement: none \u2014 an audit entry is not record content.\nFailure modes: 401, 403 (wrong role), 404 (no hospital-admin profile), 422 (bad cursor\nor limit).",
+        "operationId": "list_hospital_audit_events_api_v1_hospitals_me_audit_logs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalAuditEventListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Hospital Audit Events",
         "tags": [
           "hospitals"
         ]

@@ -27,6 +27,7 @@ from app.modules.consent.router import (
     access_requests_router,
     audit_logs_router,
     consent_grants_router,
+    hospital_audit_logs_router,
 )
 from app.modules.patients.router import router as patients_router
 from app.modules.records.organizations_router import doctors_router, hospitals_router
@@ -90,6 +91,8 @@ def create_app() -> FastAPI:
     application.include_router(access_requests_router, prefix=API_V1_PREFIX)
     application.include_router(consent_grants_router, prefix=API_V1_PREFIX)
     application.include_router(audit_logs_router, prefix=API_V1_PREFIX)
+    # /hospitals/me/audit-logs is consent-owned data on a records-owned URL prefix (ADR-023).
+    application.include_router(hospital_audit_logs_router, prefix=API_V1_PREFIX)
     return application
 
 

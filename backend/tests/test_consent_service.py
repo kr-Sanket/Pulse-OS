@@ -35,7 +35,15 @@ from app.modules.consent.repository import (
     ConsentRequestCategoryRepository,
     ConsentRequestRepository,
 )
-from app.modules.consent.service import ConsentGrantState, ConsentService
+from app.modules.consent.service import (
+    HASH_SCHEME_V1,
+    HASH_SCHEME_V2,
+    ConsentGrantState,
+    ConsentService,
+    as_utc,
+    canonical_event_payload,
+    sha256_event_hash,
+)
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
@@ -1174,5 +1182,219 @@ def test_a_listing_with_nothing_in_scope_is_recorded_as_a_refusal() -> None:
             (event,) = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
             assert event.action is AuditAction.ACCESS_DENIED
             assert event.target_record_id is None
+
+    asyncio.run(scenario())
+
+
+# -- ADR-023: historical hospital attribution and hash schemes -------------------------------
+
+
+def test_v1_canonicalization_omits_the_hospital_key_entirely() -> None:
+    """The property that keeps legacy rows verifiable. Emitting the key as null would change
+    the bytes and fail every digest written before migration 0005."""
+    fields = {"id": "x", "actor_hospital_id": None}
+
+    v1 = canonical_event_payload(fields, scheme=HASH_SCHEME_V1)
+    v2 = canonical_event_payload(fields, scheme=HASH_SCHEME_V2)
+
+    assert "actor_hospital_id" not in v1
+    assert "actor_hospital_id" in v2
+    assert v1 != v2
+
+
+def test_a_v1_payload_is_byte_identical_to_the_pre_0005_encoding() -> None:
+    """Pinned literally: this is the encoding every legacy digest was computed over, so a
+    change to it silently invalidates the whole existing trail."""
+    fields = {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "actor_user_id": "22222222-2222-4222-8222-222222222222",
+        "actor_role": "DOCTOR",
+        "action": "RECORD_VIEWED",
+        "patient_id": "33333333-3333-4333-8333-333333333333",
+        "target_record_id": None,
+        "target_category_id": None,
+        "target_request_id": None,
+        "request_context": None,
+        "occurred_at": "2026-03-01T00:00:00+00:00",
+        "actor_hospital_id": "44444444-4444-4444-8444-444444444444",
+    }
+
+    assert canonical_event_payload(fields, scheme=HASH_SCHEME_V1) == (
+        '{"action":"RECORD_VIEWED","actor_role":"DOCTOR",'
+        '"actor_user_id":"22222222-2222-4222-8222-222222222222",'
+        '"id":"11111111-1111-4111-8111-111111111111",'
+        '"occurred_at":"2026-03-01T00:00:00+00:00",'
+        '"patient_id":"33333333-3333-4333-8333-333333333333",'
+        '"request_context":null,"target_category_id":null,'
+        '"target_record_id":null,"target_request_id":null}'
+    )
+
+
+def test_a_scheme_mismatch_is_detectable_in_both_directions() -> None:
+    """Why hash_version may sit outside the hashed payload: selecting the wrong scheme
+    changes the key set, so a downgraded or upgraded row fails verification."""
+    fields = {"id": "x", "actor_hospital_id": "hospital-1"}
+
+    assert sha256_event_hash(canonical_event_payload(fields, scheme=HASH_SCHEME_V2)) != (
+        sha256_event_hash(canonical_event_payload(fields, scheme=HASH_SCHEME_V1))
+    )
+
+
+def test_new_events_are_written_under_v2_and_verify_under_it() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC")
+
+            row = (await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9))[0]
+
+            assert row.hash_version == HASH_SCHEME_V2
+            recomputed = sha256_event_hash(
+                canonical_event_payload(
+                    {
+                        "id": str(row.id),
+                        "actor_user_id": str(row.actor_user_id),
+                        "actor_role": row.actor_role.value,
+                        "action": row.action.value,
+                        "patient_id": str(row.patient_id),
+                        "target_record_id": None,
+                        "target_category_id": None,
+                        "target_request_id": str(row.target_request_id),
+                        "request_context": row.request_context,
+                        # as_utc: SQLite round-trips this column naive while the hash
+                        # covered the aware value. Postgres needs no such repair; the
+                        # same divergence the service documents for deadline checks.
+                        "occurred_at": as_utc(row.occurred_at).isoformat(),
+                        "actor_hospital_id": str(row.actor_hospital_id),
+                    },
+                    scheme=row.hash_version,
+                )
+            )
+            assert recomputed == row.event_hash
+
+    asyncio.run(scenario())
+
+
+def test_a_doctors_event_is_attributed_to_the_hospital_they_acted_for() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC")
+
+            row = (await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9))[0]
+            assert row.actor_hospital_id == h.clinicians.by_user_id[h.doctor.user_id].hospital_id
+
+    asyncio.run(scenario())
+
+
+def test_a_patients_own_event_carries_no_hospital() -> None:
+    """A patient belongs to no hospital; NULL is the honest value, not a gap."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+            await h.service.approve_categories(h.patient, request_id, [h.categories["CBC"]])
+
+            rows = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            approval = next(r for r in rows if r.actor_role is Role.PATIENT)
+            assert approval.actor_hospital_id is None
+
+    asyncio.run(scenario())
+
+
+def test_a_transfer_does_not_move_historical_attribution() -> None:
+    """The anti-join test, and the reason this column exists at all: re-registering the
+    clinician at another hospital must not retro-attribute what they already did."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            original = h.clinicians.by_user_id[h.doctor.user_id]
+            await _request(h, "CBC")
+            before = (await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9))[0]
+
+            # A real row: actor_hospital_id carries a foreign key, so the hospital a
+            # clinician moves to has to exist.
+            elsewhere = Hospital(
+                hid="HID-9999",
+                name="Elsewhere General",
+                verification_status=HospitalVerificationStatus.VERIFIED,
+            )
+            session.add(elsewhere)
+            await session.flush()
+            moved_to = elsewhere.id
+            h.clinicians.register(h.doctor.user_id, doctor_id=original.id, hospital_id=moved_to)
+            await _request(h, "MRI")
+
+            rows = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            after = rows[0]
+
+            assert before.actor_hospital_id == original.hospital_id
+            assert after.actor_hospital_id == moved_to
+            # The earlier event is unchanged — history stayed where it happened.
+            reread = next(r for r in rows if r.id == before.id)
+            assert reread.actor_hospital_id == original.hospital_id
+
+    asyncio.run(scenario())
+
+
+def test_the_hospital_listing_is_scoped_paginated_and_isolated() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            mine = h.clinicians.by_user_id[h.doctor.user_id].hospital_id
+            await _request(h, "CBC")
+            await _request(h, "MRI")
+
+            page = await h.audit.list_page_by_hospital(mine, after=None, limit=9)
+            other = await h.audit.list_page_by_hospital(uuid4(), after=None, limit=9)
+
+            assert len(page) == 2
+            assert all(row.actor_hospital_id == mine for row in page)
+            # Newest first, like the patient listing.
+            assert page[0].occurred_at >= page[1].occurred_at
+            # No cross-hospital leakage.
+            assert other == []
+
+    asyncio.run(scenario())
+
+
+def test_unattributed_events_never_appear_in_a_hospital_listing() -> None:
+    """Patient-actor events, and every legacy row, carry no hospital and are absent by
+    construction rather than by an extra predicate."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            mine = h.clinicians.by_user_id[h.doctor.user_id].hospital_id
+            request_id = await _request(h, "CBC")
+            await h.service.approve_categories(h.patient, request_id, [h.categories["CBC"]])
+
+            everything = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            hospital_page = await h.audit.list_page_by_hospital(mine, after=None, limit=9)
+
+            assert any(row.actor_hospital_id is None for row in everything)
+            assert all(row.actor_hospital_id is not None for row in hospital_page)
+            assert len(hospital_page) < len(everything)
+
+    asyncio.run(scenario())
+
+
+def test_the_hospital_listing_keyset_walks_without_repeating() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            mine = h.clinicians.by_user_id[h.doctor.user_id].hospital_id
+            for code in ("CBC", "MRI", "XRAY"):
+                await _request(h, code)
+
+            first = await h.audit.list_page_by_hospital(mine, after=None, limit=2)
+            cursor = CursorKey(created_at=first[-1].occurred_at, item_id=first[-1].id)
+            second = await h.audit.list_page_by_hospital(mine, after=cursor, limit=2)
+
+            assert len(first) == 2
+            assert len(second) == 1
+            assert {row.id for row in first}.isdisjoint({row.id for row in second})
 
     asyncio.run(scenario())

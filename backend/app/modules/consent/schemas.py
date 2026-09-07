@@ -241,6 +241,46 @@ class AuditEventListResponse(ApiModel):
     next_cursor: str | None
 
 
+class HospitalAuditEventResponse(ApiModel):
+    """One entry in a hospital's own activity log (ADR-023).
+
+    A separate model from ``AuditEventResponse``, not a subset of it, and for the same
+    reason ADR-020 gave: reuse would mean every field ever added for a patient's own view
+    silently reaching an organisation, with no review step. What a hospital may see here is
+    an allow-list, and widening it has to be a deliberate edit to this class.
+
+    **``patientId`` is absent, and that is the important omission.** The hospital is reading
+    its own activity, not a roster of the people it touched; the record its staff acted on
+    is named, and a hospital that uploaded a record already knows whose it is. Publishing a
+    patient identifier per row would turn an operational log into a patient index.
+
+    Also absent: ``requestContext`` (client-supplied diagnostics), ``createdAt`` (the
+    storage instant, for tamper investigation rather than a timeline), ``eventHash`` and
+    ``hashVersion`` (tamper evidence published to the *subject* of the trail, which a
+    hospital is not), and every clinical fact — no filename, category display, date of
+    service, description or file. The action and its target say what happened; nothing here
+    says what was in the document.
+
+    ``actorHospitalId`` is not published either: every row in this listing has the same one,
+    and it is the caller's own.
+    """
+
+    id: UUID
+    action: AuditAction
+    actor_user_id: UUID
+    actor_role: Role
+    #: The acting staff member's display identity, resolved the same way the patient's view
+    #: resolves it. Null for an account this module knows no name for.
+    actor: StaffDisplayResponse | None
+    target_record_id: UUID | None
+    occurred_at: datetime
+
+
+class HospitalAuditEventListResponse(ApiModel):
+    items: list[HospitalAuditEventResponse]
+    next_cursor: str | None
+
+
 class DecisionOutcomeResponse(ApiModel):
     """What one approve or reject call produced. ``grants`` is empty for a rejection, and
     ``requestStatus`` becomes ``DECIDED`` once every requested category has an answer."""

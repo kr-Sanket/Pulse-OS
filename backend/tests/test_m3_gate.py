@@ -507,3 +507,109 @@ def test_the_listing_pages_without_multiplying_audit_rows(
     assert len(seen) == 3  # no overlap, no loss
     # Two requests, two rows — the count tracks requests, never rows returned.
     assert _audit(db_engine, cast.patient_id).count("RECORDS_LISTED") == 2
+
+
+# -- ADR-023: the hospital's view of its own activity ----------------------------------------
+
+HOSPITAL_AUDIT = "/api/v1/hospitals/me/audit-logs"
+
+
+def test_a_hospital_sees_its_own_activity_and_only_that(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    """Scope comes from the caller's admin profile, never from a parameter."""
+    record_id = _upload(client, cast, "CBC")
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.admin_tmh).status_code == 200
+
+    response = client.get(HOSPITAL_AUDIT, headers=cast.admin_tmh)
+
+    assert response.status_code == 200, response.text
+    actions = [item["action"] for item in response.json()["items"]]
+    # The upload and the read it just made, newest first. The patient's own events are
+    # absent: they carry no hospital.
+    assert actions == ["RECORD_VIEWED", "RECORD_UPLOADED"]
+
+
+def test_the_hospital_audit_response_carries_no_patient_and_no_digest(
+    client: TestClient, cast: Cast
+) -> None:
+    """The allow-list, pinned. A hospital reading its own activity is not handed a patient
+    index, and tamper evidence is published to the subject of the trail, not to a hospital."""
+    _upload(client, cast, "CBC")
+
+    item = client.get(HOSPITAL_AUDIT, headers=cast.admin_tmh).json()["items"][0]
+
+    assert set(item) == {
+        "id",
+        "action",
+        "actorUserId",
+        "actorRole",
+        "actor",
+        "targetRecordId",
+        "occurredAt",
+    }
+    leaked = {
+        "patientId",
+        "eventHash",
+        "hashVersion",
+        "requestContext",
+        "createdAt",
+        "actorHospitalId",
+        "targetCategoryCode",
+    }
+    assert leaked.isdisjoint(item)
+
+
+def test_another_hospitals_activity_is_invisible(client: TestClient, cast: Cast) -> None:
+    """No cross-hospital leakage: CMC's clinician generates events, TMH's admin sees none
+    of them, and there is no parameter that could ask for them."""
+    record_id = _upload(client, cast, "CBC")
+    # A CMC doctor is refused the record — an ACCESS_DENIED attributed to CMC.
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 404
+
+    items = client.get(HOSPITAL_AUDIT, headers=cast.admin_tmh).json()["items"]
+
+    assert [item["action"] for item in items] == ["RECORD_UPLOADED"]
+
+
+def test_the_hospital_audit_endpoint_is_hospital_admin_only(client: TestClient, cast: Cast) -> None:
+    _upload(client, cast, "CBC")
+
+    assert client.get(HOSPITAL_AUDIT).status_code == 401
+    assert client.get(HOSPITAL_AUDIT, headers=cast.patient).status_code == 403
+    assert client.get(HOSPITAL_AUDIT, headers=cast.doctor_cmc).status_code == 403
+
+
+def test_the_hospital_audit_page_is_cursor_paginated(client: TestClient, cast: Cast) -> None:
+    for code in ("CBC", "MRI", "XRAY"):
+        _upload(client, cast, code)
+
+    first = client.get(HOSPITAL_AUDIT, params={"limit": 2}, headers=cast.admin_tmh).json()
+    assert first["nextCursor"] is not None
+    second = client.get(
+        HOSPITAL_AUDIT,
+        params={"limit": 2, "cursor": first["nextCursor"]},
+        headers=cast.admin_tmh,
+    ).json()
+
+    assert len(first["items"]) == 2
+    assert len(second["items"]) == 1
+    first_ids = {item["id"] for item in first["items"]}
+    assert first_ids.isdisjoint({item["id"] for item in second["items"]})
+
+
+def test_the_patient_trail_is_unaffected_by_the_hospital_view(
+    client: TestClient, cast: Cast, db_engine: AsyncEngine
+) -> None:
+    """The patient's listing still shows everything about them, hospital-attributed or not."""
+    record_id = _upload(client, cast, "CBC")
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.patient).status_code == 200
+
+    patient_actions = [
+        item["action"]
+        for item in client.get("/api/v1/audit-logs", headers=cast.patient).json()["items"]
+    ]
+
+    # The patient sees their own read *and* the hospital's upload; the hospital sees only
+    # the upload. Same rows, two truthful scopes.
+    assert patient_actions == ["RECORD_VIEWED", "RECORD_UPLOADED"]

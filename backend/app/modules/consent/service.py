@@ -51,6 +51,7 @@ from app.modules.consent.errors import (
     ClinicianProfileNotFoundError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
+    HospitalProfileNotFoundError,
     PatientProfileNotFoundError,
     RequestNotDecidableError,
     RequestNotFoundError,
@@ -106,6 +107,36 @@ def as_utc(value: datetime) -> datetime:
     guessing at it.
     """
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+#: The hashing scheme of revision 0004 — ten-key canonical payload, SHA-256. Rows written
+#: before migration 0005 carry it, and their digests reproduce only under it (ADR-023).
+HASH_SCHEME_V1: Final = 1
+
+#: The current scheme: the same payload plus ``actor_hospital_id``, still SHA-256. ADR-019's
+#: keccak transition becomes v3 and has this mechanism to land in.
+HASH_SCHEME_V2: Final = 2
+
+#: The scheme new events are written under.
+CURRENT_HASH_SCHEME: Final = HASH_SCHEME_V2
+
+
+def canonical_event_payload(fields: Mapping[str, object], *, scheme: int) -> str:
+    """The exact bytes a scheme hashes, for writing and for verifying alike.
+
+    One function for both directions on purpose: a verifier that rebuilt the payload
+    independently would be a second implementation of the thing it is checking, and the
+    first divergence between them would look like tampering.
+
+    **v1 omits ``actor_hospital_id`` entirely rather than emitting it as null.** That is the
+    whole reason legacy rows still verify: their digests were computed over a payload in
+    which the key did not exist, so re-adding it — even as null — would change the bytes and
+    fail every row written before migration 0005.
+    """
+    payload = dict(fields)
+    if scheme == HASH_SCHEME_V1:
+        payload.pop("actor_hospital_id", None)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
 def sha256_event_hash(canonical_json: str) -> str:
@@ -177,6 +208,10 @@ class StaffDirectory(Protocol):
     ) -> Mapping[UUID, PersonDisplay]: ...
 
     async def hospital_names(self, hospital_ids: Collection[UUID]) -> Mapping[UUID, str]: ...
+
+    #: The scope for the hospital audit view (ADR-023). Not batched, unlike the rest: it
+    #: answers a question about the caller, and there is one caller per request.
+    async def administered_hospital_id(self, user_id: UUID) -> UUID | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,6 +418,7 @@ class ConsentService:
         await self._write_audit(
             caller,
             action=AuditAction.ACCESS_REQUESTED,
+            actor_hospital_id=clinician.hospital_id,
             patient_id=patient.id,
             target_request_id=request.id,
             occurred_at=now,
@@ -471,6 +507,37 @@ class ConsentService:
         if patient is None:
             raise PatientProfileNotFoundError()
         rows = await self._audit.list_page_by_patient(patient.id, after=after, limit=limit + 1)
+        page, next_cursor = _split_page(rows, limit=limit, key=_row_occurred_at)
+        actors = await self._staff.staff_by_user_id({row.actor_user_id for row in page})
+        return AuditPage(
+            items=[AuditView(entry=row, actor=actors.get(row.actor_user_id)) for row in page],
+            next_cursor=next_cursor,
+        )
+
+    async def list_hospital_audit_events(
+        self, caller: AuthenticatedUser, *, after: CursorKey | None, limit: int
+    ) -> AuditPage:
+        """One hospital's own activity, most recent event first (ADR-023).
+
+        The organisation's view of the same append-only log the patient reads, filtered to
+        the events its own staff generated. Scope comes from the token — the caller's admin
+        profile decides the hospital, and there is no parameter that could name another one.
+
+        **Attribution is historical.** The filter reads ``actor_hospital_id`` as recorded
+        when each event was written, so a clinician who transfers hospitals does not carry
+        their history with them, and a hospital cannot acquire events by hiring.
+
+        Two absences are by design and not worth hiding: patient-actor events have no
+        hospital, and every event written before migration 0005 is unattributed. The second
+        is a real blind spot — pre-migration activity is not shown, because the only way to
+        infer it would be the present-affiliation join this design exists to refuse.
+
+        Reading the trail writes nothing to it, exactly as for the patient's view.
+        """
+        hospital_id = await self._staff.administered_hospital_id(caller.user_id)
+        if hospital_id is None:
+            raise HospitalProfileNotFoundError()
+        rows = await self._audit.list_page_by_hospital(hospital_id, after=after, limit=limit + 1)
         page, next_cursor = _split_page(rows, limit=limit, key=_row_occurred_at)
         actors = await self._staff.staff_by_user_id({row.actor_user_id for row in page})
         return AuditPage(
@@ -584,7 +651,9 @@ class ConsentService:
         for whom no grant can exist (docs/SECURITY.md: no admin break-glass).
         """
         now = self._now()
-        allowed = await self._is_allowed(requester, patient_id=patient_id, category_id=category_id)
+        allowed, clinician = await self._decide_read(
+            requester, patient_id=patient_id, category_id=category_id
+        )
         await self._write_audit(
             requester,
             action=action if allowed else AuditAction.ACCESS_DENIED,
@@ -593,6 +662,9 @@ class ConsentService:
             target_category_id=category_id,
             occurred_at=now,
             request_context=request_context,
+            # The clinician's hospital when they acted; None for a patient reading their own
+            # records, and None for a refused caller who is no clinician at all (ADR-023).
+            actor_hospital_id=clinician.hospital_id if clinician is not None else None,
         )
         if not allowed:
             raise AccessDeniedError()
@@ -634,6 +706,7 @@ class ConsentService:
         *,
         patient_id: UUID,
         record_id: UUID,
+        actor_hospital_id: UUID | None = None,
         request_context: str | None = None,
     ) -> None:
         """Append the ``RECORD_UPLOADED`` event for one stored document (M3-B, ADR-022).
@@ -653,6 +726,7 @@ class ConsentService:
             target_record_id=record_id,
             occurred_at=self._now(),
             request_context=request_context,
+            actor_hospital_id=actor_hospital_id,
         )
 
     async def record_direct_read(
@@ -663,6 +737,7 @@ class ConsentService:
         record_id: UUID,
         action: AuditAction,
         allowed: bool,
+        actor_hospital_id: UUID | None = None,
         request_context: str | None = None,
     ) -> None:
         """Append the event for a read authorized by a *relationship* rather than a grant.
@@ -685,6 +760,7 @@ class ConsentService:
             target_record_id=record_id,
             occurred_at=self._now(),
             request_context=request_context,
+            actor_hospital_id=actor_hospital_id,
         )
 
     async def record_listing(
@@ -715,6 +791,9 @@ class ConsentService:
         see that they asked. Which action is written is decided here rather than by the
         caller — the vocabulary belongs to this module.
         """
+        # Resolved here rather than passed in: `records` knows the caller is a clinician but
+        # not which hospital they act for, and ADR-016 keeps that projection on this side.
+        listing_clinician = await self._acting_clinician(requester)
         await self._write_audit(
             requester,
             action=(
@@ -723,6 +802,9 @@ class ConsentService:
             patient_id=patient_id,
             occurred_at=at,
             request_context=request_context,
+            actor_hospital_id=listing_clinician.hospital_id
+            if listing_clinician is not None
+            else None,
         )
 
     async def _acting_clinician(self, requester: AuthenticatedUser) -> Clinician | None:
@@ -737,22 +819,29 @@ class ConsentService:
         clinician = await self._clinicians.get_by_user_id(requester.user_id)
         return clinician if clinician is not None and clinician.is_active else None
 
-    async def _is_allowed(
+    async def _decide_read(
         self, requester: AuthenticatedUser, *, patient_id: UUID, category_id: UUID
-    ) -> bool:
+    ) -> tuple[bool, Clinician | None]:
+        """The verdict, and the clinician it was decided about.
+
+        Returns the practitioner as well as the answer so ``enforce`` can attribute the
+        audit row to the hospital they were acting for (ADR-023) without resolving them a
+        second time — and, more importantly, without resolving them *later*, which is the
+        join that would move history when staff transfer.
+        """
         if requester.role is Role.PATIENT:
             patient = await self._patients.get_by_user_id(requester.user_id)
-            return patient is not None and patient.id == patient_id
+            return (patient is not None and patient.id == patient_id), None
         clinician = await self._acting_clinician(requester)
         if clinician is None:
-            return False
+            return False, None
         grant = await self._grants.get_active(
             patient_id=patient_id,
             grantee_doctor_id=clinician.id,
             category_id=category_id,
             at=self._now(),
         )
-        return grant is not None
+        return grant is not None, clinician
 
     # -- internals ---------------------------------------------------------------------
 
@@ -902,16 +991,23 @@ class ConsentService:
         target_category_id: UUID | None = None,
         target_request_id: UUID | None = None,
         request_context: str | None = None,
+        actor_hospital_id: UUID | None = None,
     ) -> AuditLog:
         """Append one audit event, hashed, in the caller's transaction.
 
         The row id and ``occurred_at`` are assigned here so the canonical payload is
         complete before the INSERT — the reason ``event_hash`` is computable at all without
         the second write append-only forbids (app/modules/consent/models.py).
+
+        ``actor_hospital_id`` is the hospital the actor was acting for **at this moment**
+        (ADR-023). It arrives as an argument rather than being looked up here, because a
+        lookup would necessarily read the actor's *current* affiliation and so would rewrite
+        history the first time a doctor changed hospitals. ``None`` is the honest value for
+        a patient actor, who has no hospital at all.
         """
         event_id = uuid4()
         context = self._normalize_context(request_context)
-        payload = {
+        payload: dict[str, object] = {
             "id": str(event_id),
             "actor_user_id": str(actor.user_id),
             "actor_role": actor.role.value,
@@ -922,8 +1018,9 @@ class ConsentService:
             "target_request_id": str(target_request_id) if target_request_id else None,
             "request_context": context,
             "occurred_at": occurred_at.isoformat(),
+            "actor_hospital_id": str(actor_hospital_id) if actor_hospital_id else None,
         }
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        canonical = canonical_event_payload(payload, scheme=CURRENT_HASH_SCHEME)
         return await self._audit.add(
             AuditLog(
                 id=event_id,
@@ -934,9 +1031,11 @@ class ConsentService:
                 target_record_id=target_record_id,
                 target_category_id=target_category_id,
                 target_request_id=target_request_id,
+                actor_hospital_id=actor_hospital_id,
                 request_context=context,
                 occurred_at=occurred_at,
                 event_hash=self._hash(canonical),
+                hash_version=CURRENT_HASH_SCHEME,
             )
         )
 

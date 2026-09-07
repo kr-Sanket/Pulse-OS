@@ -627,6 +627,70 @@ parameter.
 
 ---
 
+## ADR-023 — Historical hospital attribution, and a versioned audit-hash scheme
+
+**Date:** 2026-09-07 · **Status:** Accepted (M4) · **Extends:** ADR-004, ADR-016, ADR-019,
+ADR-020, ADR-022
+
+**Context:** ADR-022 gave hospitals audit *events*; they had no way to read them. `audit_logs`
+carries no hospital, and the only alternative — joining `actor_user_id` to the actor's
+**current** affiliation — would move history whenever staff transfer: events a doctor
+generated at hospital A would migrate into hospital B's view the day they changed jobs. The
+project had already ruled on this exact problem once, on `consent_requests.requester_hospital_id`
+("Provenance, not a lookup: the hospital the requester acted for at request time").
+
+**Decision:**
+
+1. **`actor_hospital_id`, nullable, captured at write time.** UUID with a foreign key to
+   `hospitals.id`. Nullable is a domain fact, not laziness: patients generate a large share
+   of events — every consent decision, revocation, own read and locker upload — and belong to
+   no hospital. It arrives at `_write_audit` as an argument, never a lookup, which is what
+   makes "never reconstructed later" structural rather than a convention.
+
+2. **`hash_version` selects the whole scheme — canonicalization *and* algorithm.** Not two
+   orthogonal columns. v1 is revision 0004's ten-key payload under SHA-256; v2 adds
+   `actor_hospital_id`; **v3 is reserved for ADR-019's keccak transition**, which now has a
+   mechanism to land in instead of invalidating the table.
+   **v1 omits the key entirely rather than emitting it as null** — that is precisely why
+   legacy digests still reproduce. `canonical_event_payload` serves writing and verifying
+   alike, so a verifier can never drift from the writer.
+   `hash_version` is deliberately **outside** the hashed payload, and that is safe because
+   any mis-selection is self-detecting: recomputing a v2 row under v1 drops a key the digest
+   covered, and a v1 row under v2 adds one it did not. Both directions are tested.
+
+3. **Legacy rows keep NULL and their digests.** No backfill: the only available source is the
+   forbidden join. Hospital-scoped queries therefore begin at migration 0005 — a documented
+   blind spot rather than a reconstructed fiction.
+
+4. **Index `(actor_hospital_id, occurred_at, id)`**, the same shape as the patient index,
+   which is unchanged. Rows with no hospital are absent from it by construction.
+
+5. **`GET /api/v1/hospitals/me/audit-logs`** — HOSPITAL_ADMIN only, scope derived server-side
+   from the admin profile, **no hospital parameter exists**. Owned by `consent` because
+   ownership of the data decides the module and the URL only decides the shape (ADR-020's
+   rule); it needs one fact from `records`, published as
+   `StaffDirectoryService.administered_hospital_id`. Its response is a separate allow-list
+   from the patient's — **no `patientId`** (a hospital reads its own activity, not a roster of
+   the people it touched), no digest or `hashVersion` (tamper evidence is published to the
+   *subject* of a trail, which a hospital is not), and nothing clinical.
+
+**Deferred, with reasons recorded so 6c need not rediscover them:**
+
+- **Hospital record *listing*** stays unaudited. Not because a hospital only sees its own
+  uploads, but for a structural reason: one listing spans many patients while `patient_id` is
+  singular and NOT NULL, so no single row can state it truthfully, and ADR-020 already
+  refused the page-sized burst. It belongs to a future organisation-scoped operational log.
+- **Patient lookup and `/records/existence`** stay unaudited. NOT NULL `patient_id` means only
+  *successful* probes are recordable, so the log would systematically miss the enumeration it
+  would exist to catch. Same future log.
+
+**Consequences:** the patient-visible log keeps its meaning — `patient_id` was not relaxed —
+while gaining a second truthful scope over the same rows. Three deferred items now point at
+one missing artifact (an organisation/actor-scoped operational log), which should be designed
+once rather than three times. 6c is unblocked for the UI only.
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.

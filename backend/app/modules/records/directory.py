@@ -118,6 +118,20 @@ class StaffDirectoryService:
         )
         return displays
 
+    async def administered_hospital_id(self, user_id: UUID) -> UUID | None:
+        """The hospital this account administers, or None if it administers none.
+
+        The one fact the hospital audit view needs from this module: a scope, derived
+        server-side from the authenticated identity so no caller can name a hospital they
+        do not administer. Deliberately returns the id alone — nothing about the admin, and
+        nothing about the hospital beyond which one it is.
+
+        Not batched, unlike everything else here, because it answers a question about the
+        *caller* rather than about a page of rows: there is exactly one of them per request.
+        """
+        admin = await self._admins.get_by_user_id(user_id)
+        return admin.hospital_id if admin is not None else None
+
     async def hospital_names(self, hospital_ids: Collection[UUID]) -> dict[UUID, str]:
         """Hospital display names by id — an organisation is public as its name alone."""
         hospitals = await self._hospitals.list_by_ids(hospital_ids)
