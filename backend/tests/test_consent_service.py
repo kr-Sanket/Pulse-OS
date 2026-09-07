@@ -1311,8 +1311,7 @@ def test_a_transfer_does_not_move_historical_attribution() -> None:
         async with sqlite_session() as session:
             h = await _harness(session)
             original = h.clinicians.by_user_id[h.doctor.user_id]
-            await _request(h, "CBC")
-            before = (await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9))[0]
+            first_request = await _request(h, "CBC")
 
             # A real row: actor_hospital_id carries a foreign key, so the hospital a
             # clinician moves to has to exist.
@@ -1325,16 +1324,23 @@ def test_a_transfer_does_not_move_historical_attribution() -> None:
             await session.flush()
             moved_to = elsewhere.id
             h.clinicians.register(h.doctor.user_id, doctor_id=original.id, hospital_id=moved_to)
-            await _request(h, "MRI")
+            # The harness clock is frozen, so without this both events share one
+            # `occurred_at` and "the later event" would be decided by a random uuid4
+            # tiebreaker. Move it so the two are genuinely ordered.
+            h.clock.advance(dt.timedelta(minutes=1))
+            second_request = await _request(h, "MRI")
 
             rows = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
-            after = rows[0]
+            # Selected by the request each event targets rather than by position: the
+            # assertion is about *which* event carries which hospital, and pinning that to
+            # list order would make it depend on a tiebreaker instead of on the attribution.
+            before = next(row for row in rows if row.target_request_id == first_request)
+            after = next(row for row in rows if row.target_request_id == second_request)
 
             assert before.actor_hospital_id == original.hospital_id
             assert after.actor_hospital_id == moved_to
             # The earlier event is unchanged — history stayed where it happened.
-            reread = next(r for r in rows if r.id == before.id)
-            assert reread.actor_hospital_id == original.hospital_id
+            assert before.actor_hospital_id != moved_to
 
     asyncio.run(scenario())
 

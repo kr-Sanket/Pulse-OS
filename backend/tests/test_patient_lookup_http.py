@@ -159,17 +159,36 @@ def test_a_malformed_health_id_is_refused_as_malformed_not_as_missing(
 
 
 def test_a_transposed_character_is_caught_offline_by_the_check_character(
-    client: TestClient, admin_headers: dict[str, str], patient_health_id: str
+    client: TestClient, admin_headers: dict[str, str], sqlite_db: None
 ) -> None:
-    body = patient_health_id.removeprefix("PHI-IND-2026-")
-    transposed = f"PHI-IND-2026-{body[1]}{body[0]}{body[2:]}"
-    if transposed == patient_health_id:  # pragma: no cover - identical first two chars
-        pytest.skip("this Health ID's first two characters are identical")
+    """ADR-012's whole reason for a check character: a swap at the desk is caught before any
+    database is consulted.
 
-    response = client.get(LOOKUP, params={"healthId": transposed}, headers=admin_headers)
+    Fixed inputs, not a freshly issued Health ID. An issued body is cryptographically random,
+    so roughly one run in thirty-two drew one whose first two characters matched — the
+    "transposition" was then a no-op and the test skipped itself, which is how the suite came
+    to report a different number of executed tests run to run.
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == "That is not a valid Pulse Health ID."
+    ``PHI-IND-2026-7K3M99X`` is docs/DOMAIN_MODEL.md §4's canonical example and is genuinely
+    valid; the two IDs below hold exactly the same characters in a different order, so the
+    only thing separating them is the check character.
+    """
+    valid = "PHI-IND-2026-7K3M99X"
+    transposed = "PHI-IND-2026-K73M99X"
+    assert sorted(valid) == sorted(transposed), "these must differ only by a transposition"
+
+    refused = client.get(LOOKUP, params={"healthId": transposed}, headers=admin_headers)
+
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == "That is not a valid Pulse Health ID."
+
+    # The untransposed ID passes validation and is refused for the other reason — no patient
+    # holds it. Two different answers prove the check character discriminated, rather than
+    # both IDs simply failing somewhere earlier.
+    unswapped = client.get(LOOKUP, params={"healthId": valid}, headers=admin_headers)
+
+    assert unswapped.status_code == 422
+    assert unswapped.json()["detail"] == "No patient on PulseOS has that Health ID."
 
 
 def test_a_missing_health_id_is_a_validation_error(
