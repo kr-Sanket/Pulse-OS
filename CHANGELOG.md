@@ -6,6 +6,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ## [Unreleased]
 
 ### Changed
+- **One shared login experience across the three portals** (`@pulseos/ui/src/components/AuthShell.tsx`).
+  The three login pages were near-identical hand-written copies — the doctor's and the
+  hospital's differed only in two sentences, and the patient's had never been moved onto the
+  design system at all (inline `fontFamily`, raw `<h1>`/`<button>`, the only page in the repo
+  off the token set). Same hoist the primitives got, for the same reason. A full-page teal
+  gradient, a rounded split container at `md`, brand panel with the existing `HeartPulse` mark
+  plus a new inline-SVG artwork at `lg`, and a white authentication panel with a centred
+  "Welcome!". Each portal keeps only its name and its one line of copy, in a new
+  `src/login/view.ts`.
+  **No authentication semantics changed.** Still `signInWithPopup` with a `GoogleAuthProvider`
+  behind `auth/provider.ts`; every file under `src/auth/` except the new hook, both
+  `ProtectedRoute` and all three `App.tsx` are byte-identical to before. PulseOS has no
+  credential mechanism, so the design's email/password affordances were deliberately **not**
+  built: no email field, no password field, no reset, no remember-me, no credential sign-up.
+  `describesNoCredentialFlow` in each `view.ts` asserts that in a test, so the copy cannot
+  start describing a flow no code path implements.
+  **Two WCAG AA fixes measured, not assumed.** Near-white text on `--primary` is 3.99:1, short
+  of AA for normal text — a token-level shortfall affecting every primary button in all three
+  portals. The brand band and the login CTA are deepened locally with `color-mix`, taking all
+  13 text/background pairs on the page to AA (worst case 4.74:1); `--primary` itself and the
+  `Button` primitive are untouched, so the underlying gap remains open for its own slice.
+  Both CTA backgrounds carry `!` because Tailwind v4 emits arbitrary-value utilities *before*
+  named ones, so `bg-primary` from `buttonVariants` would otherwise win on equal specificity
+  and the override would compile and do nothing — confirmed against the built stylesheet.
+  15 new pure view tests (420 web tests total); no DOM-testing infrastructure added.
 - **The shadcn primitives are now shared** (`@pulseos/ui/src/components/ui/`), taken out of both
   portals before the hospital portal made a third copy — the trigger TODO.md had recorded. All
   nine primitives the two portals both held were **byte-identical**, so this is one
