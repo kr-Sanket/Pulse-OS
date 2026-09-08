@@ -5,9 +5,211 @@
 
 ---
 
-## Session 015 — 2026-09-04 · ← CURRENT STATE
+## Session 016 — 2026-09-08 · ← CURRENT STATE
 
 **Read this entry alone to know where the project stands.** Everything below it is history.
+
+**Branch:** `main`, working tree **clean**. Last feature commit **`ea2ebd5`** (patient record
+visibility controls), which this entry describes; the docs commit that adds this entry follows it.
+**20 commits ahead of `origin/main` at `ea2ebd5`, 21 including this documentation commit — none
+pushed.** Pushing is a Product Owner action, deliberately not taken by a Claude session.
+
+**Phase:** M4 — Core Features Complete, **substantially done**. All three web portals are built
+and integrated against the real API; the M3 consent journey exists end to end in code and is
+exercised over HTTP by `tests/test_m3_gate.py`. What remains in M4 is listed under *Not started*
+below — chiefly `notifications` and QR identity.
+
+### Quality gates (measured 2026-09-08 at `ea2ebd5`)
+
+| Gate | Result |
+|---|---|
+| `pytest` | **653 passed**, **97% line coverage** (`--cov=app`) |
+| `ruff format --check` / `ruff check` / `mypy` (strict) | clean — 116 files / 112 source files |
+| `pnpm format:check` / `lint` / `typecheck` | clean, 6 workspace projects |
+| `pnpm test` | **463 passed** — patient 169, hospital 161, doctor 129, api-client 3, ui 1 |
+| `pnpm build` | **3/3 apps build** |
+
+### Live local baseline (Docker Postgres, 2026-09-08)
+
+| | |
+|---|---|
+| patients | **14** (10 Synthea + 3 demo seeds + 1 linked real account) |
+| users | **22** |
+| hospitals | **3** (all seeded VERIFIED) · doctors **4** |
+| medical records | **890** (Synthea Phase A 889 + 1 earlier upload), all `PATIENT_LOCKER` origin |
+| hidden records | **0** |
+| consent requests **9** · grants **9** | audit_logs ~**208** (grows with any dev-portal use) |
+| alembic head | **0005** |
+
+Joaquin141 (`PHI-IND-2026-J0TA0DK`, 103 records) is the Synthea patient linked to a real Firebase
+account via `scripts/dev_link_identity.py` — the account to demo with. **Do not mutate live data
+during development** unless explicitly asked.
+
+### Architecture (shape unchanged since M0.2; reach much extended)
+
+Modular-monolith FastAPI backend (ADR-001), six modules — `auth`, `patients`, `records`, `consent`
+implemented; **`ai` and `notifications` are still 4-line `__init__.py` docstrings**. Layering is
+strict: **router → service → repository**; services import no FastAPI and own no transaction; one
+session/transaction per request; cross-module access only through a published `directory.py` seam
+or a Protocol. **12 tables, 5 Alembic migrations, 30 operations under `/api/v1`** plus `/health`
+and `/ready`. **25 ADRs** recorded (ADR-009 and ADR-010 are still placeholders).
+
+Web: pnpm workspace — three apps (**patient, doctor, hospital — all three now real**) over three
+packages (`api-client` generated from OpenAPI, `config`, `ui` the shared foundation). Per-feature
+frontend architecture everywhere: `src/<feature>/{api.ts, view.ts, use*.ts}` + dumb components,
+all mapping in `view.ts`.
+
+### What shipped since Session 015 (the 20 unpushed commits)
+
+**Doctor portal — complete consent workflow** (`36cf81a`, on top of the slice-1 discovery flow).
+Login → register → dashboard → patient search by Health ID → request access (per category, with
+purpose) → sent requests → granted records → record detail → download. This is what made the M3
+gate reachable; before it, no UI could *create* an access request.
+
+**Hospital portal — built from a two-file scaffold to a working portal** (`7f6088e`, `ac08f3b`,
+`fe9ea86`, `ceda3ad`, `58715a7`, `c35e2a7`). Shell + login, hospital self-registration, doctor
+management (activate/deactivate), uploaded-records listing and detail, patient lookup by Health
+ID (ADR-021) and upload confirmation.
+
+**Hospital audit attribution and history** (`dad1c2f`, `b4a574f`, `7305a0e`, migration **0005**).
+Hospitals emit audit events for their own reads (ADR-022) and get a hospital-scoped audit page.
+Events now carry `actor_hospital_id` — the hospital as it was *at the time* — plus a versioned
+audit-hash scheme (ADR-023). ADR-025 then fixed the patient's trail, which had been reading the
+actor's *present* employer and so re-attributed history when a clinician changed hospital.
+
+**Authenticated API rate limiting** (`8889588`, ADR-024). Per-route dependency, fixed windows over
+Redis, fail-open, on the four Health-ID/discovery surfaces: `patient_lookup` 20/min,
+`record_existence` 30/min, `granted_records` 30/min, `access_request_create` 10/min. Closes M3-D
+for *authenticated* abuse only — see *Deferred*.
+
+**Synthea FHIR R4 Phase A ingestion** (`2d92b28`). 10 pinned patients, 889 records mapped from
+DiagnosticReport/Condition/MedicationRequest/Immunization/AllergyIntolerance into the existing
+category vocabulary; sanitized raw FHIR JSON to S3/MinIO behind the same audited consent path.
+Consent enforcement over imported records is proven in `tests/test_synthea_consent.py`. Phase B
+is deliberately out — see *Deferred*.
+
+**Patient record browsing** (`32d5644`). Chronological ordering by `date_of_service` (a real fix:
+`created_at` is the transaction clock, so a bulk import collapsed the sort onto the UUID
+tie-breaker), `sort=newest|oldest`, server-side `search` with LIKE metacharacters escaped, category
+filter, cursor pagination with `DateCursor`, page size 25, Load more. A cursor issued under one
+sort is refused under the other (422) rather than silently serving the wrong end.
+
+**Patient audit history** (`fc2a029`, `34e6426`). Grouped hospital → actor → events, newest first
+at every level, expand/collapse with sticky reader choices, own-activity toggle, Load more.
+Grouping is a rearrangement and never a filter — asserted by test. "Your own activity" and
+"Unattributed activity" (events predating migration 0005) are named rather than merged into a
+hospital.
+
+**Patient profile editing** (`fb1c329`, `b5ccf07`). `PATCH /api/v1/patients/me` — the API's first
+PATCH. Three editable fields (`fullName`, `dateOfBirth`, `gender`); `healthId`, `firebaseUid`,
+role, status and `createdAt` unreachable rather than merely undocumented. An `Unset` sentinel
+distinguishes an omitted key from an explicit `null`. No migration, no audit action.
+
+**Patient record hide/unhide** (`ea2ebd5`, this session). `PATCH /api/v1/records/{id}/visibility`
+— the write path for `is_hidden`, a column that had existed since migration 0003 and been enforced
+on every non-owner read since M3 with no way for a patient to set it. Scope is **any record the
+patient owns, whatever its origin** (DOMAIN_MODEL §1/§3 amended from "own locker only"). Hiding
+removes a record from every grantee surface at once and **revokes nothing**: the grant keeps its
+status, categories and expiry, and the row, S3 key and file are untouched. No migration, no new
+audit action.
+
+**Portal login redesign** (`5f8ed4a`) and deterministic audit/health-ID tests (`5a8277c`).
+
+### Architectural decisions implemented since Session 015
+
+- **ADR-020** — clinician-scoped record listing (`/granted-records`) as its own resource with a
+  chooser-only projection; a filter over grant scope, never a verdict.
+- **ADR-021** — hospital patient lookup as a `patients`-owned identity endpoint, role-gated only.
+- **ADR-022** — audit emission policy: what a hospital records, and what the schema cannot.
+- **ADR-023** — historical hospital attribution + a versioned audit-hash scheme.
+- **ADR-024** — rate limiting as a per-route dependency (middleware runs before authentication,
+  so per-user keying is impossible there).
+- **ADR-025** — the patient's trail attributes events to the hospital recorded *on the event*,
+  while `StaffDisplayResponse` keeps its current-affiliation meaning. Two questions, two sources.
+
+Standing rules worth re-reading before touching this code: consent is the single choke point;
+`RecordNotFoundError` covers "exists but you may not see it" (404, never 403); audit rows are
+append-only and written in the same transaction as the action; **audit digests are SHA-256 and
+must become keccak256 before anything is anchored (ADR-019)**.
+
+### Status by category — implemented / deferred / not started
+
+**Implemented and tested**
+Auth (Firebase, custom claims), patients (register / read / edit / lookup), records (upload,
+listing with sort+search+filter+paging, detail, presigned download, existence projection,
+grant-scoped listing, hide/unhide), consent (request → per-category decision → grant → revoke,
+`enforce` on every non-owner read, append-only audit log), hospital + doctor onboarding and
+management, hospital and patient audit views, authenticated rate limiting, Synthea Phase A import.
+All three web portals.
+
+**Deferred — decided, reasoned, and recorded in TODO.md**
+Unauthenticated/pre-auth throttling (blocked on ADR-009); the organisation/actor-scoped
+operational log (needs its own ADR; three audit gaps point at it, including that a grantee
+refused for a *hidden* record produces no audit row at all); object-storage server-side
+encryption (an unimplemented clause of accepted ADR-005, on the PHI path); the unlocked lazy
+boto3 client build; Synthea Phase B (raw FHIR in JSONB, a real clinical-content field, orphan
+Observations, Organization/Practitioner rows, full-corpus import, FHIR export); the
+`(patient_id, date_of_service DESC, id DESC)` composite index; a hidden-only record filter.
+
+**Not started — do not describe these as working**
+`notifications` module (access requests arrive silently) · QR identity generation and scanning ·
+hospital **bulk upload** and hospital-side **request management on behalf of their doctors** (both
+in M4's original scope) ·
+**SYSTEM_ADMIN provisioning**, so `POST /hospitals/{hid}/verify` has no reachable caller and a
+self-registered hospital is stranded `PENDING` (masked because the three seeded hospitals are
+already VERIFIED) · **M5 AI layer** — OCR, chunking, pgvector embeddings, RAG copilot, summaries;
+`workers/tasks.py::record_uploaded` still only logs and acknowledges · **M6 blockchain** — the
+`AuditAnchor` interface itself does not exist yet; nothing is anchored · **M7** — E2E tests
+(no Playwright), performance pass, security review, deployment (ADR-009 unresolved, no
+api/worker Dockerfile) · Flutter app (`mobile/` is a README, ADR-010 unresolved).
+
+Also not real, and easy to mistake for real: the patient **Settings page is presentation only**
+(everything from `src/data/settings.ts`; nothing persists, Export Data / Delete Account are
+visual), the profile **Emergency contact card states its own absence** (not modelled), and the
+top-bar global search is decorative.
+
+### Testing debt
+
+**No component or DOM tests exist** in any portal — all 463 web tests are pure logic (`view.ts`
+mappers, `api.ts` with a stubbed client). No test would catch a broken button or a bad conditional
+render. **No end-to-end coverage** either: one Playwright run over login → upload → request →
+approve → read would guard the whole thesis of the product.
+
+### Important development notes (still true)
+
+- **`backend/.env` is read relative to the process CWD** (`make dev-api` runs from `backend/`);
+  the root `.env` is docker-compose only. There is still **no `backend/.env.example`** — this gap
+  has cost debugging time twice and is the oldest open item in TODO §0.
+- Infrastructure must be running (`make up`) or every DB-touching request 500s — and a 500 carries
+  **no CORS headers**, so a browser misreports it as a CORS failure. Curl `/ready` first.
+- **Swagger at `/docs` cannot authenticate anything** — no OpenAPI `securitySchemes` is declared.
+  Use curl with a real bearer token copied from the browser.
+- Seeded staff and patients carry `synthetic:` subjects and **can never authenticate**; a real
+  Google account always starts empty until `dev_link_identity.py` links it.
+- **The database says who you are; the Firebase token says what you may do.** Any fixture that
+  edits `users` must be followed by the matching `*/register` call — the only writer of claims.
+- Category codes are the API vocabulary; internal category UUIDs never leave the backend.
+- A dev stack may be running (`uvicorn --reload` + vite) and will write real `audit_logs` rows as
+  the portal is used. Tests never touch the live DB — they use in-memory SQLite with faked
+  auth/storage/queue.
+
+### Next step
+
+Nothing is half-finished; pick the next slice deliberately. In dependency order the strongest
+candidates are: **(1)** the `notifications` module — the last M4 backend item, and the reason
+access requests currently arrive silently; **(2)** SYSTEM_ADMIN provisioning, which unblocks the
+hospital verification flow that today only works because the seed data pre-verifies; **(3)** a
+first Playwright E2E over the consent journey, which is the cheapest insurance for a demo.
+Follow the slice discipline: inspect → design report → approval → implement → gates → report →
+commit.
+
+---
+
+## Session 015 — 2026-09-04
+
+> **Superseded by Session 016.** Its quality-gate numbers, its "79 uncommitted files" warning
+> and its milestone summary are all historical — the work it describes was committed, and much
+> more has shipped since. Read it for the M4.1/M4.2 reasoning, not for project status.
 
 **Branch:** `main`. Last commit `cca4925` (Firebase auth + local dev environment).
 **⚠️ 79 files are uncommitted** — the whole of M4.1 and M4.2 plus the `@pulseos/ui` extraction

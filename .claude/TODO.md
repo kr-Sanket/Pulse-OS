@@ -4,23 +4,31 @@
 > Dependency ordered: each section unblocks the ones below it.
 > Owner codes: FE (frontend lead), BE (backend lead), AI (AI+blockchain lead), PO (product owner), ANY (whoever/Claude).
 
-**Milestones:** M0 ✅ · M2 ✅ · M3 backend ✅ · **M4 in progress** · M5–M7 not started.
+**Milestones:** M0 ✅ · M2 ✅ · M3 ✅ (gate criteria met in code) · **M4 substantially
+done — `notifications`, QR and SYSTEM_ADMIN provisioning remain** · M5 (AI), M6
+(blockchain) and M7 (hardening/deploy/paper) **not started**.
+
+State as of commit `ea2ebd5`, 2026-09-08. Full picture: [SESSION.md](SESSION.md) §Session 016.
 
 ---
 
-## 0. Immediate — the working tree
+## 0. Immediate — small, unblocked, cheap
 
-- [ ] ANY: **commit 79 uncommitted files.** M4.1 (`/records/existence` + tests), the
-      `@pulseos/ui` extraction (11 files moved, 36 patient files repointed), the whole doctor
-      portal, the regenerated api-client, this doc refresh. Suggested split: backend M4.1 /
-      shared-ui extraction / doctor portal M4.2. Nothing else should start until this lands.
+*(The 79-uncommitted-files item that stood here is done: everything is committed. The branch is
+~20 commits ahead of `origin/main` and entirely unpushed — pushing is a PO action.)*
+
 - [ ] ANY: add **`backend/.env.example`**. `backend/.env` is read relative to the process CWD
       (`make dev-api` runs from `backend/`), while the root `.env` is docker-compose only. The
       absence of an example is what makes that invisible; it has cost debugging time twice.
 
-## 1. M4 — Core Features Complete (current milestone)
+## 1. M4 — Core Features Complete (current milestone, substantially done)
 
-Ordered by dependency. Each item is demonstrable on its own.
+Shipped and **not** listed below: all three portals, the doctor consent workflow, the hospital
+portal and its audit history, authenticated rate limiting, Synthea Phase A, patient record
+browsing/search/sort/paging, patient audit grouping, patient profile editing, and patient record
+hide/unhide. See ROADMAP.md §M4 for the full ✅ list.
+
+What is left, ordered by dependency. Each item is demonstrable on its own.
 
 - [ ] BE: **unauthenticated/pre-auth throttling.** ADR-024 closed M3-D for *authenticated*
       abuse on the four Health-ID/discovery surfaces. An unauthenticated flood is still
@@ -135,7 +143,7 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
 
 ## 4. Testing debt
 
-- [ ] FE: **no component or DOM tests exist.** All 131 web tests are pure logic (`view.ts`
+- [ ] FE: **no component or DOM tests exist.** All 463 web tests are pure logic (`view.ts`
       mappers and `api.ts` modules with a stubbed client); no test would catch a broken button,
       a bad conditional render or a layout regression. Add jsdom + Testing Library for the
       interactive paths.
@@ -149,17 +157,18 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
 
 - [ ] ALL: Literature review — 3 papers each on HIE consent, blockchain audit, RAG
       summarization; notes into `docs/`.
-- [ ] FE: Figma — the 3 core journeys (CONTEXT.md). *Note: the patient portal and the doctor
-      slice were built without it, so this is now documentation of what exists as much as
-      design of what will.*
+- [ ] FE: Figma — the 3 core journeys (CONTEXT.md). *Note: all three portals were built without
+      it, so this is now documentation of what exists as much as design of what will.*
 - [ ] AI: Spike — Gemini free-tier limits vs expected summary/copilot volume.
 - [ ] AI: Spike — EasyOCR vs Tesseract accuracy on 5 synthetic Indian lab-report PDFs.
 
 ## 6. Ops / demo readiness
 
 - [ ] PO/ANY: run the full local stack once and keep it running: `make up`, `alembic upgrade
-      head`, `scripts/seed.py`, both portals, a real Firebase login. Verify an upload lands in
-      MinIO.
+      head`, `scripts/seed.py`, all three portals, a real Firebase login. Verify an upload lands
+      in MinIO. This is also the outstanding half of the M0.3 / M2 / M3 gates: each has every
+      criterion met in code and covered by tests, and none has had its live browser walk-through.
+      (M4's own gate additionally needs the items in §1 above.)
 - [ ] BE: consider mapping database-connection failures to **503** (as Firebase and storage
       outages already are). Today a dead database is a 500 "An unexpected error occurred" with
       no CORS headers, which reads to a browser as a CORS bug. `/ready` already reports it
@@ -167,6 +176,21 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
 - [ ] BE: consider declaring `HTTPBearer(auto_error=False)` as a documentation-only dependency
       so OpenAPI emits `securitySchemes` and Swagger gets an Authorize button. Enforcement
       would not change; the spec currently under-documents that endpoints need credentials.
+
+## 7. Built but deliberately not wired (presentation only)
+
+Not TODO items and not defects — shipped UI with no backend behind it, listed so nobody mistakes
+them for working features or re-reports them as bugs. Each needs a product decision before it
+becomes work.
+
+- **Patient Settings page** — every toggle comes from `web/apps/patient/src/data/settings.ts`.
+  Nothing persists; Export Data and Delete Account are visual. The backend models no patient
+  preferences, so there is no endpoint to mirror.
+- **Emergency contact card** (patient profile) — states its own absence rather than showing a
+  stand-in. PulseOS does not model an emergency contact (DOMAIN_MODEL §1).
+- **Top-bar global search** in the patient portal — decorative; the Records page has the real,
+  server-side search.
+- **Share / Print** on the record details panel — no backend exists for either.
 
 ## Parking Lot (not now)
 

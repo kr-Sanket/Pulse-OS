@@ -19,25 +19,29 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase:** **M4 — Core Features Complete**, in progress on `main` (2026-09-04, session 015).
-  M0, the M2 backend and the M3 backend are all done and merged. **79 files are uncommitted** —
-  M4.1, M4.2 and the shared-UI extraction; commit before starting anything (TODO §0).
-- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (merged
-  as PR #1); M2 backend (onboarding per ADR-015, upload → S3 port, presigned downloads, arq
-  worker per ADR-014, seed); M3 backend (request → per-category decision → grant → revoke,
-  `consent.enforce()` on every non-owner record read, append-only audit log, migration 0004 —
-  ADR-016…019); **M4 so far** — patient-facing `GET /consent-grants`, `GET /audit-logs` and the
-  batched staff identity projection; `GET /records/existence` (the clinician discovery step);
-  the **patient portal fully integrated** across all seven pages; `@pulseos/ui` promoted to the
-  shared portal foundation; the **doctor portal's first slice** (login → dashboard → patient
-  search by Health ID → available categories).
-- **Next:** the doctor portal's **request-access flow** — the last thing between the repository
-  and an end-to-end consent demo, because no UI can currently *create* an access request. Ship
-  rate limiting with or before it (both `/access-requests` and `/records/existence` are
-  unthrottled Health-ID oracles, finding M3-D). Then the hospital portal and `notifications`.
-- **Health:** 320 backend tests at 97% coverage, mypy strict + ruff clean; 131 web tests, tsc +
-  eslint + prettier clean; CI green on both.
-- **Session log / handoff notes:** [SESSION.md](SESSION.md) — read this second, update it before ending every session.
+- **Phase:** **M4 — Core Features Complete**, substantially done on `main` (2026-09-08, session
+  016). Last feature commit `ea2ebd5`; working tree clean; **20 commits ahead of `origin/main` at
+  that commit (21 with the docs commit that follows it), none pushed** — pushing is a Product
+  Owner action.
+- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (PR #1);
+  M2 backend (onboarding per ADR-015, upload → S3 port, presigned downloads, arq worker per
+  ADR-014, seed); **M3** (request → per-category decision → grant → revoke, `consent.enforce()`
+  on every non-owner record read, append-only audit log, migration 0004, ADR-016…019) — its gate
+  criteria are now met in code; **M4 so far** — all three portals built and integrated (patient
+  complete, doctor's full consent workflow, hospital portal), hospital audit attribution
+  (migration 0005, ADR-022/023/025), authenticated rate limiting (ADR-024), Synthea FHIR R4
+  Phase A (10 patients / 889 records), patient record browsing (sort, server-side search,
+  category filter, cursor paging), patient audit grouping, patient profile editing
+  (`PATCH /patients/me`), and patient record hide/unhide (`PATCH /records/{id}/visibility`).
+- **Next:** the **`notifications` module** (access requests still arrive silently — the last M4
+  backend item), then **SYSTEM_ADMIN provisioning** (nothing can call `POST /hospitals/{hid}/verify`,
+  so a self-registered hospital is stranded `PENDING`), then **QR identity**. A first Playwright
+  E2E over the consent journey is the cheapest demo insurance. **Not started, do not describe as
+  working:** M5 AI/RAG (`workers/tasks.py` still only logs), M6 blockchain (no `AuditAnchor`
+  interface exists), M7 hardening/deploy.
+- **Health:** **653 backend tests at 97% coverage**, mypy strict + ruff clean; **463 web tests**,
+  tsc + eslint + prettier clean; 3/3 web builds; CI green on both.
+- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 016 — read this second, update it before ending every session.
 
 ## Architecture in One Paragraph
 
