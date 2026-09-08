@@ -5,6 +5,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+### Fixed
+- **Record listings were ordered by import time, not by when care happened.**
+  ``created_at`` defaults to the transaction clock, so every record written in one
+  transaction shares an instant and ``ORDER BY created_at DESC, id DESC`` collapsed onto
+  the random UUID tie-breaker. Measured on the imported demo patient: **103 records, one
+  distinct ``created_at``, 39 distinct ``date_of_service`` spanning 1963 to 2018** — the
+  first page read 2016, 2010, 2013, 2016, 2009, 2017, 1996, 2015. Both record listings now
+  order by ``date_of_service`` with ``id`` as the tie-breaker. The bulk import only made
+  this visible; any multi-record write had it.
+- **The patient's Medical Records page could not reach past its first 100 records.** It
+  asked for the API maximum, never sent a cursor, and rendered ``nextCursor`` as a static
+  "older ones are not listed yet" line — so 3 of the demo patient's 103 were unreachable
+  and its search covered only what happened to be loaded. The page now asks for 25 and has
+  a Load more.
+
+### Added
+- **Sort, search and reset on ``GET /api/v1/records``.** ``sort=newest|oldest`` over the
+  clinical date, and ``search`` as a case-insensitive substring of the filename or
+  description. Both are server-side, because the page holds one page at a time and anything
+  decided in the browser could only ever filter a slice of the history.
+  LIKE metacharacters in a search term are **literal**: a patient looking for ``100_mg`` or
+  ``50%`` means those strings, so the term is escaped and the escape character is escaped
+  first (escaping it after ``%`` and ``_`` would double the escapes just introduced).
+  A new ``DateCursor`` carries ``(sort, date_of_service, id)`` alongside the existing
+  ``CursorKey``, which four modules use unchanged. Two properties it exists for:
+  ``date_of_service`` is **not unique**, so the id half of the keyset is load-bearing rather
+  than decorative — a page boundary landing inside a same-date run would otherwise skip it
+  or serve it twice; and a cursor names a position in *one* sequence, so one issued under
+  the other sort is **refused with 422** rather than honoured, which would have returned a
+  page from the wrong end with no error. Verified against the live corpus: walking all 103
+  records in both directions at three page sizes yields 103 rows, 103 unique, correctly
+  ordered.
+  **``/granted-records`` gains the ordering fix and nothing else.**
+  ``GrantedRecordResponse`` deliberately withholds ``originalFilename`` and ``description``,
+  and a search over exactly those two withheld columns would turn the clinician listing into
+  an oracle for them — result counts would recover a diagnosis-bearing description one
+  substring at a time. Sorting discloses nothing the page does not already show; searching
+  would. Pinned by two regression tests and the existing exact-parameter-set assertion.
+  18 new backend tests (573 total, 97% coverage held) and 5 new web tests (425 total). No
+  migration: the plan is `Bitmap Index Scan` on the existing ``patient_id`` index feeding a
+  top-N heapsort over one patient's rows, 0.36 ms at 890 rows, so a composite index would be
+  speculative — the trigger is recorded in TODO instead.
+
 ### Added
 - **Synthea FHIR R4 import** (`app/modules/records/fhir_mapping.py`, `fhir_import.py`,
   `scripts/import_synthea.py`) — ten pinned synthetic patients with **889 real clinical

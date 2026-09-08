@@ -1566,6 +1566,15 @@
         "title": "SentAccessRequestResponse",
         "type": "object"
       },
+      "SortDirection": {
+        "description": "Which end of a date-ordered listing comes first.\n\nThe values are the wire format (``?sort=newest``) *and* part of the cursor payload, so\nrenaming a member is an API change.",
+        "enum": [
+          "newest",
+          "oldest"
+        ],
+        "title": "SortDirection",
+        "type": "string"
+      },
       "StaffDisplayResponse": {
         "description": "A member of hospital staff as the patient sees them, wherever this API names one.\n\nOne shape for requesters, grantees and audit actors, because a patient is asking the\nsame question in all three places: who is this, and where do they work. It carries no\nidentifier \u2014 the id it was projected from is already on the row beside it \u2014 and no\nregistration number, contact detail or employment status.\n\n``specialty`` is null when the staff row does not carry one, and always for an\nadministrator; ``hospitalName`` is always present, because staff belong to a hospital\nby schema.",
         "properties": {
@@ -2886,7 +2895,7 @@
     },
     "/api/v1/records": {
       "get": {
-        "description": "The caller's records, newest first, cursor-paginated, optionally by category.\n\nRoles: PATIENT (own records) or HOSPITAL_ADMIN (records their hospital uploaded).\nConsent requirement: none \u2014 both scopes are ADR-013 layer-2 relationships.\nFailure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category).",
+        "description": "The caller's records in clinical-date order, cursor-paginated, filterable.\n\nOrdered by ``dateOfService`` \u2014 the date care happened \u2014 newest first by default, with\nthe record id as a tie-breaker so same-day records have a stable total order.\n``search`` is a case-insensitive substring of the filename or description; LIKE\nmetacharacters in it are literal.\n\n``sort``, ``search`` and ``category`` select *which* sequence is paginated, so a cursor\nonly means something alongside the same three. A cursor issued under the other sort is\nrefused rather than honoured (422); changing ``search`` or ``category`` is the client's\ncue to drop the cursor.\n\nRoles: PATIENT (own records) or HOSPITAL_ADMIN (records their hospital uploaded).\nConsent requirement: none \u2014 both scopes are ADR-013 layer-2 relationships.\nFailure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category/sort, or a\ncursor that does not belong to the requested sort).",
         "operationId": "list_records_api_v1_records_get",
         "parameters": [
           {
@@ -2905,6 +2914,33 @@
                 }
               ],
               "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SortDirection",
+              "default": "newest"
             }
           },
           {

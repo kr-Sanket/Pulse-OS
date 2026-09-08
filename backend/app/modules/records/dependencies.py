@@ -44,7 +44,14 @@ from app.modules.records.repository import (
 )
 from app.modules.records.service import RecordService
 from app.modules.records.storage import ObjectStorage
-from app.shared.pagination import CursorKey, InvalidCursorError, decode_cursor
+from app.shared.pagination import (
+    CursorKey,
+    DateCursor,
+    InvalidCursorError,
+    SortDirection,
+    decode_cursor,
+    decode_date_cursor,
+)
 
 
 def to_http_error(exc: RecordsError) -> HTTPException:
@@ -95,6 +102,29 @@ def parse_cursor(cursor: str | None) -> CursorKey | None:
         return decode_cursor(cursor)
     except InvalidCursorError:
         raise HTTPException(status_code=422, detail="Invalid pagination cursor.") from None
+
+
+def parse_date_cursor(cursor: str | None, sort: SortDirection) -> DateCursor | None:
+    """Decode a clinical-date cursor and check it belongs to the sort being asked for.
+
+    The pair matters, not just the token. A cursor issued for ``newest`` names a position in
+    a sequence that ``oldest`` walks the other way, so honouring it under the other
+    direction would silently serve a page from the middle of the wrong end — no error, just
+    wrong records. Refusing is the only safe reading, and 422 is what a client that changed
+    the sort without resetting the cursor deserves to see.
+    """
+    if cursor is None:
+        return None
+    try:
+        decoded = decode_date_cursor(cursor)
+    except InvalidCursorError:
+        raise HTTPException(status_code=422, detail="Invalid pagination cursor.") from None
+    if decoded.sort is not sort:
+        raise HTTPException(
+            status_code=422,
+            detail="This pagination cursor was issued for a different sort order.",
+        )
+    return decoded
 
 
 def get_request_context(request: Request) -> str | None:

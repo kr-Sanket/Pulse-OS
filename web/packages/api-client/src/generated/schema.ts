@@ -651,11 +651,22 @@ export interface paths {
         };
         /**
          * List Records
-         * @description The caller's records, newest first, cursor-paginated, optionally by category.
+         * @description The caller's records in clinical-date order, cursor-paginated, filterable.
+         *
+         *     Ordered by ``dateOfService`` — the date care happened — newest first by default, with
+         *     the record id as a tie-breaker so same-day records have a stable total order.
+         *     ``search`` is a case-insensitive substring of the filename or description; LIKE
+         *     metacharacters in it are literal.
+         *
+         *     ``sort``, ``search`` and ``category`` select *which* sequence is paginated, so a cursor
+         *     only means something alongside the same three. A cursor issued under the other sort is
+         *     refused rather than honoured (422); changing ``search`` or ``category`` is the client's
+         *     cue to drop the cursor.
          *
          *     Roles: PATIENT (own records) or HOSPITAL_ADMIN (records their hospital uploaded).
          *     Consent requirement: none — both scopes are ADR-013 layer-2 relationships.
-         *     Failure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category).
+         *     Failure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category/sort, or a
+         *     cursor that does not belong to the requested sort).
          */
         get: operations["list_records_api_v1_records_get"];
         put?: never;
@@ -1602,6 +1613,15 @@ export interface components {
             requesterHospitalName: string | null;
             status: components["schemas"]["ConsentRequestStatus"];
         };
+        /**
+         * SortDirection
+         * @description Which end of a date-ordered listing comes first.
+         *
+         *     The values are the wire format (``?sort=newest``) *and* part of the cursor payload, so
+         *     renaming a member is an API change.
+         * @enum {string}
+         */
+        SortDirection: "newest" | "oldest";
         /**
          * StaffDisplayResponse
          * @description A member of hospital staff as the patient sees them, wherever this API names one.
@@ -2622,6 +2642,8 @@ export interface operations {
         parameters: {
             query?: {
                 category?: string | null;
+                search?: string | null;
+                sort?: components["schemas"]["SortDirection"];
                 cursor?: string | null;
                 limit?: number;
             };

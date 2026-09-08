@@ -25,8 +25,14 @@ export { categoryLabel, categoryLabels, listCategories, type RecordCategory } fr
 export { toFormData } from "@pulseos/ui";
 export type { ApiResult } from "@pulseos/ui";
 
-/** Asked for on every listing: the API caps a page at 100 and the page has no pager. */
-const MAX_PAGE_SIZE = 100;
+/** The listing's sort vocabulary, taken from the generated schema rather than restated —
+ * so adding a third ordering server-side is a type error here, not a silent divergence. */
+export type RecordSort = components["schemas"]["SortDirection"];
+
+/** One page of records. Small enough that the first screen paints fast, and the page now
+ * has a Load more, so it is a page size rather than the cap it used to be: the listing
+ * previously asked for the API maximum and silently lost anything past it. */
+export const RECORDS_PAGE_SIZE = 25;
 
 /** Per-status wording for an upload, used only when the API sends no problem detail. */
 const UPLOAD_FAILURES: Readonly<Record<number, string>> = {
@@ -38,15 +44,40 @@ const UPLOAD_FAILURES: Readonly<Record<number, string>> = {
   503: "Storage is unavailable right now — nothing was uploaded.",
 };
 
-/** The caller's own records, newest first. `categoryCode` null means every category. */
+/** What the listing endpoint is asked for. Mirrors the query the API declares. */
+export interface RecordListRequest {
+  /** null means every category. */
+  category: string | null;
+  /** null means no search; the caller trims before getting here. */
+  search: string | null;
+  sort: RecordSort;
+  /** Continue a previous page. Only valid for the same category/search/sort. */
+  cursor?: string;
+}
+
+/**
+ * One page of the caller's own records, ordered and filtered by the API.
+ *
+ * Sorting, filtering and searching are all server-side: the page holds at most
+ * `RECORDS_PAGE_SIZE` records at a time, so anything decided in the browser could only ever
+ * see a slice of the patient's history.
+ */
 export async function listRecords(
   client: PulseOSClient,
-  categoryCode: string | null,
+  request: RecordListRequest,
   signal: AbortSignal,
 ): Promise<ApiResult<RecordPage>> {
   return attempt(async () => {
     const result = await client.GET("/api/v1/records", {
-      params: { query: { category: categoryCode ?? undefined, limit: MAX_PAGE_SIZE } },
+      params: {
+        query: {
+          category: request.category ?? undefined,
+          search: request.search ?? undefined,
+          sort: request.sort,
+          cursor: request.cursor,
+          limit: RECORDS_PAGE_SIZE,
+        },
+      },
       signal,
     });
     if (result.data === undefined) {

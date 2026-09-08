@@ -3,10 +3,15 @@ import { expect, test } from "vitest";
 import type { RecordMetadata } from "./api";
 import {
   categoryStyle,
+  DEFAULT_SORT,
+  EMPTY_QUERY,
   formatCalendarDate,
   formatFileSize,
-  matchesQuery,
+  hasActiveFilters,
+  keepsCursor,
   NO_DESCRIPTION,
+  searchParam,
+  SORT_OPTIONS,
   providerLabel,
   recordDescription,
   recordTitle,
@@ -67,13 +72,37 @@ test("a missing or blank description falls back to a sentence", () => {
   expect(recordDescription(withRecord({ description: "   " }))).toBe(NO_DESCRIPTION);
 });
 
-test("search matches filename, description, category and provider, case-insensitively", () => {
-  expect(matchesQuery(RECORD, "")).toBe(true);
-  expect(matchesQuery(RECORD, "   ")).toBe(true);
-  expect(matchesQuery(RECORD, "AUGUST")).toBe(true);
-  expect(matchesQuery(RECORD, "blood")).toBe(true);
-  expect(matchesQuery(RECORD, "jamshedpur")).toBe(true);
-  expect(matchesQuery(RECORD, "vellore")).toBe(false);
+// -- listing controls ---------------------------------------------------------------
+
+test("the sort vocabulary is the two orderings the API declares, newest by default", () => {
+  expect(SORT_OPTIONS.map((option) => option.value)).toEqual(["newest", "oldest"]);
+  expect(DEFAULT_SORT).toBe("newest");
+  expect(EMPTY_QUERY).toEqual({ category: null, search: "", sort: "newest" });
+});
+
+test("clearing is offered only when some filter is actually set", () => {
+  expect(hasActiveFilters(EMPTY_QUERY)).toBe(false);
+  expect(hasActiveFilters({ ...EMPTY_QUERY, search: "   " })).toBe(false); // whitespace is not a filter
+  expect(hasActiveFilters({ ...EMPTY_QUERY, category: "MRI" })).toBe(true);
+  expect(hasActiveFilters({ ...EMPTY_QUERY, search: "lipid" })).toBe(true);
+  expect(hasActiveFilters({ ...EMPTY_QUERY, sort: "oldest" })).toBe(true);
+});
+
+test("a cursor survives only while every part of the query is unchanged", () => {
+  expect(keepsCursor(EMPTY_QUERY, EMPTY_QUERY)).toBe(true);
+  // Whitespace-only edits do not change the request, so the cursor stays valid.
+  expect(
+    keepsCursor({ ...EMPTY_QUERY, search: "lipid" }, { ...EMPTY_QUERY, search: "lipid " }),
+  ).toBe(true);
+  expect(keepsCursor(EMPTY_QUERY, { ...EMPTY_QUERY, sort: "oldest" })).toBe(false);
+  expect(keepsCursor(EMPTY_QUERY, { ...EMPTY_QUERY, category: "MRI" })).toBe(false);
+  expect(keepsCursor(EMPTY_QUERY, { ...EMPTY_QUERY, search: "lipid" })).toBe(false);
+});
+
+test("the search term reaches the API trimmed, and absent rather than empty", () => {
+  expect(searchParam(EMPTY_QUERY)).toBeNull();
+  expect(searchParam({ ...EMPTY_QUERY, search: "   " })).toBeNull();
+  expect(searchParam({ ...EMPTY_QUERY, search: "  lipid  " })).toBe("lipid");
 });
 
 test("today is a local calendar date the upload form can use as its ceiling", () => {

@@ -573,3 +573,131 @@ def test_a_clinician_with_no_grant_gets_an_empty_page_rather_than_a_refusal(
 
     assert response.status_code == 200, response.text
     assert response.json() == {"grantedCategories": [], "items": [], "nextCursor": None}
+
+
+# -- listing controls: sort, search, cursor validity -------------------------------------
+
+
+def _titles(response: httpx.Response) -> list[str]:
+    return [item["originalFilename"] for item in response.json()["items"]]
+
+
+def _seed_dated_records(client: TestClient, actors: Actors) -> None:
+    """Three records on three clinical dates, uploaded in an order that matches none of
+    them — so every assertion below fails if the listing reverts to insertion order."""
+    for day, name in (("2026-03-02", "middle"), ("2026-03-03", "newest"), ("2026-03-01", "oldest")):
+        response = client.post(
+            RECORDS,
+            data={**UPLOAD_FORM, "dateOfService": day, "description": name},
+            files={"file": (f"{name}.pdf", b"%PDF-1.7 x", "application/pdf")},
+            headers=actors.patient,
+        )
+        assert response.status_code == 201, response.text
+
+
+def test_records_are_listed_newest_clinical_date_first_by_default(
+    client: TestClient, actors: Actors
+) -> None:
+    _seed_dated_records(client, actors)
+    response = client.get(RECORDS, headers=actors.patient)
+    assert response.status_code == 200
+    assert _titles(response) == ["newest.pdf", "middle.pdf", "oldest.pdf"]
+
+
+def test_the_sort_parameter_reverses_the_listing(client: TestClient, actors: Actors) -> None:
+    _seed_dated_records(client, actors)
+    newest = client.get(RECORDS, params={"sort": "newest"}, headers=actors.patient)
+    oldest = client.get(RECORDS, params={"sort": "oldest"}, headers=actors.patient)
+    assert _titles(newest) == ["newest.pdf", "middle.pdf", "oldest.pdf"]
+    assert _titles(oldest) == ["oldest.pdf", "middle.pdf", "newest.pdf"]
+
+
+def test_an_unknown_sort_value_is_refused(client: TestClient, actors: Actors) -> None:
+    assert (
+        client.get(RECORDS, params={"sort": "sideways"}, headers=actors.patient).status_code == 422
+    )
+
+
+def test_the_search_parameter_filters_server_side(client: TestClient, actors: Actors) -> None:
+    _seed_dated_records(client, actors)
+    assert _titles(client.get(RECORDS, params={"search": "newest"}, headers=actors.patient)) == [
+        "newest.pdf"
+    ]
+    # The description is searched too, not only the filename.
+    assert _titles(client.get(RECORDS, params={"search": "middle"}, headers=actors.patient)) == [
+        "middle.pdf"
+    ]
+    empty = client.get(RECORDS, params={"search": "absent"}, headers=actors.patient)
+    assert empty.json()["items"] == []
+
+
+def test_a_cursor_issued_for_one_sort_is_refused_under_the_other(
+    client: TestClient, actors: Actors
+) -> None:
+    """Honouring it would serve a page from the wrong end of the sequence with no error —
+    the silent failure this validation exists to make loud."""
+    _seed_dated_records(client, actors)
+    first = client.get(RECORDS, params={"sort": "newest", "limit": 1}, headers=actors.patient)
+    cursor = first.json()["nextCursor"]
+    assert cursor is not None
+
+    same = client.get(
+        RECORDS, params={"sort": "newest", "cursor": cursor, "limit": 1}, headers=actors.patient
+    )
+    assert same.status_code == 200
+    assert _titles(same) == ["middle.pdf"]
+
+    crossed = client.get(
+        RECORDS, params={"sort": "oldest", "cursor": cursor, "limit": 1}, headers=actors.patient
+    )
+    assert crossed.status_code == 422
+    assert "sort order" in crossed.json()["detail"]
+
+
+def test_a_corrupt_cursor_is_still_a_validation_error(client: TestClient, actors: Actors) -> None:
+    response = client.get(RECORDS, params={"cursor": "not-a-cursor"}, headers=actors.patient)
+    assert response.status_code == 422
+
+
+def test_paging_with_a_cursor_covers_the_listing_exactly_once(
+    client: TestClient, actors: Actors
+) -> None:
+    _seed_dated_records(client, actors)
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(5):  # bounded, so a broken cursor cannot loop forever
+        params: dict[str, object] = {"sort": "oldest", "limit": 1}
+        if cursor is not None:
+            params["cursor"] = cursor
+        page = client.get(RECORDS, params=params, headers=actors.patient)
+        assert page.status_code == 200
+        seen.extend(_titles(page))
+        cursor = page.json()["nextCursor"]
+        if cursor is None:
+            break
+    assert seen == ["oldest.pdf", "middle.pdf", "newest.pdf"]
+
+
+# -- granted-records privacy regression --------------------------------------------------
+
+
+def test_the_granted_listing_offers_no_search_parameter() -> None:
+    """``GrantedRecordResponse`` withholds ``originalFilename`` and ``description`` on
+    purpose. A search over exactly those two withheld columns would let a clinician recover
+    a diagnosis-bearing description from result counts, so the parameter must not exist."""
+    from app.main import create_app
+
+    spec = create_app().openapi()
+    operation = spec["paths"]["/api/v1/granted-records"]["get"]
+    names = {parameter["name"] for parameter in operation["parameters"]}
+    assert "search" not in names
+    assert "sort" not in names
+    assert names == {"patientHealthId", "cursor", "limit"}
+
+
+def test_the_granted_listing_still_withholds_filename_and_description() -> None:
+    """A field-level pin: widening this model is what the search oracle would need."""
+    from app.modules.records.schemas import GrantedRecordResponse
+
+    fields = set(GrantedRecordResponse.model_fields)
+    assert {"original_filename", "description", "size_bytes", "content_type"}.isdisjoint(fields)

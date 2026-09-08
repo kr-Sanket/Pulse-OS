@@ -76,6 +76,13 @@ Phase A shipped ten pinned patients and 889 records; these are the parts deliber
       zero ripple). A truthful value costs the backend enum + OpenAPI + client regen + the
       exhaustive `ORIGIN_LABELS` map in `@pulseos/ui`.
 
+- [ ] BE: **composite index `(patient_id, date_of_service DESC, id DESC)`** for the record
+      listing. Not needed now and deliberately not added: `EXPLAIN ANALYZE` shows a bitmap
+      index scan on the existing `patient_id` index feeding a top-N heapsort over one
+      patient's ~100 rows at 0.36 ms (890-row table). The index would let Postgres skip the
+      sort and stream from the index — worth it once a patient holds low thousands of
+      records, which the deferred full-corpus import (260k Observations) would cause.
+
 ## 2. Deferred M3 review findings (backend)
 
 Each is a stated security or correctness gap. M3-D is closed by ADR-024.

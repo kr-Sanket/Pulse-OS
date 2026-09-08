@@ -8,7 +8,7 @@ import { FileText, FlaskConical, Pill, ScanLine, Syringe, type LucideIcon } from
 
 import type { Tone } from "@/components/dashboard/StatusBadge";
 
-import type { RecordMetadata } from "./api";
+import type { RecordMetadata, RecordSort } from "./api";
 
 export interface CategoryStyle {
   icon: LucideIcon;
@@ -59,16 +59,55 @@ export function recordDescription(record: RecordMetadata): string {
   return description === undefined || description.length === 0 ? NO_DESCRIPTION : description;
 }
 
-/** Client-side search over the loaded page — the API has no search parameter. */
-export function matchesQuery(record: RecordMetadata, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (needle.length === 0) {
-    return true;
-  }
-  return [
-    record.originalFilename,
-    record.description ?? "",
-    record.categoryDisplayName,
-    providerLabel(record),
-  ].some((field) => field.toLowerCase().includes(needle));
+// -- listing controls ---------------------------------------------------------------
+//
+// Sorting, filtering and searching all happen server-side. They used to be partly
+// client-side, which was wrong in a way that got worse with real data: the page asked for
+// 100 records and searched only those, so a patient with more than a hundred was told
+// "no results" for a record that existed. The API now owns all three, and this module owns
+// only the vocabulary and the reset rule.
+
+export type { RecordSort };
+
+export const SORT_OPTIONS: readonly { value: RecordSort; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+];
+
+export const DEFAULT_SORT: RecordSort = "newest";
+
+/** Everything the listing query is made of. A cursor is only valid for one of these. */
+export interface RecordQuery {
+  category: string | null;
+  search: string;
+  sort: RecordSort;
+}
+
+export const EMPTY_QUERY: RecordQuery = { category: null, search: "", sort: DEFAULT_SORT };
+
+/** Whether "Clear filters" would change anything — the control hides when it would not. */
+export function hasActiveFilters(query: RecordQuery): boolean {
+  return query.category !== null || query.search.trim().length > 0 || query.sort !== DEFAULT_SORT;
+}
+
+/**
+ * Whether a cursor held for `previous` may still be used for `next`.
+ *
+ * A cursor addresses a position in one specific sequence. Change the sort and the sequence
+ * runs the other way; change the search or the category and it contains different records.
+ * The backend refuses a cursor whose sort disagrees, but it cannot detect a changed search
+ * — that page would simply be wrong — so the client resets on any of the three.
+ */
+export function keepsCursor(previous: RecordQuery, next: RecordQuery): boolean {
+  return (
+    previous.category === next.category &&
+    previous.search.trim() === next.search.trim() &&
+    previous.sort === next.sort
+  );
+}
+
+/** The search term as the API should receive it: trimmed, and absent rather than empty. */
+export function searchParam(query: RecordQuery): string | null {
+  const trimmed = query.search.trim();
+  return trimmed.length === 0 ? null : trimmed;
 }

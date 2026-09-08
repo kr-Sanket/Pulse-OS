@@ -3,11 +3,14 @@
 Flushes run inside savepoints where a unique constraint doubles as a domain check
 (draw-and-insert HIDs, 1:1 profile rows); ``IntegrityError`` becomes a domain error so
 services never touch SQLAlchemy session details. Paginated listings use keyset cursors
-over ``(created_at DESC, id DESC)`` (app/shared/pagination.py) — never OFFSET.
+(app/shared/pagination.py) — never OFFSET: ``(created_at DESC, id DESC)`` for listings
+ordered by when a row appeared, and ``(date_of_service, id)`` in either direction for the
+record listings, which a patient reads as a clinical history rather than an inbox.
 """
 
 from collections.abc import Collection
 from datetime import datetime
+from typing import Final
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, Select, and_, or_, select
@@ -23,7 +26,7 @@ from app.modules.records.models import (
     MedicalRecord,
     RecordCategory,
 )
-from app.shared.pagination import CursorKey
+from app.shared.pagination import CursorKey, DateCursor, SortDirection
 
 #: A record with its display context: category always, uploading hospital when present.
 RecordRow = tuple[MedicalRecord, RecordCategory, Hospital | None]
@@ -47,6 +50,64 @@ def _keyset_filter(
     return or_(
         created_col < after.created_at,
         and_(created_col == after.created_at, id_col < after.item_id),
+    )
+
+
+def _date_keyset_filter(after: DateCursor) -> ColumnElement[bool]:
+    """WHERE clause for "strictly after ``after``" in the direction the cursor was issued for.
+
+    The comparison flips with the direction, and both halves must flip together: under
+    ``oldest`` the next page is dates *greater* than the cursor's, and within the cursor's
+    own date it is the ids *greater* than it. Getting one half right and the other wrong
+    is invisible until a page boundary lands inside a run of same-date records — which,
+    with a handful of records per clinical day, is most boundaries.
+
+    Spelled as an OR rather than a row-value comparison because SQLite lacks tuple
+    comparison, matching ``_keyset_filter`` above.
+    """
+    date_col = MedicalRecord.date_of_service
+    id_col = MedicalRecord.id
+    if after.sort is SortDirection.OLDEST_FIRST:
+        return or_(
+            date_col > after.sort_date,
+            and_(date_col == after.sort_date, id_col > after.item_id),
+        )
+    return or_(
+        date_col < after.sort_date,
+        and_(date_col == after.sort_date, id_col < after.item_id),
+    )
+
+
+#: ``\`` escapes the LIKE metacharacters below. Chosen over the default (no escape clause)
+#: because a patient searching for "100_mg" or "50%" must match those literally rather than
+#: having them read as wildcards.
+_LIKE_ESCAPE: Final = "\\"
+
+
+def escape_like(term: str) -> str:
+    """Make ``term`` a literal substring pattern for ILIKE.
+
+    The backslash goes first: escaping it after ``%`` and ``_`` would double the escapes
+    this function had just introduced.
+    """
+    escaped = term.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+    for metacharacter in ("%", "_"):
+        escaped = escaped.replace(metacharacter, f"{_LIKE_ESCAPE}{metacharacter}")
+    return f"%{escaped}%"
+
+
+def _search_filter(term: str) -> ColumnElement[bool]:
+    """Case-insensitive substring match over the two text columns the record itself owns.
+
+    Deliberately not the joined category or hospital name: the category is already a
+    first-class filter, and widening the predicate across a join buys nothing the chips do
+    not already do. ``description`` is nullable, and ``ILIKE`` on NULL is NULL — falsy in a
+    WHERE, which is the behaviour we want, so no COALESCE is needed.
+    """
+    pattern = escape_like(term)
+    return or_(
+        MedicalRecord.original_filename.ilike(pattern, escape=_LIKE_ESCAPE),
+        MedicalRecord.description.ilike(pattern, escape=_LIKE_ESCAPE),
     )
 
 
@@ -238,26 +299,33 @@ class MedicalRecordRepository:
         patient_id: UUID | None = None,
         uploaded_by_hospital_id: UUID | None = None,
         category_id: UUID | None = None,
-        after: CursorKey | None = None,
+        search: str | None = None,
+        sort: SortDirection = SortDirection.NEWEST_FIRST,
+        after: DateCursor | None = None,
         limit: int,
     ) -> list[RecordRow]:
-        """One page of record metadata with display context, newest first.
+        """One page of record metadata with display context, in clinical-date order.
 
         Exactly one of ``patient_id`` / ``uploaded_by_hospital_id`` must be set — every
         listing is scoped to a relationship (ADR-013 layer 2); an unscoped listing of
         medical records must not even be expressible.
+
+        ``search`` matches the record's own filename and description. It is offered here and
+        **not** on ``list_page_for_grantee`` on purpose: see that method.
         """
         if (patient_id is None) == (uploaded_by_hospital_id is None):
             raise ValueError("exactly one of patient_id/uploaded_by_hospital_id is required")
-        query = self._context_query().limit(limit)
+        query = self._context_query(sort).limit(limit)
         if patient_id is not None:
             query = query.where(MedicalRecord.patient_id == patient_id)
         if uploaded_by_hospital_id is not None:
             query = query.where(MedicalRecord.uploaded_by_hospital_id == uploaded_by_hospital_id)
         if category_id is not None:
             query = query.where(MedicalRecord.category_id == category_id)
+        if search:
+            query = query.where(_search_filter(search))
         if after is not None:
-            query = query.where(_keyset_filter(MedicalRecord.created_at, MedicalRecord.id, after))
+            query = query.where(_date_keyset_filter(after))
         result = await self._session.execute(query)
         return [(row[0], row[1], row[2]) for row in result.all()]
 
@@ -266,10 +334,19 @@ class MedicalRecordRepository:
         *,
         patient_id: UUID,
         category_ids: Collection[UUID],
-        after: CursorKey | None = None,
+        after: DateCursor | None = None,
         limit: int,
     ) -> list[RecordRow]:
         """One page of the records a consented clinician may read, newest first (ADR-020).
+
+        Ordering moved to ``date_of_service`` with the patient listing, for the same reason
+        (see ``_context_query``) — the clinician's page had the identical collapse. It takes
+        **no** ``search``, and that omission is a security property rather than an
+        oversight: ``GrantedRecordResponse`` deliberately withholds ``original_filename`` and
+        ``description``, and a search over exactly those two withheld columns would turn this
+        listing into an oracle for them — result counts would let a clinician recover a
+        diagnosis-bearing description one substring at a time. Sorting reveals nothing the
+        page does not already show; searching would.
 
         Separate from ``list_page`` rather than a pair of extra arguments on it, for the
         reason ``list_category_ids_with_records`` is separate: the safety of this listing
@@ -297,16 +374,37 @@ class MedicalRecordRepository:
             .limit(limit)
         )
         if after is not None:
-            query = query.where(_keyset_filter(MedicalRecord.created_at, MedicalRecord.id, after))
+            query = query.where(_date_keyset_filter(after))
         result = await self._session.execute(query)
         return [(row[0], row[1], row[2]) for row in result.all()]
 
-    def _context_query(self) -> Select[tuple[MedicalRecord, RecordCategory, Hospital]]:
+    def _context_query(
+        self, sort: SortDirection = SortDirection.NEWEST_FIRST
+    ) -> Select[tuple[MedicalRecord, RecordCategory, Hospital]]:
+        """The joined listing query, ordered by *clinical* date.
+
+        Ordering by ``date_of_service`` rather than ``created_at`` is a correctness fix, not
+        a preference. ``created_at`` defaults to the transaction clock, so every record
+        written in one transaction shares an instant and the sort collapses onto the UUID
+        tie-breaker — i.e. onto nothing. A bulk import made that visible (103 records, one
+        ``created_at``, dates spanning 1963 to 2018), but any multi-record write has it, and a
+        patient reads this list as a history rather than an inbox either way.
+
+        ``id`` remains the tie-breaker, in the same direction as the date, so the order is
+        total and a keyset can address every row unambiguously.
+        """
         # The Hospital column is NULL for locker uploads (outer join) — SQLAlchemy's
         # Select typing cannot express that, so RecordRow carries the honest type.
+        date_col = MedicalRecord.date_of_service
+        id_col = MedicalRecord.id
+        ordering = (
+            (date_col.asc(), id_col.asc())
+            if sort is SortDirection.OLDEST_FIRST
+            else (date_col.desc(), id_col.desc())
+        )
         return (
             select(MedicalRecord, RecordCategory, Hospital)
             .join(RecordCategory, MedicalRecord.category_id == RecordCategory.id)
             .outerjoin(Hospital, MedicalRecord.uploaded_by_hospital_id == Hospital.id)
-            .order_by(MedicalRecord.created_at.desc(), MedicalRecord.id.desc())
+            .order_by(*ordering)
         )

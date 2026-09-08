@@ -287,3 +287,44 @@ def test_rate_limiting_added_no_request_parameter() -> None:
     operation = _spec()["paths"]["/api/v1/patients/lookup"]["get"]
 
     assert {parameter["name"] for parameter in operation["parameters"]} == {"healthId"}
+
+
+def test_record_listing_declares_its_sort_and_search_query() -> None:
+    """The parameters the patient portal's controls are generated from."""
+    operation = _spec()["paths"]["/api/v1/records"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+    assert set(parameters) == {"category", "search", "sort", "cursor", "limit"}
+    assert all(parameters[name]["in"] == "query" for name in parameters)
+    assert all(parameters[name].get("required", False) is False for name in parameters)
+
+
+def test_the_sort_parameter_is_a_closed_vocabulary_defaulting_to_newest() -> None:
+    """An enum rather than a free string, so the client is generated with the two values
+    and an unknown one is a 422 from FastAPI rather than a silent fallback."""
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/records"]["get"]
+    sort = next(p for p in operation["parameters"] if p["name"] == "sort")
+    schema = sort["schema"]
+    reference = schema.get("$ref") or next(
+        (option["$ref"] for option in schema.get("allOf", []) if "$ref" in option), None
+    )
+    if reference is not None:
+        enum_name = reference.rsplit("/", 1)[-1]
+        assert spec["components"]["schemas"][enum_name]["enum"] == ["newest", "oldest"]
+    else:
+        assert schema["enum"] == ["newest", "oldest"]
+    assert schema.get("default", sort.get("schema", {}).get("default")) == "newest"
+
+
+def test_the_record_listing_search_is_length_bounded() -> None:
+    """An unbounded LIKE term is a cheap way to make the database work hard."""
+    operation = _spec()["paths"]["/api/v1/records"]["get"]
+    search = next(p for p in operation["parameters"] if p["name"] == "search")
+    schema = search["schema"]
+    constraints = (
+        schema
+        if "maxLength" in schema
+        else next(option for option in schema.get("anyOf", []) if option.get("type") == "string")
+    )
+    assert constraints["maxLength"] == 100
+    assert constraints["minLength"] == 1

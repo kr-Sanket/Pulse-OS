@@ -17,13 +17,16 @@ import { listGrants } from "@/grants/api";
 import type { ApiResult } from "@pulseos/ui";
 import { listCategories, type RecordCategory } from "@pulseos/ui";
 import { listRecords, type RecordPage } from "@/records/api";
+import { DEFAULT_SORT } from "@/records/view";
 
-/** Recent records list + the records figure. Unfiltered: the dashboard shows everything. */
+/** Recent records list + the records figure. Unfiltered and newest first: the dashboard
+ * shows the top of the patient's history, which is the same default the Records page opens
+ * on — so the two never disagree about what "recent" means. */
 export function loadRecords(
   client: PulseOSClient,
   signal: AbortSignal,
 ): Promise<ApiResult<RecordPage>> {
-  return listRecords(client, null, signal);
+  return listRecords(client, { category: null, search: null, sort: DEFAULT_SORT }, signal);
 }
 
 /** Review queue + the pending-requests figure. */

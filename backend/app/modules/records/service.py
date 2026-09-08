@@ -59,7 +59,11 @@ from app.modules.records.repository import (
     RecordRow,
 )
 from app.modules.records.storage import ObjectStorage
-from app.shared.pagination import CursorKey, encode_cursor
+from app.shared.pagination import (
+    DateCursor,
+    SortDirection,
+    encode_date_cursor,
+)
 from app.shared.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -336,10 +340,18 @@ class RecordService:
         caller: AuthenticatedUser,
         *,
         category_code: str | None,
-        after: CursorKey | None,
+        search: str | None = None,
+        sort: SortDirection = SortDirection.NEWEST_FIRST,
+        after: DateCursor | None,
         limit: int,
     ) -> RecordPage:
-        """The caller's relationship-scoped record listing, newest first."""
+        """The caller's relationship-scoped record listing, in clinical-date order.
+
+        ``sort``, ``search`` and ``category_code`` together define *which* sequence is being
+        paginated, so a cursor is only meaningful alongside the same three. The router
+        rejects a cursor that disagrees with ``sort``; the other two the client resets, which
+        the frontend does by dropping the cursor whenever a control changes.
+        """
         category_id: UUID | None = None
         if category_code is not None:
             category_id = (await self._resolve_category(category_code)).id
@@ -348,7 +360,12 @@ class RecordService:
             if patient is None:
                 raise ProfileNotFoundError()
             rows = await self._records.list_page(
-                patient_id=patient.id, category_id=category_id, after=after, limit=limit + 1
+                patient_id=patient.id,
+                category_id=category_id,
+                search=search,
+                sort=sort,
+                after=after,
+                limit=limit + 1,
             )
         elif caller.role is Role.HOSPITAL_ADMIN:
             admin = await self._admins.get_by_user_id(caller.user_id)
@@ -357,6 +374,8 @@ class RecordService:
             rows = await self._records.list_page(
                 uploaded_by_hospital_id=admin.hospital_id,
                 category_id=category_id,
+                search=search,
+                sort=sort,
                 after=after,
                 limit=limit + 1,
             )
@@ -369,7 +388,9 @@ class RecordService:
         next_cursor = None
         if has_more:
             last = page[-1][0]
-            next_cursor = encode_cursor(CursorKey(created_at=last.created_at, item_id=last.id))
+            next_cursor = encode_date_cursor(
+                DateCursor(sort=sort, sort_date=last.date_of_service, item_id=last.id)
+            )
         return RecordPage(items=[self._to_view(row) for row in page], next_cursor=next_cursor)
 
     async def list_existing_categories(
@@ -414,7 +435,7 @@ class RecordService:
         caller: AuthenticatedUser,
         *,
         patient_health_id: str,
-        after: CursorKey | None,
+        after: DateCursor | None,
         limit: int,
         request_context: str | None = None,
     ) -> GrantedRecordPage:
@@ -485,7 +506,15 @@ class RecordService:
         next_cursor = None
         if has_more:
             last = page[-1][0]
-            next_cursor = encode_cursor(CursorKey(created_at=last.created_at, item_id=last.id))
+            # Always newest-first: this listing offers no sort control, so the cursor pins
+            # the only direction it is ever issued for.
+            next_cursor = encode_date_cursor(
+                DateCursor(
+                    sort=SortDirection.NEWEST_FIRST,
+                    sort_date=last.date_of_service,
+                    item_id=last.id,
+                )
+            )
         return GrantedRecordPage(
             items=[self._to_view(row) for row in page],
             next_cursor=next_cursor,

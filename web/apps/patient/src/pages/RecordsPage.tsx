@@ -6,12 +6,17 @@
 // requests run here — categories, the listing, and the selected record — each through
 // useApiResource, which owns their loading/error states and aborts superseded requests.
 //
-// State is only what the UI has to decide: the active category (a query parameter), the
-// search term (client-side, the API has no search), which record the panel shows, and
-// whether the upload dialog is open. Nothing is cached beyond this page.
+// Sorting, filtering, searching and paging are all the API's: the page holds one page of
+// records at a time, so anything decided in the browser could only ever see a slice of the
+// patient's history. That used to be the bug — the listing asked for 100 records, searched
+// only those, and had no way to reach the rest.
+//
+// State is the query (category, search, sort), the pages fetched past the first, which
+// record the panel shows, and whether the upload dialog is open. Changing any part of the
+// query invalidates the cursor, so the appended pages are dropped with it.
 
 import { Upload } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "@/api";
 import { EmptyRecordsState } from "@/components/records/EmptyRecordsState";
@@ -28,9 +33,13 @@ import {
   listCategories,
   listRecords,
   type RecordMetadata,
+  type RecordSort,
 } from "@/records/api";
 import { Button, useApiResource } from "@pulseos/ui";
-import { matchesQuery } from "@/records/view";
+import { DEFAULT_SORT, hasActiveFilters, searchParam } from "@/records/view";
+
+/** Long enough that typing a word is one request, short enough to feel immediate. */
+const SEARCH_DEBOUNCE_MS = 300;
 
 interface DownloadFailure {
   recordId: string;
@@ -40,17 +49,27 @@ interface DownloadFailure {
 export function RecordsPage() {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<RecordSort>(DEFAULT_SORT);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadFailure, setDownloadFailure] = useState<DownloadFailure | null>(null);
 
+  // The field updates on every keystroke; the request waits for a pause. Only the settled
+  // term reaches the loader, so typing "lipid" is one listing call rather than five.
+  const [settledQuery, setSettledQuery] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setSettledQuery(query), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const loadCategories = useCallback((signal: AbortSignal) => listCategories(api, signal), []);
   const categories = useApiResource(loadCategories);
 
+  const search = searchParam({ category: activeCategory, search: settledQuery, sort });
   const loadRecords = useCallback(
-    (signal: AbortSignal) => listRecords(api, activeCategory, signal),
-    [activeCategory],
+    (signal: AbortSignal) => listRecords(api, { category: activeCategory, search, sort }, signal),
+    [activeCategory, search, sort],
   );
   const records = useApiResource(loadRecords);
 
@@ -58,9 +77,54 @@ export function RecordsPage() {
   // on the hook's return value does not.
   const recordsResource = records.resource;
 
+  // Pages fetched past the first. A cursor addresses a position in one specific sequence,
+  // so whenever the first page is refetched — a new query, or a reload after an upload —
+  // everything appended under the old cursor stops belonging to this listing.
+  const [appended, setAppended] = useState<RecordMetadata[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreFailure, setMoreFailure] = useState<string | null>(null);
+  useEffect(() => {
+    if (recordsResource.status !== "ready") {
+      return;
+    }
+    setAppended([]);
+    setCursor(recordsResource.data.nextCursor);
+    setMoreFailure(null);
+  }, [recordsResource]);
+
   const categoryItems = categories.resource.status === "ready" ? categories.resource.data : [];
   const page = recordsResource.status === "ready" ? recordsResource.data : null;
-  const visible = page === null ? [] : page.items.filter((record) => matchesQuery(record, query));
+  const visible = page === null ? [] : [...page.items, ...appended];
+
+  const filtersActive = hasActiveFilters({ category: activeCategory, search: query, sort });
+
+  function clearFilters(): void {
+    setActiveCategory(null);
+    setQuery("");
+    setSettledQuery("");
+    setSort(DEFAULT_SORT);
+  }
+
+  async function loadMore(): Promise<void> {
+    if (cursor === null || loadingMore) {
+      return;
+    }
+    setLoadingMore(true);
+    setMoreFailure(null);
+    const result = await listRecords(
+      api,
+      { category: activeCategory, search, sort, cursor },
+      new AbortController().signal,
+    );
+    setLoadingMore(false);
+    if (result.status === "error") {
+      setMoreFailure(result.message);
+      return;
+    }
+    setAppended((previous) => [...previous, ...result.data.items]);
+    setCursor(result.data.nextCursor);
+  }
 
   // The panel follows the selection while it is still on screen, and otherwise falls back
   // to the top of the list — so filtering or searching never leaves it pointing at nothing.
@@ -98,8 +162,7 @@ export function RecordsPage() {
 
   function handleUploaded(record: RecordMetadata): void {
     setUploadOpen(false);
-    setActiveCategory(null);
-    setQuery("");
+    clearFilters();
     setSelectedId(record.id);
     records.reload();
   }
@@ -125,6 +188,10 @@ export function RecordsPage() {
         onSelect={setActiveCategory}
         query={query}
         onQueryChange={setQuery}
+        sort={sort}
+        onSortChange={setSort}
+        canClear={filtersActive}
+        onClear={clearFilters}
         loading={categories.resource.status === "loading"}
       />
 
@@ -137,10 +204,7 @@ export function RecordsPage() {
           onRetry={records.reload}
         />
       ) : visible.length === 0 ? (
-        <EmptyRecordsState
-          filtered={page !== null && (page.items.length > 0 || activeCategory !== null)}
-          onUpload={() => setUploadOpen(true)}
-        />
+        <EmptyRecordsState filtered={filtersActive} onUpload={() => setUploadOpen(true)} />
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-3 lg:gap-7">
           <div className="space-y-4 md:col-span-2">
@@ -152,11 +216,23 @@ export function RecordsPage() {
                 onSelect={setSelectedId}
               />
             ))}
-            {page !== null && page.nextCursor !== null ? (
-              <p className="text-muted-foreground text-xs">
-                Showing your most recent records. Older ones are not listed yet.
-              </p>
-            ) : null}
+            {cursor === null ? null : (
+              <div className="space-y-2 pt-1">
+                <Button
+                  variant="outline"
+                  className="w-full justify-center"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? "Loading…" : "Load more records"}
+                </Button>
+                {moreFailure === null ? null : (
+                  <p role="alert" className="text-destructive text-xs leading-relaxed">
+                    {moreFailure}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Summary panel: desktop and tablet only, per spec. */}

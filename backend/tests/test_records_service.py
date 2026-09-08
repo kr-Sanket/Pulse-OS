@@ -65,7 +65,7 @@ from app.modules.records.service import (
     RecordService,
     RecordView,
 )
-from app.shared.pagination import CursorKey, decode_cursor
+from app.shared.pagination import DateCursor, decode_date_cursor
 from app.shared.time import utc_now
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -469,19 +469,22 @@ def test_pagination_walks_all_records_without_overlap() -> None:
                 )
                 created.add(view.record.id)
 
-            seen: set[UUID] = set()
-            after: CursorKey | None = None
+            # All five share one date_of_service, so every page boundary lands inside a tie
+            # and the id tie-breaker is the only thing making the walk total.
+            seen: list[UUID] = []
+            after: DateCursor | None = None
             pages = 0
             while True:
                 page = await h.service.list_for_caller(
                     h.patient_caller, category_code=None, after=after, limit=2
                 )
-                seen.update(v.record.id for v in page.items)
+                seen.extend(v.record.id for v in page.items)
                 pages += 1
                 if page.next_cursor is None:
                     break
-                after = decode_cursor(page.next_cursor)
-            assert seen == created
+                after = decode_date_cursor(page.next_cursor)
+            assert set(seen) == created
+            assert len(seen) == len(created)  # nothing served twice
             assert pages == 3  # 2 + 2 + 1
 
     asyncio.run(scenario())
@@ -666,7 +669,7 @@ async def _grant(h: Harness, *codes: str, ttl: timedelta = timedelta(days=30)) -
     return [grant.id for grant in outcome.grants]
 
 
-async def _list_granted(h: Harness, *, limit: int = 20, after: CursorKey | None = None):  # type: ignore[no-untyped-def]
+async def _list_granted(h: Harness, *, limit: int = 20, after: DateCursor | None = None):  # type: ignore[no-untyped-def]
     return await h.service.list_shared_for_clinician(
         h.doctor_caller, patient_health_id=h.patient.health_id, after=after, limit=limit
     )
@@ -948,7 +951,7 @@ def test_the_listing_paginates_newest_first_over_a_stable_cursor() -> None:
 
             first = await _list_granted(h, limit=2)
             assert len(first.items) == 2 and first.next_cursor is not None
-            second = await _list_granted(h, limit=2, after=decode_cursor(first.next_cursor))
+            second = await _list_granted(h, limit=2, after=decode_date_cursor(first.next_cursor))
 
             assert len(second.items) == 1 and second.next_cursor is None
             seen = [view.record.id for view in [*first.items, *second.items]]

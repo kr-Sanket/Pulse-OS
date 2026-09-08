@@ -21,7 +21,7 @@ from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.records.dependencies import (
     RecordServiceDep,
     RequestContextDep,
-    parse_cursor,
+    parse_date_cursor,
     to_http_error,
 )
 from app.modules.records.errors import RecordsError
@@ -36,7 +36,7 @@ from app.modules.records.schemas import (
     RecordMetadataResponse,
 )
 from app.modules.records.service import FileUpload
-from app.shared.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from app.shared.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, SortDirection
 
 records_router = APIRouter(prefix="/records", tags=["records"])
 categories_router = APIRouter(prefix="/record-categories", tags=["records"])
@@ -169,18 +169,36 @@ async def list_records(
     user: RecordActor,
     service: RecordServiceDep,
     category: Annotated[str | None, Query(min_length=1, max_length=32)] = None,
+    search: Annotated[str | None, Query(min_length=1, max_length=100)] = None,
+    sort: Annotated[SortDirection, Query()] = SortDirection.NEWEST_FIRST,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> RecordListResponse:
-    """The caller's records, newest first, cursor-paginated, optionally by category.
+    """The caller's records in clinical-date order, cursor-paginated, filterable.
+
+    Ordered by ``dateOfService`` — the date care happened — newest first by default, with
+    the record id as a tie-breaker so same-day records have a stable total order.
+    ``search`` is a case-insensitive substring of the filename or description; LIKE
+    metacharacters in it are literal.
+
+    ``sort``, ``search`` and ``category`` select *which* sequence is paginated, so a cursor
+    only means something alongside the same three. A cursor issued under the other sort is
+    refused rather than honoured (422); changing ``search`` or ``category`` is the client's
+    cue to drop the cursor.
 
     Roles: PATIENT (own records) or HOSPITAL_ADMIN (records their hospital uploaded).
     Consent requirement: none — both scopes are ADR-013 layer-2 relationships.
-    Failure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category).
+    Failure modes: 401, 403, 404 (no profile row), 422 (bad cursor/limit/category/sort, or a
+    cursor that does not belong to the requested sort).
     """
     try:
         page = await service.list_for_caller(
-            user, category_code=category, after=parse_cursor(cursor), limit=limit
+            user,
+            category_code=category,
+            search=search,
+            sort=sort,
+            after=parse_date_cursor(cursor, sort),
+            limit=limit,
         )
     except RecordsError as exc:
         raise to_http_error(exc) from exc
@@ -318,7 +336,8 @@ async def list_granted_records(
         page = await service.list_shared_for_clinician(
             user,
             patient_health_id=patient_health_id,
-            after=parse_cursor(cursor),
+            # This listing offers no sort control; its cursor is always newest-first.
+            after=parse_date_cursor(cursor, SortDirection.NEWEST_FIRST),
             limit=limit,
             request_context=request_context,
         )

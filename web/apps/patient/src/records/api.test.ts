@@ -7,6 +7,7 @@ import {
   getRecord,
   listCategories,
   listRecords,
+  RECORDS_PAGE_SIZE,
   toFormData,
   uploadRecord,
 } from "./api";
@@ -47,32 +48,73 @@ test("categories come back as a plain list", async () => {
   });
 });
 
-test("the listing asks for a full page and omits the category when none is selected", async () => {
+const UNFILTERED = { category: null, search: null, sort: "newest" } as const;
+
+test("the listing sends the sort and omits the filters that are not set", async () => {
   const { client, call } = stubClient(ok({ items: [], nextCursor: null }));
 
-  await listRecords(client, null, SIGNAL);
+  await listRecords(client, UNFILTERED, SIGNAL);
 
   expect(call).toHaveBeenCalledWith("/api/v1/records", {
-    params: { query: { category: undefined, limit: 100 } },
+    params: {
+      query: {
+        category: undefined,
+        search: undefined,
+        sort: "newest",
+        cursor: undefined,
+        limit: RECORDS_PAGE_SIZE,
+      },
+    },
     signal: SIGNAL,
   });
 });
 
-test("a selected category is sent as the category query parameter", async () => {
+test("category, search and sort are all sent as query parameters", async () => {
   const { client, call } = stubClient(ok({ items: [], nextCursor: null }));
 
-  await listRecords(client, "MRI", SIGNAL);
+  await listRecords(client, { category: "MRI", search: "lipid", sort: "oldest" }, SIGNAL);
 
   expect(call).toHaveBeenCalledWith("/api/v1/records", {
-    params: { query: { category: "MRI", limit: 100 } },
+    params: {
+      query: {
+        category: "MRI",
+        search: "lipid",
+        sort: "oldest",
+        cursor: undefined,
+        limit: RECORDS_PAGE_SIZE,
+      },
+    },
     signal: SIGNAL,
   });
+});
+
+test("a cursor is forwarded so Load more continues the same sequence", async () => {
+  const { client, call } = stubClient(ok({ items: [], nextCursor: null }));
+
+  await listRecords(client, { ...UNFILTERED, cursor: "opaque-token" }, SIGNAL);
+
+  expect(call).toHaveBeenCalledWith("/api/v1/records", {
+    params: {
+      query: {
+        category: undefined,
+        search: undefined,
+        sort: "newest",
+        cursor: "opaque-token",
+        limit: RECORDS_PAGE_SIZE,
+      },
+    },
+    signal: SIGNAL,
+  });
+});
+
+test("the page size is well under the API cap, because the page now pages", async () => {
+  expect(RECORDS_PAGE_SIZE).toBeLessThan(100);
 });
 
 test("an RFC 7807 detail becomes the message shown to the patient", async () => {
   const { client } = stubClient(fail(404, { detail: "Patient profile not found." }));
 
-  const result = await listRecords(client, null, SIGNAL);
+  const result = await listRecords(client, UNFILTERED, SIGNAL);
 
   expect(result).toEqual({ status: "error", message: "Patient profile not found." });
 });
@@ -88,7 +130,7 @@ test("an error without a usable detail falls back to per-call wording", async ()
 test("a rejected fetch (offline, or an aborted request) is an error result, not a throw", async () => {
   const { client } = stubClient(new Error("network down"));
 
-  const result = await listRecords(client, null, SIGNAL);
+  const result = await listRecords(client, UNFILTERED, SIGNAL);
 
   expect(result.status).toBe("error");
 });
