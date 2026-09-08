@@ -41,9 +41,25 @@ Ordered by dependency. Each item is demonstrable on its own.
 - [ ] BE: **`notifications` module** — in-app notification on request created / decided /
       revoked, delivered through arq. Currently an empty `__init__.py`; access requests arrive
       silently.
-- [ ] BE: **patient locker hide/unhide.** `is_hidden` is enforced on every non-owner read
-      (including the new existence projection) but has no endpoint.
 - [ ] FE: QR identity generation + scanning (ROADMAP M4 scope).
+
+### Deferred from patient hide/unhide (shipped 2026-09-08)
+
+- [ ] BE: **a grantee refused because a record is hidden produces no audit row at all.**
+      `RecordService._authorize_read` returns before reaching `consent.enforce`, so the one
+      denied access the patient cannot see in their trail is an attempt on a record they hid.
+      The current behaviour is deliberate (asking consent would either log a view that never
+      happened or a denial of a grant that is in fact valid) but it leaves a real hole, and
+      the fix belongs with the operational-log ADR above rather than in a records patch.
+- [ ] BE: **hide/unhide itself is unaudited**, by the same reasoning that left a profile edit
+      unaudited: `AuditAction` has no truthful member for an owner's own administrative action.
+      If it is ever wanted, it is `RECORD_HIDDEN`/`RECORD_UNHIDDEN` — no migration (VARCHAR(32)
+      values, the ACCESS_DENIED/RECORDS_LISTED precedent), but a third method on the
+      deliberately-two-wide `RecordAuditor` protocol, its own ADR, and a typed frontend ripple
+      through the exhaustive `ACTIONS` map in the patient audit view.
+- [ ] FE: **no way to list only hidden records.** They appear in place with a badge, which is
+      right at 0–few; a patient who hides dozens has no way to review them as a set. Wants a
+      `hidden` filter on `GET /records` before it is worth building, and neither exists yet.
 
 ## 1b. Deferred from the Synthea import (Phase B)
 

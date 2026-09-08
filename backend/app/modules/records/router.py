@@ -34,6 +34,7 @@ from app.modules.records.schemas import (
     RecordExistenceResponse,
     RecordListResponse,
     RecordMetadataResponse,
+    RecordVisibilityUpdateRequest,
 )
 from app.modules.records.service import FileUpload
 from app.shared.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, SortDirection
@@ -61,6 +62,12 @@ RecordReader = Annotated[AuthenticatedUser, Depends(RequireRecordReader)]
 # what they hold, and no hospital or platform admin has any reason to probe a Health ID.
 RequireClinician = require_role(Role.DOCTOR)
 Clinician = Annotated[AuthenticatedUser, Depends(RequireClinician)]
+
+# Changing a record's visibility is the owner's alone (docs/DOMAIN_MODEL.md §3). The
+# narrowest gate in this module, and the only write one: no hospital, clinician or platform
+# admin may set a patient's disclosure preference for them.
+RequireRecordOwner = require_role(Role.PATIENT)
+RecordOwner = Annotated[AuthenticatedUser, Depends(RequireRecordOwner)]
 
 
 def _problem(request: Request, exc: RecordsError) -> JSONResponse:
@@ -287,6 +294,50 @@ async def create_download_url(
     except RecordsError as exc:
         return _problem(request, exc)  # returned, not raised — see _problem
     return DownloadUrlResponse(url=link.url, expires_in_seconds=link.expires_in_seconds)
+
+
+@records_router.patch("/{record_id}/visibility", response_model=RecordMetadataResponse)
+async def update_record_visibility(
+    record_id: UUID,
+    body: RecordVisibilityUpdateRequest,
+    user: RecordOwner,
+    service: RecordServiceDep,
+) -> RecordMetadataResponse:
+    """Hide or unhide one of the caller's own records.
+
+    Hiding withdraws a record from what consent is able to share: a clinician holding an
+    active grant for its category stops seeing it in ``/granted-records``, stops being able
+    to open or download it, and stops seeing its category under ``/records/existence`` once
+    it is the last non-hidden record there. It is **not** a revocation and **not** a delete
+    — the grant keeps its status, categories and expiry, and the document and its stored
+    file are untouched. Unhiding restores all of it. The owner always keeps seeing the
+    record, in their listing and in full, or hiding would be a one-way door.
+
+    A sub-resource rather than a PATCH of the record itself: a filed clinical record is
+    immutable, and ``isHidden`` is the patient's preference *about* the document rather than
+    a property of it. There is no patient identifier anywhere in the request — the row is
+    resolved from the token — and the body may name nothing but ``isHidden``.
+
+    Two behaviours this endpoint deliberately does not have. It writes **no audit event**:
+    the trail records what others did to the patient's data, and ``AuditAction`` has no
+    member that would state an owner's own visibility change truthfully (the deferred
+    operational log will). And it does not recall a **presigned URL already issued** —
+    one minted before the record was hidden stays usable until it expires (300s by default);
+    hiding stops new ones being minted.
+
+    Roles: PATIENT, and only for a record they own — anyone else's, and one that does not
+    exist, answer the same 404 (existence must not leak, API_GUIDELINES).
+    Consent requirement: none. This reads no record content, so it does not cross the choke
+    point; ownership is the ADR-013 layer-2 relationship this module evaluates itself.
+    Idempotent: setting the value a record already holds succeeds and changes nothing else.
+    Failure modes: 401, 403 (any non-patient role), 404 (no profile row, or no such record
+    for this caller), 422 (malformed record id, missing/non-boolean/unknown body field).
+    """
+    try:
+        view = await service.set_visibility(user, record_id, is_hidden=body.is_hidden)
+    except RecordsError as exc:
+        raise to_http_error(exc) from exc
+    return RecordMetadataResponse.from_view(view)
 
 
 @granted_records_router.get(

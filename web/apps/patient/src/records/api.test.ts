@@ -8,6 +8,7 @@ import {
   listCategories,
   listRecords,
   RECORDS_PAGE_SIZE,
+  setRecordVisibility,
   toFormData,
   uploadRecord,
 } from "./api";
@@ -30,7 +31,7 @@ function stubClient(result: StubResult | Error) {
   const call = vi.fn(() =>
     result instanceof Error ? Promise.reject(result) : Promise.resolve(result),
   );
-  return { client: { GET: call, POST: call } as unknown as PulseOSClient, call };
+  return { client: { GET: call, POST: call, PATCH: call } as unknown as PulseOSClient, call };
 }
 
 const SIGNAL = new AbortController().signal;
@@ -193,4 +194,64 @@ test("an upload refused without a detail gets wording chosen by status", async (
     status: "error",
     message: "That file is larger than the upload limit.",
   });
+});
+
+test("hiding a record PATCHes its visibility sub-resource and names no patient", async () => {
+  const { client, call } = stubClient(ok({ id: "rec-1", isHidden: true }));
+
+  const result = await setRecordVisibility(client, "rec-1", true);
+
+  // Exact match, so the absence of a patient identifier is part of what is asserted:
+  // ownership comes from the token, and an extra key in the body would fail this.
+  expect(call).toHaveBeenCalledWith("/api/v1/records/{record_id}/visibility", {
+    params: { path: { record_id: "rec-1" } },
+    body: { isHidden: true },
+  });
+  expect(result).toEqual({ status: "ready", data: { id: "rec-1", isHidden: true } });
+});
+
+test("unhiding sends the state the caller wants rather than a verb", async () => {
+  const { client, call } = stubClient(ok({ id: "rec-1", isHidden: false }));
+
+  await setRecordVisibility(client, "rec-1", false);
+
+  expect(call).toHaveBeenCalledWith("/api/v1/records/{record_id}/visibility", {
+    params: { path: { record_id: "rec-1" } },
+    body: { isHidden: false },
+  });
+});
+
+test("a 404 reads as the record being gone rather than as a permission problem", async () => {
+  const { client } = stubClient(fail(404));
+
+  const result = await setRecordVisibility(client, "rec-1", true);
+
+  expect(result).toEqual({
+    status: "error",
+    message: "That record is no longer available.",
+  });
+});
+
+test("the fallback wording names the direction that failed", async () => {
+  const hiding = await setRecordVisibility(stubClient(fail(500)).client, "rec-1", true);
+  const unhiding = await setRecordVisibility(stubClient(fail(500)).client, "rec-1", false);
+
+  expect(hiding).toEqual({ status: "error", message: "Could not hide this record." });
+  expect(unhiding).toEqual({ status: "error", message: "Could not unhide this record." });
+});
+
+test("the API's own problem detail wins over the fallback", async () => {
+  const { client } = stubClient(fail(403, { detail: "Your account is suspended." }));
+
+  const result = await setRecordVisibility(client, "rec-1", true);
+
+  expect(result).toEqual({ status: "error", message: "Your account is suspended." });
+});
+
+test("a rejected fetch becomes an error result rather than a thrown exception", async () => {
+  const { client } = stubClient(new Error("offline"));
+
+  const result = await setRecordVisibility(client, "rec-1", true);
+
+  expect(result.status).toBe("error");
 });

@@ -35,7 +35,8 @@ Metadata for one clinical document. Belongs to exactly one Patient. Has: **categ
 controlled `RecordCategory` vocabulary), origin (`HOSPITAL_UPLOAD` with uploading Hospital +
 Doctor, or `PATIENT_LOCKER` for self-uploads), date of service, S3 object key (file itself never
 in DB, ADR-005), processing status (`UPLOADED → PROCESSING → INDEXED | FAILED`, ADR-008), and
-patient-controlled visibility (a patient may hide a locker record). Derived artifacts (OCR text
+patient-controlled visibility (a patient may hide **any record they own**, whatever its origin;
+hiding withdraws it from what consent can share, and revokes nothing). Derived artifacts (OCR text
 chunks, embeddings, timeline entries) hang off the record and die with it.
 
 ### RecordCategory (controlled vocabulary)
@@ -128,7 +129,7 @@ Legend: ✅ always (within role) · ⭕ conditional (condition noted) · ❌ nev
 | List which records a grant covers | ✅ own | ⭕ grant-scoped, chooser fields only (ADR-020) | ⭕ own hospital's uploads | ❌ |
 | Read record content / download | ✅ own | ⭕ active grant for that category | ⭕ only records their hospital uploaded | ❌ |
 | Upload record | ✅ own locker | ⭕ prescription, for patient with active grant | ⭕ for verified patient at their hospital | ❌ |
-| Hide/unhide record | ✅ own locker only | ❌ | ❌ | ❌ |
+| Hide/unhide record | ✅ own records only (any origin) | ❌ | ❌ | ❌ |
 | Create access request | ❌ | ✅ | ⭕ on behalf of their doctors (dual-consent flows) | ❌ |
 | Approve / reject / revoke consent | ✅ own, per category | ❌ | ❌ | ❌ |
 | View audit log | ✅ all events about them | ⭕ own actions only | ⭕ their hospital's actions only | ⭕ platform events, **never record content** |
@@ -138,6 +139,12 @@ Legend: ✅ always (within role) · ⭕ conditional (condition noted) · ❌ nev
 | AI: copilot, explainer, timeline (own data) | ✅ | ❌ | ❌ | ❌ |
 | AI: patient summary, timeline (granted data) | ❌ | ⭕ grant-scoped | ❌ | ❌ |
 | Send reminders / follow-ups | ❌ | ❌ | ⭕ to their hospital's patients | ❌ |
+
+**Hiding is scoped to what consent governs, and no further.** A hidden record disappears from
+every grantee surface — the existence projection, the grant-scoped listing, the single-record
+read and the download — but the row, the file and the grant are all untouched, and the uploading
+hospital keeps its layer-2 access to its own upload. A patient-facing screen offering the control
+has to say so rather than imply that hiding conceals a record from everyone.
 
 Two deliberate properties worth stating: **System Admin has zero access to medical content**
 (platform operations never require PHI; there is no break-glass for admins), and **AI features

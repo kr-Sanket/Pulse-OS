@@ -1415,6 +1415,7 @@
         "type": "object"
       },
       "RecordMetadataResponse": {
+        "description": "One record as a caller entitled to the whole of it sees it.\n\n``isHidden`` is the patient's own disclosure preference. It is carried here rather than\non a patient-only model because a grantee never receives this response for a hidden\nrecord at all \u2014 the read is refused before serialisation \u2014 so for a doctor the field is\nfalse by construction. The uploading hospital does see it on its own upload, which is\ntrue and worth its knowing: the record it filed is no longer being shared onward.\n``GrantedRecordResponse`` deliberately does **not** gain the field; a value that can only\never be false would be dead weight on an allow-list whose point is narrowness.",
         "properties": {
           "categoryCode": {
             "title": "Categorycode",
@@ -1454,6 +1455,10 @@
             "title": "Id",
             "type": "string"
           },
+          "isHidden": {
+            "title": "Ishidden",
+            "type": "boolean"
+          },
           "origin": {
             "$ref": "#/components/schemas/RecordOrigin"
           },
@@ -1490,6 +1495,7 @@
           "contentType",
           "sizeBytes",
           "processingStatus",
+          "isHidden",
           "uploadedByHospital",
           "createdAt"
         ],
@@ -1515,6 +1521,21 @@
         ],
         "title": "RecordProcessingStatus",
         "type": "string"
+      },
+      "RecordVisibilityUpdateRequest": {
+        "additionalProperties": false,
+        "description": "The patient's disclosure preference for one record they own.\n\nOne field, required and non-nullable, which is what keeps this model free of the\npartial-update machinery ``PatientProfileUpdateRequest`` needs. There is no \"leave\nalone\" to express (the caller states the state they want) and no \"clear\" (the column is\nNOT NULL), so an omitted key, an explicit ``null`` and a non-boolean are all simply\ninvalid \u2014 422 by the field's own declaration rather than by a validator.\n\nThe record is named by the path and the patient by the token, so neither appears here.\n``RequestModel`` forbids unknown fields, which makes naming one a 422 rather than a\nsilently ignored key \u2014 a caller that believes it moved a record to another patient must\nbe told otherwise.\n\n``StrictBool`` rather than ``bool``, which is a deliberate departure from Pydantic's\ndefault coercion: in lax mode ``\"yes\"``, ``\"on\"`` and ``1`` all become ``True`` and\n``\"no\"`` becomes ``False``. Guessing is the wrong behaviour for a disclosure control \u2014\na client that sends the wrong type should be corrected, not have a privacy setting\ninferred on its behalf. JSON has a native boolean, so nothing legitimate needs the\ncoercion. (Dates elsewhere in the API do need it; JSON has no date.)",
+        "properties": {
+          "isHidden": {
+            "title": "Ishidden",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "isHidden"
+        ],
+        "title": "RecordVisibilityUpdateRequest",
+        "type": "object"
       },
       "Role": {
         "description": "The four platform roles (docs/DOMAIN_MODEL.md \u00a73, ADR-013).\n\nSYSTEM_ADMIN is a platform-operations role with a hard invariant: it can never\nread medical content, so it must never appear in a role gate on a PHI endpoint.",
@@ -3284,6 +3305,60 @@
           }
         },
         "summary": "Create Download Url",
+        "tags": [
+          "records"
+        ]
+      }
+    },
+    "/api/v1/records/{record_id}/visibility": {
+      "patch": {
+        "description": "Hide or unhide one of the caller's own records.\n\nHiding withdraws a record from what consent is able to share: a clinician holding an\nactive grant for its category stops seeing it in ``/granted-records``, stops being able\nto open or download it, and stops seeing its category under ``/records/existence`` once\nit is the last non-hidden record there. It is **not** a revocation and **not** a delete\n\u2014 the grant keeps its status, categories and expiry, and the document and its stored\nfile are untouched. Unhiding restores all of it. The owner always keeps seeing the\nrecord, in their listing and in full, or hiding would be a one-way door.\n\nA sub-resource rather than a PATCH of the record itself: a filed clinical record is\nimmutable, and ``isHidden`` is the patient's preference *about* the document rather than\na property of it. There is no patient identifier anywhere in the request \u2014 the row is\nresolved from the token \u2014 and the body may name nothing but ``isHidden``.\n\nTwo behaviours this endpoint deliberately does not have. It writes **no audit event**:\nthe trail records what others did to the patient's data, and ``AuditAction`` has no\nmember that would state an owner's own visibility change truthfully (the deferred\noperational log will). And it does not recall a **presigned URL already issued** \u2014\none minted before the record was hidden stays usable until it expires (300s by default);\nhiding stops new ones being minted.\n\nRoles: PATIENT, and only for a record they own \u2014 anyone else's, and one that does not\nexist, answer the same 404 (existence must not leak, API_GUIDELINES).\nConsent requirement: none. This reads no record content, so it does not cross the choke\npoint; ownership is the ADR-013 layer-2 relationship this module evaluates itself.\nIdempotent: setting the value a record already holds succeeds and changes nothing else.\nFailure modes: 401, 403 (any non-patient role), 404 (no profile row, or no such record\nfor this caller), 422 (malformed record id, missing/non-boolean/unknown body field).",
+        "operationId": "update_record_visibility_api_v1_records__record_id__visibility_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "record_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Record Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordVisibilityUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordMetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Record Visibility",
         "tags": [
           "records"
         ]

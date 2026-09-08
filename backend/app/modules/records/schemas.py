@@ -7,7 +7,7 @@ router with ``Form(...)``; the models here are the JSON bodies and all responses
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, StrictBool, field_validator
 
 from app.modules.records.models import (
     Doctor,
@@ -114,6 +114,34 @@ class DoctorListResponse(ApiModel):
     next_cursor: str | None
 
 
+# -- records: requests -------------------------------------------------------------------
+
+
+class RecordVisibilityUpdateRequest(RequestModel):
+    """The patient's disclosure preference for one record they own.
+
+    One field, required and non-nullable, which is what keeps this model free of the
+    partial-update machinery ``PatientProfileUpdateRequest`` needs. There is no "leave
+    alone" to express (the caller states the state they want) and no "clear" (the column is
+    NOT NULL), so an omitted key, an explicit ``null`` and a non-boolean are all simply
+    invalid — 422 by the field's own declaration rather than by a validator.
+
+    The record is named by the path and the patient by the token, so neither appears here.
+    ``RequestModel`` forbids unknown fields, which makes naming one a 422 rather than a
+    silently ignored key — a caller that believes it moved a record to another patient must
+    be told otherwise.
+
+    ``StrictBool`` rather than ``bool``, which is a deliberate departure from Pydantic's
+    default coercion: in lax mode ``"yes"``, ``"on"`` and ``1`` all become ``True`` and
+    ``"no"`` becomes ``False``. Guessing is the wrong behaviour for a disclosure control —
+    a client that sends the wrong type should be corrected, not have a privacy setting
+    inferred on its behalf. JSON has a native boolean, so nothing legitimate needs the
+    coercion. (Dates elsewhere in the API do need it; JSON has no date.)
+    """
+
+    is_hidden: StrictBool
+
+
 # -- records: responses ----------------------------------------------------------------
 
 
@@ -146,6 +174,17 @@ class UploadingHospitalResponse(ApiModel):
 
 
 class RecordMetadataResponse(ApiModel):
+    """One record as a caller entitled to the whole of it sees it.
+
+    ``isHidden`` is the patient's own disclosure preference. It is carried here rather than
+    on a patient-only model because a grantee never receives this response for a hidden
+    record at all — the read is refused before serialisation — so for a doctor the field is
+    false by construction. The uploading hospital does see it on its own upload, which is
+    true and worth its knowing: the record it filed is no longer being shared onward.
+    ``GrantedRecordResponse`` deliberately does **not** gain the field; a value that can only
+    ever be false would be dead weight on an allow-list whose point is narrowness.
+    """
+
     id: UUID
     category_code: str
     category_display_name: str
@@ -156,6 +195,7 @@ class RecordMetadataResponse(ApiModel):
     content_type: str
     size_bytes: int
     processing_status: RecordProcessingStatus
+    is_hidden: bool
     uploaded_by_hospital: UploadingHospitalResponse | None
     created_at: datetime
 
@@ -177,6 +217,7 @@ class RecordMetadataResponse(ApiModel):
             content_type=view.record.content_type,
             size_bytes=view.record.size_bytes,
             processing_status=view.record.processing_status,
+            is_hidden=view.record.is_hidden,
             uploaded_by_hospital=hospital,
             created_at=view.record.created_at,
         )

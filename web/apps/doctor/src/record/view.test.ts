@@ -27,6 +27,7 @@ const RECORD: RecordMetadata = {
   contentType: "application/pdf",
   sizeBytes: 2_516_582,
   processingStatus: "UPLOADED",
+  isHidden: false,
   uploadedByHospital: { hid: "HID-0001", name: "TMH Jamshedpur" },
   createdAt: "2026-09-04T10:00:00Z",
 };

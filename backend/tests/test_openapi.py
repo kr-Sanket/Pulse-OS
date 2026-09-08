@@ -88,6 +88,7 @@ def test_record_metadata_schema_is_camel_case_on_the_wire() -> None:
         "contentType",
         "sizeBytes",
         "processingStatus",
+        "isHidden",
         "uploadedByHospital",
         "createdAt",
     }
@@ -380,3 +381,44 @@ def test_the_profile_response_shape_is_unchanged_by_editing() -> None:
     """Reads and writes answer with the same model; adding a write must not widen it."""
     properties = _spec()["components"]["schemas"]["PatientProfileResponse"]["properties"]
     assert set(properties) == {"healthId", "fullName", "dateOfBirth", "gender", "createdAt"}
+
+
+def test_the_record_visibility_toggle_is_declared_and_strict() -> None:
+    """One required boolean, and nothing else reachable. ``additionalProperties: false`` is
+    what turns ``patientId`` in the body into a 422 rather than a dropped key."""
+    spec = _spec()
+    operation = spec["paths"]["/api/v1/records/{record_id}/visibility"]["patch"]
+    assert set(operation["responses"]) >= {"200", "422"}
+
+    schema = spec["components"]["schemas"]["RecordVisibilityUpdateRequest"]
+    assert set(schema["properties"]) == {"isHidden"}
+    assert schema["properties"]["isHidden"]["type"] == "boolean"
+    assert schema.get("additionalProperties") is False
+    # Required, unlike the profile PATCH: the caller states the state it wants, so there is
+    # no partial form of this request and an empty body is a mistake rather than a no-op.
+    assert schema.get("required", []) == ["isHidden"]
+
+
+def test_the_visibility_toggle_names_a_record_and_nothing_else() -> None:
+    """Ownership comes from the token. One path parameter, no query parameters, and no
+    patient identifier anywhere — a way to name a patient would be a way to ask about
+    somebody else, whatever the service then did with it."""
+    operation = _spec()["paths"]["/api/v1/records/{record_id}/visibility"]["patch"]
+    (parameter,) = operation.get("parameters", [])
+    assert parameter["name"] == "record_id"
+    assert parameter["in"] == "path"
+    assert [p for p in operation.get("parameters", []) if p["in"] == "query"] == []
+
+
+def test_the_visibility_toggle_answers_with_the_record_it_changed() -> None:
+    """The whole resource, so a client can replace its row without a second read."""
+    operation = _spec()["paths"]["/api/v1/records/{record_id}/visibility"]["patch"]
+    schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert schema["$ref"].endswith("/RecordMetadataResponse")
+
+
+def test_the_visibility_toggle_claims_no_rate_limit_and_adds_no_query_surface() -> None:
+    """It is not a discovery oracle (ADR-024): an opaque record id, an indistinguishable
+    404 for anything not the caller's own, and no Health ID anywhere."""
+    operation = _spec()["paths"]["/api/v1/records/{record_id}/visibility"]["patch"]
+    assert "429" not in operation["responses"]

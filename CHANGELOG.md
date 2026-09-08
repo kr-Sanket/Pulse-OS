@@ -6,6 +6,64 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ## [Unreleased]
 
 ### Added
+- **Patients can hide and unhide their own records** — `PATCH /api/v1/records/{record_id}/visibility`.
+  The `is_hidden` column has existed since migration 0003 and every read layer has enforced it
+  since M3; what was missing was any way for a patient to set it. This is that, and only that:
+  no migration, no new column, no change to a single enforcement rule.
+  **Any record the patient owns, whatever its origin.** The RBAC matrix read "own locker only",
+  which was ambiguous and, taken literally, would have gated the *write* by origin while
+  `_authorize_read` and both grantee queries test the flag and never look at origin — one flag
+  with two rules, and a patient unable to predict which of their records carries the control.
+  DOMAIN_MODEL §1 and §3 now say "own records". The demo corpus is unaffected either way (all
+  890 imported records are `PATIENT_LOCKER`), but a hospital upload is now hideable, which is
+  the case worth demonstrating.
+  **A sub-resource, not a PATCH of the record.** A filed clinical record is immutable — nothing
+  can move, retitle or delete it — and `PATCH /records/{id}` would announce the opposite, with
+  the next field added to its request model silently becoming a mutable clinical field.
+  `isHidden` is the patient's preference *about* a document rather than a property of it, and
+  the URL says which. The body is one required, non-nullable boolean, so there is no partial
+  form of the request and no `Unset` sentinel: an empty body, an explicit `null` and an unknown
+  key are all 422. It is `StrictBool` rather than `bool`, which departs from Pydantic's default
+  coercion on purpose — in lax mode `"yes"`, `"on"` and `1` all mean `True`, and inferring a
+  privacy setting from a wrong-typed value is worse than refusing it.
+  **Ownership is the signature, not a check.** The patient row is resolved from the token and
+  compared against `record.patient_id`; no path, query or body parameter names a patient. Another
+  patient's record and a record that does not exist return the same 404 with the same body, byte
+  for byte, so the endpoint is not an oracle for which record ids are real — asserted by equality
+  of the two responses, not merely of their statuses. Every non-patient role is refused by the
+  role gate before any lookup happens, so a doctor holding a live grant can read a record and
+  still cannot un-hide one.
+  **Hiding is not revoking, and the tests are where that distinction lives.** After a hide, the
+  grant keeps its status, categories and expiry; `grantedCategories` still reports the approved
+  scope beside an emptied page; the row, the S3 key and the file are untouched; and unhiding puts
+  everything back. What does change is every grantee path at once: the record leaves
+  `/granted-records`, its category leaves `/records/existence` once it is the last non-hidden one
+  there, and both the metadata read and the download answer 404.
+  **No audit event**, for the reason the profile-edit slice gave: `AuditAction` has no member
+  that states an owner's own visibility change truthfully, and the trail exists to hold *other*
+  parties accountable to the patient. `RECORD_VIEWED` would invent a read and `CONSENT_REVOKED`
+  would assert a withdrawal the `consent_grants` table contradicts. A test counts `audit_logs`,
+  `consent_requests` and `consent_grants` across three toggles and asserts all three are
+  unmoved — so routing this through `consent.enforce` later fails loudly rather than quietly.
+  **One limitation, stated rather than hidden:** a presigned download URL issued *before* a
+  record was hidden stays valid until it expires (`s3_presign_ttl_seconds`, 300s by default).
+  Hiding stops new URLs being minted; it cannot recall a signature already given.
+  In the patient portal, a "Hidden" badge appears on both the record card and the details panel,
+  and the action — "Hide from doctors" / "Unhide" — lives only on the panel, where a record's
+  other actions already are: a privacy control repeated down a 25-row list is a mis-click
+  waiting to happen. No confirmation dialog (it is reversible by the button that replaces it),
+  no toast, server-confirmed rather than optimistic, and the confirmed record is applied through
+  an id-keyed overlay — the same device `applyRevocations` uses on the grants page — so the panel
+  stays open, the cursor holds and nothing "Load more" has appended is lost. The explanatory line
+  names the exception instead of over-promising: the uploading hospital keeps its ADR-013 layer-2
+  access to its own upload.
+  `isHidden` joins `RecordMetadataResponse`, which the doctor and hospital portals also consume;
+  neither renders it, and `GrantedRecordResponse` deliberately does **not** gain it — for a
+  grantee the value could only ever be false, and the existing chooser-allow-list test already
+  named `isHidden` among the fields it must never carry. 43 new backend tests (653 total, 97%
+  coverage held) and 13 new web tests (463 total).
+
+### Added
 - **Patients can edit their own profile** — `PATCH /api/v1/patients/me`. The Edit Profile
   button had been a deliberate placeholder because the API had no `PATCH` or `PUT` endpoint
   anywhere; this adds the first one. Three fields are editable, and only three, because they

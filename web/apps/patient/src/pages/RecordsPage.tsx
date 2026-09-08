@@ -32,16 +32,23 @@ import {
   getRecord,
   listCategories,
   listRecords,
+  setRecordVisibility,
   type RecordMetadata,
   type RecordSort,
 } from "@/records/api";
 import { Button, useApiResource } from "@pulseos/ui";
-import { DEFAULT_SORT, hasActiveFilters, searchParam } from "@/records/view";
+import {
+  applyVisibility,
+  applyVisibilityTo,
+  DEFAULT_SORT,
+  hasActiveFilters,
+  searchParam,
+} from "@/records/view";
 
 /** Long enough that typing a word is one request, short enough to feel immediate. */
 const SEARCH_DEBOUNCE_MS = 300;
 
-interface DownloadFailure {
+interface RecordFailure {
   recordId: string;
   message: string;
 }
@@ -53,7 +60,17 @@ export function RecordsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadFailure, setDownloadFailure] = useState<DownloadFailure | null>(null);
+  const [downloadFailure, setDownloadFailure] = useState<RecordFailure | null>(null);
+
+  // Visibility changed in this session, keyed by record id and applied over whatever the
+  // listing returned. The same device the grants page uses for revocations, for the same
+  // reason: refetching the first page to reflect one record would drop every page Load more
+  // has appended. Server state wins the moment the listing itself reloads — see below.
+  const [visibilityOverrides, setVisibilityOverrides] = useState<ReadonlyMap<string, boolean>>(
+    new Map(),
+  );
+  const [visibilityBusyId, setVisibilityBusyId] = useState<string | null>(null);
+  const [visibilityFailure, setVisibilityFailure] = useState<RecordFailure | null>(null);
 
   // The field updates on every keystroke; the request waits for a pause. Only the settled
   // term reaches the loader, so typing "lipid" is one listing call rather than five.
@@ -91,11 +108,18 @@ export function RecordsPage() {
     setAppended([]);
     setCursor(recordsResource.data.nextCursor);
     setMoreFailure(null);
+    // A fresh listing carries the server's own `isHidden`, which is the authority; keeping
+    // this session's overlay on top of it could only ever mask a change made elsewhere.
+    setVisibilityOverrides(new Map());
+    setVisibilityFailure(null);
   }, [recordsResource]);
 
   const categoryItems = categories.resource.status === "ready" ? categories.resource.data : [];
   const page = recordsResource.status === "ready" ? recordsResource.data : null;
-  const visible = page === null ? [] : [...page.items, ...appended];
+  const visible = applyVisibility(
+    page === null ? [] : [...page.items, ...appended],
+    visibilityOverrides,
+  );
 
   const filtersActive = hasActiveFilters({ category: activeCategory, search: query, sort });
 
@@ -158,6 +182,27 @@ export function RecordsPage() {
         message: "Your browser blocked the download window. Allow pop-ups and try again.",
       });
     }
+  }
+
+  /** One record, seen through this session's visibility overlay — as the list shows it. */
+  function withVisibility(record: RecordMetadata): RecordMetadata {
+    return applyVisibilityTo(record, visibilityOverrides);
+  }
+
+  async function toggleVisibility(record: RecordMetadata): Promise<void> {
+    setVisibilityBusyId(record.id);
+    setVisibilityFailure(null);
+    const result = await setRecordVisibility(api, record.id, !record.isHidden);
+    setVisibilityBusyId(null);
+    if (result.status === "error") {
+      // The record is left exactly as it was; the toggle is idempotent, so pressing it
+      // again simply retries.
+      setVisibilityFailure({ recordId: record.id, message: result.message });
+      return;
+    }
+    // The state the server confirmed, not the one we asked for — and applied here rather
+    // than by reloading, so the panel stays open and the appended pages stay put.
+    setVisibilityOverrides((current) => new Map(current).set(record.id, result.data.isHidden));
   }
 
   function handleUploaded(record: RecordMetadata): void {
@@ -247,12 +292,23 @@ export function RecordsPage() {
               />
             ) : (
               <RecordDetailsPanel
-                record={detailResource.data}
+                // The panel reads through the same overlay as the list, so a record hidden
+                // here flips its own badge and button without a second fetch of the detail.
+                record={withVisibility(detailResource.data)}
                 onDownload={() => void download(detailResource.data.id)}
                 downloading={downloadingId === detailResource.data.id}
                 downloadError={
                   downloadFailure?.recordId === detailResource.data.id
                     ? downloadFailure.message
+                    : null
+                }
+                onToggleVisibility={() =>
+                  void toggleVisibility(withVisibility(detailResource.data))
+                }
+                updatingVisibility={visibilityBusyId === detailResource.data.id}
+                visibilityError={
+                  visibilityFailure?.recordId === detailResource.data.id
+                    ? visibilityFailure.message
                     : null
                 }
               />

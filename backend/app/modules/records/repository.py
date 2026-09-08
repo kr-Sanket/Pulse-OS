@@ -268,6 +268,22 @@ class MedicalRecordRepository:
         await self._session.flush()
         return record
 
+    async def update(self, record: MedicalRecord) -> MedicalRecord:
+        """Persist changes already applied to a loaded row.
+
+        No column list and no keyword arguments, for the reason ``PatientRepository.update``
+        gives: which fields may change is a domain rule, and restating it here would give
+        the schema a second opinion about it. Today the service assigns exactly one
+        attribute — ``is_hidden`` — and ``updated_at`` is stamped by TimestampMixin's
+        ``onupdate`` rather than by hand.
+
+        No savepoint, unlike ``add``: this touches no unique column, so the only failures
+        available to it are ones no domain error could usefully translate.
+        """
+        self._session.add(record)
+        await self._session.flush()
+        return record
+
     async def list_category_ids_with_records(self, patient_id: UUID) -> list[UUID]:
         """The categories this patient actually holds records in — ids only.
 

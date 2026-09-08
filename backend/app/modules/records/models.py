@@ -145,7 +145,9 @@ class MedicalRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     hospital/doctor are provenance, and the basis of the hospital's *own-upload* read
     access (ADR-013 layer 2). The object-storage key contains only UUIDs — no names, no
     filenames (docs/SECURITY.md: metadata can leak). ``is_hidden`` is the patient-controlled
-    visibility flag for locker records (toggle endpoint arrives with the locker UI).
+    visibility flag, writable by the owning patient on **any** record they own regardless of
+    origin (docs/DOMAIN_MODEL.md §3) — the read layers already treat every record alike, so
+    gating the write by origin would give one flag two rules.
     """
 
     __tablename__ = "medical_records"

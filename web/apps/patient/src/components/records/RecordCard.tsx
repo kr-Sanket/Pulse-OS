@@ -11,6 +11,7 @@ import type { RecordMetadata } from "@/records/api";
 import {
   categoryStyle,
   formatCalendarDate,
+  HIDDEN_BADGE,
   providerLabel,
   recordDescription,
   recordTitle,
@@ -52,7 +53,13 @@ export function RecordCard({ record, selected = false, onSelect }: RecordCardPro
             <h3 className="text-foreground min-w-0 flex-1 text-[15px] font-medium">
               {recordTitle(record)}
             </h3>
-            <Badge variant={tone}>{record.categoryDisplayName}</Badge>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Information, not a control: the action that changes it lives on the
+                  details panel, so a privacy setting is never one stray click away on a
+                  page that renders 25 of these. */}
+              {record.isHidden ? <Badge variant="warning">{HIDDEN_BADGE}</Badge> : null}
+              <Badge variant={tone}>{record.categoryDisplayName}</Badge>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">

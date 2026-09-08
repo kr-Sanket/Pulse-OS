@@ -792,6 +792,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/records/{record_id}/visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Record Visibility
+         * @description Hide or unhide one of the caller's own records.
+         *
+         *     Hiding withdraws a record from what consent is able to share: a clinician holding an
+         *     active grant for its category stops seeing it in ``/granted-records``, stops being able
+         *     to open or download it, and stops seeing its category under ``/records/existence`` once
+         *     it is the last non-hidden record there. It is **not** a revocation and **not** a delete
+         *     — the grant keeps its status, categories and expiry, and the document and its stored
+         *     file are untouched. Unhiding restores all of it. The owner always keeps seeing the
+         *     record, in their listing and in full, or hiding would be a one-way door.
+         *
+         *     A sub-resource rather than a PATCH of the record itself: a filed clinical record is
+         *     immutable, and ``isHidden`` is the patient's preference *about* the document rather than
+         *     a property of it. There is no patient identifier anywhere in the request — the row is
+         *     resolved from the token — and the body may name nothing but ``isHidden``.
+         *
+         *     Two behaviours this endpoint deliberately does not have. It writes **no audit event**:
+         *     the trail records what others did to the patient's data, and ``AuditAction`` has no
+         *     member that would state an owner's own visibility change truthfully (the deferred
+         *     operational log will). And it does not recall a **presigned URL already issued** —
+         *     one minted before the record was hidden stays usable until it expires (300s by default);
+         *     hiding stops new ones being minted.
+         *
+         *     Roles: PATIENT, and only for a record they own — anyone else's, and one that does not
+         *     exist, answer the same 404 (existence must not leak, API_GUIDELINES).
+         *     Consent requirement: none. This reads no record content, so it does not cross the choke
+         *     point; ownership is the ADR-013 layer-2 relationship this module evaluates itself.
+         *     Idempotent: setting the value a record already holds succeeds and changes nothing else.
+         *     Failure modes: 401, 403 (any non-patient role), 404 (no profile row, or no such record
+         *     for this caller), 422 (malformed record id, missing/non-boolean/unknown body field).
+         */
+        patch: operations["update_record_visibility_api_v1_records__record_id__visibility_patch"];
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1563,7 +1611,18 @@ export interface components {
             /** Nextcursor */
             nextCursor: string | null;
         };
-        /** RecordMetadataResponse */
+        /**
+         * RecordMetadataResponse
+         * @description One record as a caller entitled to the whole of it sees it.
+         *
+         *     ``isHidden`` is the patient's own disclosure preference. It is carried here rather than
+         *     on a patient-only model because a grantee never receives this response for a hidden
+         *     record at all — the read is refused before serialisation — so for a doctor the field is
+         *     false by construction. The uploading hospital does see it on its own upload, which is
+         *     true and worth its knowing: the record it filed is no longer being shared onward.
+         *     ``GrantedRecordResponse`` deliberately does **not** gain the field; a value that can only
+         *     ever be false would be dead weight on an allow-list whose point is narrowness.
+         */
         RecordMetadataResponse: {
             /** Categorycode */
             categoryCode: string;
@@ -1588,6 +1647,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Ishidden */
+            isHidden: boolean;
             origin: components["schemas"]["RecordOrigin"];
             /** Originalfilename */
             originalFilename: string;
@@ -1609,6 +1670,32 @@ export interface components {
          * @enum {string}
          */
         RecordProcessingStatus: "UPLOADED" | "PROCESSING" | "INDEXED" | "FAILED";
+        /**
+         * RecordVisibilityUpdateRequest
+         * @description The patient's disclosure preference for one record they own.
+         *
+         *     One field, required and non-nullable, which is what keeps this model free of the
+         *     partial-update machinery ``PatientProfileUpdateRequest`` needs. There is no "leave
+         *     alone" to express (the caller states the state they want) and no "clear" (the column is
+         *     NOT NULL), so an omitted key, an explicit ``null`` and a non-boolean are all simply
+         *     invalid — 422 by the field's own declaration rather than by a validator.
+         *
+         *     The record is named by the path and the patient by the token, so neither appears here.
+         *     ``RequestModel`` forbids unknown fields, which makes naming one a 422 rather than a
+         *     silently ignored key — a caller that believes it moved a record to another patient must
+         *     be told otherwise.
+         *
+         *     ``StrictBool`` rather than ``bool``, which is a deliberate departure from Pydantic's
+         *     default coercion: in lax mode ``"yes"``, ``"on"`` and ``1`` all become ``True`` and
+         *     ``"no"`` becomes ``False``. Guessing is the wrong behaviour for a disclosure control —
+         *     a client that sends the wrong type should be corrected, not have a privacy setting
+         *     inferred on its behalf. JSON has a native boolean, so nothing legitimate needs the
+         *     coercion. (Dates elsewhere in the API do need it; JSON has no date.)
+         */
+        RecordVisibilityUpdateRequest: {
+            /** Ishidden */
+            isHidden: boolean;
+        };
         /**
          * Role
          * @description The four platform roles (docs/DOMAIN_MODEL.md §3, ADR-013).
@@ -2890,6 +2977,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DownloadUrlResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_record_visibility_api_v1_records__record_id__visibility_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordVisibilityUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordMetadataResponse"];
                 };
             };
             /** @description Validation Error */

@@ -560,6 +560,57 @@ class RecordService:
         )
         return DownloadLink(url=url, expires_in_seconds=self._presign_ttl_seconds)
 
+    # -- patient-controlled visibility -------------------------------------------------
+
+    async def set_visibility(
+        self, caller: AuthenticatedUser, record_id: UUID, *, is_hidden: bool
+    ) -> RecordView:
+        """Hide or unhide one of the caller's own records (docs/DOMAIN_MODEL.md §3).
+
+        **Ownership is the signature, not a check.** The patient row is resolved from the
+        authenticated ``user_id`` and the record must already belong to it; no parameter
+        names a patient, so changing somebody else's record is not expressible. A record
+        owned by another patient and a record that does not exist raise the same error and
+        are indistinguishable to the caller (the 403-vs-404 rule, docs/API_GUIDELINES.md).
+
+        **Any record the patient owns, regardless of origin.** The read layers already
+        treat every record alike — ``_authorize_read`` and both grantee queries test the
+        flag and never the origin — so gating the write by ``PATIENT_LOCKER`` would give one
+        flag two rules, and would leave the patient unable to predict which of their records
+        carries the control.
+
+        **Not a read, so not the read path.** ``consent.enforce`` is deliberately not called:
+        it authorizes and audits access to record *content*, and this reads none. Ownership
+        here is an ADR-013 layer-2 relationship this module evaluates itself, exactly as the
+        hospital-upload branch of ``_authorize_read`` does.
+
+        **Nothing is audited**, and that is a decision rather than an omission: ``AuditAction``
+        has no member that states "the owner changed a record's visibility", and the trail
+        exists to hold *other* parties accountable to the patient. Reusing ``RECORD_VIEWED``
+        would invent a read that never happened and ``CONSENT_REVOKED`` would assert a
+        withdrawal the ``consent_grants`` table contradicts — hiding revokes nothing. The
+        patient's own administrative actions belong with the deferred operational log
+        (.claude/TODO.md), which is where the other events of that family already wait.
+
+        Idempotent: setting the value it already holds succeeds and changes nothing but
+        ``updated_at``. Exactly one attribute is assigned here, so no request shape can
+        reach a clinical column, the object-storage key, or the file behind it.
+
+        One limitation worth stating: a presigned download URL issued *before* a record was
+        hidden stays valid until it expires (``s3_presign_ttl_seconds``, 300s by default).
+        Hiding stops new URLs from being minted; it cannot recall a signature already given.
+        """
+        patient = await self._patients.get_by_user_id(caller.user_id)
+        if patient is None:
+            raise ProfileNotFoundError()
+        row = await self._records.get_with_context(record_id)
+        if row is None or row[0].patient_id != patient.id:
+            raise RecordNotFoundError()
+        record = row[0]
+        record.is_hidden = is_hidden
+        await self._records.update(record)
+        return self._to_view(row)
+
     async def list_categories(self) -> list[RecordCategory]:
         return await self._categories.list_all()
 

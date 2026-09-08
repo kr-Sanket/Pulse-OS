@@ -59,6 +59,63 @@ export function recordDescription(record: RecordMetadata): string {
   return description === undefined || description.length === 0 ? NO_DESCRIPTION : description;
 }
 
+// -- visibility -----------------------------------------------------------------------
+//
+// Hiding withdraws a record from what consent can share. What it does *not* do is the part
+// the wording has to carry: the hospital that uploaded a record keeps its own access
+// (ADR-013 layer 2), so a badge reading "Private" or copy promising "no one else can see
+// this" would state a guarantee the authorization model does not give.
+
+/** The badge on a hidden record, on both the card and the panel. */
+export const HIDDEN_BADGE = "Hidden";
+
+/** The panel's button, worded as the action it performs rather than the state it leaves. */
+export const HIDE_ACTION = "Hide from doctors";
+export const UNHIDE_ACTION = "Unhide";
+export const HIDING_LABEL = "Hiding…";
+export const UNHIDING_LABEL = "Unhiding…";
+
+/** One line under the button. Precise about the exception rather than silent about it. */
+export const HIDDEN_EXPLANATION =
+  "Hidden records are not shown to doctors, even where you have approved access. " +
+  "The hospital that uploaded a record can still see it, and you always can.";
+
+export function visibilityActionLabel(isHidden: boolean, busy: boolean): string {
+  if (busy) {
+    return isHidden ? UNHIDING_LABEL : HIDING_LABEL;
+  }
+  return isHidden ? UNHIDE_ACTION : HIDE_ACTION;
+}
+
+/**
+ * The rows, with any visibility changed in this session shown as changed.
+ *
+ * The same shape as `applyRevocations` on the grants page, and for the same reason: the
+ * listing is one keyset sequence with a cursor, so refetching it to reflect a one-record
+ * change would drop every page "Load more" has appended. The overlay is keyed by record id,
+ * so it survives paging; the page drops it whenever the base listing reloads, which is what
+ * keeps the server authoritative.
+ */
+export function applyVisibility(
+  records: readonly RecordMetadata[],
+  overrides: ReadonlyMap<string, boolean>,
+): readonly RecordMetadata[] {
+  if (overrides.size === 0) {
+    return records;
+  }
+  return records.map((record) => applyVisibilityTo(record, overrides));
+}
+
+/** The same rule for a single record — what the details panel reads. Returns the record
+ * itself, not a copy, when nothing about it changed. */
+export function applyVisibilityTo(
+  record: RecordMetadata,
+  overrides: ReadonlyMap<string, boolean>,
+): RecordMetadata {
+  const isHidden = overrides.get(record.id);
+  return isHidden === undefined || isHidden === record.isHidden ? record : { ...record, isHidden };
+}
+
 // -- listing controls ---------------------------------------------------------------
 //
 // Sorting, filtering and searching all happen server-side. They used to be partly

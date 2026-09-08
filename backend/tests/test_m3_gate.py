@@ -24,7 +24,7 @@ from app.modules.consent.repository import AuditLogRepository
 from app.modules.patients.health_id import generate_health_id
 from app.modules.patients.seed import seed_synthetic_patients
 from app.modules.records.fake import FakeObjectStorage
-from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin, MedicalRecord
+from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin
 from app.modules.records.repository import HospitalRepository
 from app.modules.records.seed import seed_reference_data
 from fastapi.testclient import TestClient
@@ -288,14 +288,18 @@ def _grant_cbc(client: TestClient, cast: Cast) -> str:
     return str(approved.json()["grants"][0]["id"])
 
 
-def _hide(db_engine: AsyncEngine, record_id: str) -> None:
-    async def hide(session: AsyncSession) -> None:
-        record = (
-            await session.execute(select(MedicalRecord).where(MedicalRecord.id == UUID(record_id)))
-        ).scalar_one()
-        record.is_hidden = True
+def _hide(client: TestClient, cast: Cast, record_id: str, *, hidden: bool = True) -> None:
+    """Hide (or unhide) a record the way a patient actually does it.
 
-    run_with_session(db_engine, hide)
+    This used to write ``is_hidden`` straight to the row, because no endpoint existed. Now
+    that one does, the enforcement tests below exercise the whole path — the patient's own
+    request included — rather than a state only a test could produce.
+    """
+    response: httpx.Response = client.patch(
+        f"{RECORDS}/{record_id}/visibility", json={"isHidden": hidden}, headers=cast.patient
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["isHidden"] is hidden
 
 
 def test_a_denied_download_is_refused_and_durably_audited(
@@ -327,7 +331,7 @@ def test_a_hidden_record_is_unreadable_by_a_clinician_holding_a_valid_grant(
     _grant_cbc(client, cast)
     assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 200
 
-    _hide(db_engine, record_id)
+    _hide(client, cast, record_id)
     assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 404
     assert (
         client.post(f"{RECORDS}/{record_id}/download-url", headers=cast.doctor_cmc).status_code
@@ -341,7 +345,7 @@ def test_a_hidden_record_stays_visible_to_the_patient_who_hid_it(
     """The owner must keep seeing a hidden record — otherwise hiding would be a one-way
     door and the patient could never unhide it."""
     record_id = _upload(client, cast, "CBC")
-    _hide(db_engine, record_id)
+    _hide(client, cast, record_id)
 
     assert client.get(f"{RECORDS}/{record_id}", headers=cast.patient).status_code == 200
     assert (
@@ -360,7 +364,7 @@ def test_a_hidden_record_stays_visible_to_the_hospital_that_uploaded_it(
     own record — and per docs/DOMAIN_MODEL.md §1 hiding applies to locker records, which
     have no uploading hospital, so this combination should not arise in practice."""
     record_id = _upload(client, cast, "CBC")
-    _hide(db_engine, record_id)
+    _hide(client, cast, record_id)
 
     assert client.get(f"{RECORDS}/{record_id}", headers=cast.admin_tmh).status_code == 200
     assert [item["id"] for item in client.get(RECORDS, headers=cast.admin_tmh).json()["items"]] == [
@@ -466,7 +470,7 @@ def test_a_hidden_record_never_appears_in_a_granted_listing(
 ) -> None:
     record_id = _upload(client, cast, "CBC")
     _grant_cbc(client, cast)
-    _hide(db_engine, record_id)
+    _hide(client, cast, record_id)
 
     listed = _granted_records(client, cast)
 
@@ -703,3 +707,145 @@ def test_a_throttled_discovery_reveals_nothing_about_the_health_id(
     assert real.json()["detail"] == fake.json()["detail"]
     assert HEALTH_ID not in real.text and unissued not in fake.text
     assert "record_existence" not in real.text
+
+
+# -- patient-controlled visibility, end to end (D1: any record the patient owns) ---------
+#
+# The records these exercise are HOSPITAL_UPLOAD, uploaded by TMH — the case the approved
+# scope turns on. Hiding is the patient withdrawing a document from what consent can share;
+# it is not a revocation, and these tests are how the two stay distinguishable.
+
+
+def test_hiding_and_unhiding_a_record_closes_and_reopens_every_grantee_path(
+    client: TestClient, cast: Cast
+) -> None:
+    """The whole round trip on one record: readable under a grant, gone while hidden, back
+    when unhidden — metadata and file alike, with the grant never touched."""
+    record_id = _upload(client, cast, "CBC")
+    _grant_cbc(client, cast)
+
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 200
+    assert (
+        client.post(f"{RECORDS}/{record_id}/download-url", headers=cast.doctor_cmc).status_code
+        == 200
+    )
+
+    _hide(client, cast, record_id)
+
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 404
+    assert (
+        client.post(f"{RECORDS}/{record_id}/download-url", headers=cast.doctor_cmc).status_code
+        == 404
+    )
+
+    _hide(client, cast, record_id, hidden=False)
+
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 200
+    assert (
+        client.post(f"{RECORDS}/{record_id}/download-url", headers=cast.doctor_cmc).status_code
+        == 200
+    )
+
+
+def test_hiding_a_record_leaves_the_grant_exactly_as_it_was(client: TestClient, cast: Cast) -> None:
+    """Hiding is not revoking. The distinction is the whole reason both exist: a revoked
+    grant is a decision about a clinician, a hidden record is a decision about a document.
+    """
+    record_id = _upload(client, cast, "CBC")
+    grant_id = _grant_cbc(client, cast)
+    before = client.get(GRANTS, headers=cast.patient).json()
+
+    _hide(client, cast, record_id)
+
+    after = client.get(GRANTS, headers=cast.patient).json()
+    assert after == before
+    (grant,) = [item for item in after["items"] if item["id"] == grant_id]
+    assert grant["status"] == "ACTIVE"
+    assert grant["revokedAt"] is None
+
+
+def test_hiding_the_last_record_in_a_category_withdraws_it_from_discovery(
+    client: TestClient, cast: Cast
+) -> None:
+    """``/records/existence`` answers presence, and a hidden record is not present to a
+    clinician. The MRI is the control: the category the patient did not touch is unmoved."""
+    cbc = _upload(client, cast, "CBC")
+    _upload(client, cast, "MRI")
+
+    def discovered() -> list[str]:
+        response = client.get(
+            EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=cast.doctor_cmc
+        )
+        assert response.status_code == 200, response.text
+        return sorted(item["code"] for item in response.json()["items"])
+
+    assert discovered() == ["CBC", "MRI"]
+
+    _hide(client, cast, cbc)
+    assert discovered() == ["MRI"]
+
+    _hide(client, cast, cbc, hidden=False)
+    assert discovered() == ["CBC", "MRI"]
+
+
+def test_hiding_one_record_leaves_the_rest_of_its_category_discoverable(
+    client: TestClient, cast: Cast
+) -> None:
+    """Existence is per category, not per document: one hidden CBC among two says nothing."""
+    first = _upload(client, cast, "CBC")
+    _upload(client, cast, "CBC")
+
+    _hide(client, cast, first)
+
+    response = client.get(EXISTENCE, params={"patientHealthId": HEALTH_ID}, headers=cast.doctor_cmc)
+    assert [item["code"] for item in response.json()["items"]] == ["CBC"]
+
+
+def test_unhiding_returns_a_record_to_the_granted_listing(client: TestClient, cast: Cast) -> None:
+    """The other half of ``test_a_hidden_record_never_appears_in_a_granted_listing``: the
+    disappearance is reversible, and the scope beside the page never moved."""
+    record_id = _upload(client, cast, "CBC")
+    _grant_cbc(client, cast)
+    _hide(client, cast, record_id)
+    assert _granted_records(client, cast)["items"] == []
+
+    _hide(client, cast, record_id, hidden=False)
+
+    listed = _granted_records(client, cast)
+    assert [item["id"] for item in listed["items"]] == [record_id]
+    assert [category["code"] for category in listed["grantedCategories"]] == ["CBC"]
+
+
+def test_the_uploading_hospital_still_reads_a_record_the_patient_hid(
+    client: TestClient, cast: Cast
+) -> None:
+    """ADR-013 layer 2 is untouched by hiding, and under D1 (any owned record) this is now
+    a reachable combination rather than a hypothetical: a hospital upload, hidden by its
+    patient, is still readable by the hospital that filed it. The patient-facing wording
+    says so rather than implying a guarantee the authorization model does not give."""
+    record_id = _upload(client, cast, "CBC")
+
+    _hide(client, cast, record_id)
+
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.admin_tmh).status_code == 200
+    listed = client.get(RECORDS, headers=cast.admin_tmh).json()["items"]
+    assert [item["id"] for item in listed] == [record_id]
+    assert listed[0]["isHidden"] is True
+
+
+def test_a_clinician_cannot_change_a_patients_visibility_setting(
+    client: TestClient, cast: Cast
+) -> None:
+    """The inverse of the whole feature: a grant lets a clinician read a record, never
+    un-hide one. Refused by the role gate, before any record is looked up."""
+    record_id = _upload(client, cast, "CBC")
+    _grant_cbc(client, cast)
+    _hide(client, cast, record_id)
+
+    for headers in (cast.doctor_cmc, cast.admin_tmh):
+        refused = client.patch(
+            f"{RECORDS}/{record_id}/visibility", json={"isHidden": False}, headers=headers
+        )
+        assert refused.status_code == 403
+
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 404

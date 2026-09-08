@@ -122,6 +122,45 @@ export async function createDownloadUrl(
   });
 }
 
+/** Per-status wording for a visibility change, used only when the API sends no detail. */
+const VISIBILITY_FAILURES: Readonly<Record<number, string>> = {
+  403: "Your account is not allowed to change this.",
+  404: "That record is no longer available.",
+};
+
+/**
+ * Hide or unhide one of the patient's own records.
+ *
+ * Hiding withdraws the record from what consent can share — doctors stop seeing it even
+ * under a live grant — without revoking anything or deleting the document. The API answers
+ * with the whole record, which is what lets the page update its row without refetching a
+ * page (and so without losing everything "Load more" has appended).
+ *
+ * No patient identifier is sent, and none may be: the API resolves the owner from the token
+ * and answers 404 for a record belonging to anyone else.
+ */
+export async function setRecordVisibility(
+  client: PulseOSClient,
+  recordId: string,
+  isHidden: boolean,
+): Promise<ApiResult<RecordMetadata>> {
+  return attempt(async () => {
+    const result = await client.PATCH("/api/v1/records/{record_id}/visibility", {
+      params: { path: { record_id: recordId } },
+      body: { isHidden },
+    });
+    if (result.data === undefined) {
+      return statusFailure(
+        result.error,
+        result.response.status,
+        VISIBILITY_FAILURES,
+        isHidden ? "Could not hide this record." : "Could not unhide this record.",
+      );
+    }
+    return { status: "ready", data: result.data };
+  });
+}
+
 export interface RecordUpload {
   file: File;
   categoryCode: string;

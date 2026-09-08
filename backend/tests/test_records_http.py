@@ -6,7 +6,7 @@ a patient cannot call hospital surfaces, a doctor/system-admin has no record acc
 """
 
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -15,14 +15,15 @@ from app.core.queue import InMemoryJobQueue, QueueUnavailableError
 from app.modules.auth.domain import Role
 from app.modules.auth.fake import FakeAuthProvider
 from app.modules.auth.models import User
+from app.modules.consent.models import AuditLog, ConsentGrant, ConsentRequest
 from app.modules.patients.seed import seed_synthetic_patients
 from app.modules.records.errors import StorageUnavailableError
 from app.modules.records.fake import FakeObjectStorage
-from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin
+from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin, MedicalRecord
 from app.modules.records.repository import HospitalRepository
 from app.modules.records.seed import seed_reference_data
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from tests.support import run_with_session
@@ -46,12 +47,13 @@ def _bearer(token: str) -> dict[str, str]:
 @dataclass
 class Actors:
     """Bearer headers for one admin of HID-0001, one admin of HID-0002, one seeded
-    patient (owner of HEALTH_ID), one ACTIVE and one DISABLED doctor of HID-0001, and one
-    system admin."""
+    patient (owner of HEALTH_ID), a *second* seeded patient who owns none of their records,
+    one ACTIVE and one DISABLED doctor of HID-0001, and one system admin."""
 
     admin_a: dict[str, str]
     admin_b: dict[str, str]
     patient: dict[str, str]
+    other_patient: dict[str, str]
     doctor: dict[str, str]
     suspended_doctor: dict[str, str]
     system_admin: dict[str, str]
@@ -66,7 +68,7 @@ def actors(
     fake_storage: FakeObjectStorage,
     fake_queue: InMemoryJobQueue,
 ) -> Actors:
-    async def arrange(session: AsyncSession) -> tuple[UUID, UUID, UUID, UUID, UUID, UUID]:
+    async def arrange(session: AsyncSession) -> tuple[UUID, UUID, UUID, UUID, UUID, UUID, UUID]:
         await seed_reference_data(session)  # HID-0001..3 VERIFIED + 10 categories
         await seed_synthetic_patients(session)  # includes the owner of HEALTH_ID
 
@@ -116,10 +118,13 @@ def actors(
 
         patient_query = select(User).where(User.firebase_uid == "synthetic:patient:aarav")
         patient_user = (await session.execute(patient_query)).scalar_one()
+        other_query = select(User).where(User.firebase_uid == "synthetic:patient:meera")
+        other_patient_user = (await session.execute(other_query)).scalar_one()
         return (
             admin_ids[0],
             admin_ids[1],
             patient_user.id,
+            other_patient_user.id,
             doctor_user.id,
             suspended_user.id,
             system_admin_user.id,
@@ -129,6 +134,7 @@ def actors(
         admin_a_id,
         admin_b_id,
         patient_user_id,
+        other_patient_user_id,
         doctor_user_id,
         suspended_doctor_id,
         system_admin_user_id,
@@ -147,6 +153,12 @@ def actors(
         role=Role.PATIENT,
     )
     fake_auth.register_user(
+        "other-patient",
+        user_id=other_patient_user_id,
+        firebase_uid="synthetic:patient:meera",
+        role=Role.PATIENT,
+    )
+    fake_auth.register_user(
         "doctor", user_id=doctor_user_id, firebase_uid="fb-doc", role=Role.DOCTOR
     )
     fake_auth.register_user(
@@ -159,6 +171,7 @@ def actors(
         admin_a=_bearer("admin-a"),
         admin_b=_bearer("admin-b"),
         patient=_bearer("patient"),
+        other_patient=_bearer("other-patient"),
         doctor=_bearer("doctor"),
         suspended_doctor=_bearer("doctor-off"),
         system_admin=_bearer("sysadmin"),
@@ -701,3 +714,320 @@ def test_the_granted_listing_still_withholds_filename_and_description() -> None:
 
     fields = set(GrantedRecordResponse.model_fields)
     assert {"original_filename", "description", "size_bytes", "content_type"}.isdisjoint(fields)
+
+
+# -- patient-controlled visibility: PATCH /records/{id}/visibility -----------------------
+#
+# The write path for ``is_hidden``. The read path it feeds — a hidden record vanishing from
+# every grantee surface — is covered end to end in test_m3_gate.py, where the consent
+# machinery lives; what these pin is authorization, request shape, and the promise that a
+# visibility change touches one column and writes nothing else anywhere.
+
+
+def _visibility(record_id: str) -> str:
+    return f"{RECORDS}/{record_id}/visibility"
+
+
+def _own_record(client: TestClient, actors: Actors, **overrides: str) -> str:
+    """One record owned by the patient actor, uploaded to their own locker."""
+    response = _upload(client, actors.patient, health_id=None, **overrides)
+    assert response.status_code == 201, response.text
+    assert response.json()["isHidden"] is False  # records arrive visible
+    return str(response.json()["id"])
+
+
+def _set_hidden(client: TestClient, actors: Actors, record_id: str, hidden: bool) -> httpx.Response:
+    response: httpx.Response = client.patch(
+        _visibility(record_id), json={"isHidden": hidden}, headers=actors.patient
+    )
+    return response
+
+
+def _record_columns(db_engine: AsyncEngine, record_id: str) -> dict[str, object]:
+    """Every column of the row, straight from the database — the only way to assert that a
+    field the API never returns (``s3_key``) was not touched either."""
+
+    async def read(session: AsyncSession) -> dict[str, object]:
+        record = (
+            await session.execute(select(MedicalRecord).where(MedicalRecord.id == UUID(record_id)))
+        ).scalar_one()
+        return {column.key: getattr(record, column.key) for column in MedicalRecord.__table__.c}
+
+    return run_with_session(db_engine, read)
+
+
+def _side_effect_counts(db_engine: AsyncEngine) -> dict[str, int]:
+    async def read(session: AsyncSession) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for model in (AuditLog, ConsentRequest, ConsentGrant):
+            total = await session.execute(select(func.count()).select_from(model))
+            counts[model.__tablename__] = total.scalar_one()
+        return counts
+
+    return run_with_session(db_engine, read)
+
+
+def test_visibility_requires_authentication(client: TestClient) -> None:
+    assert client.patch(_visibility(str(uuid4())), json={"isHidden": True}).status_code == 401
+
+
+@pytest.mark.parametrize("actor", ["doctor", "suspended_doctor", "admin_a", "system_admin"])
+def test_only_a_patient_may_change_visibility(
+    client: TestClient, actors: Actors, actor: str
+) -> None:
+    """Refused by the role gate, before any record is looked up — so the refusal discloses
+    nothing about the record, and a 403 here leaks less than a 404 would."""
+    record_id = _own_record(client, actors)
+    headers: dict[str, str] = getattr(actors, actor)
+
+    assert (
+        client.patch(_visibility(record_id), json={"isHidden": True}, headers=headers).status_code
+        == 403
+    )
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.patient).json()["isHidden"] is False
+
+
+def test_a_patient_hides_and_unhides_their_own_record(client: TestClient, actors: Actors) -> None:
+    record_id = _own_record(client, actors)
+
+    hidden = _set_hidden(client, actors, record_id, True)
+    assert hidden.status_code == 200, hidden.text
+    assert hidden.json()["isHidden"] is True
+    # The response is the source of truth for the client, so it must match a fresh read.
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.patient).json() == hidden.json()
+
+    shown = _set_hidden(client, actors, record_id, False)
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["isHidden"] is False
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.patient).json() == shown.json()
+
+
+@pytest.mark.parametrize("hidden", [True, False])
+def test_setting_the_visibility_a_record_already_has_is_idempotent(
+    client: TestClient, actors: Actors, hidden: bool
+) -> None:
+    """A toggle a client may retry: the second call is not a conflict, and the answer to
+    both is the same record in the same state."""
+    record_id = _own_record(client, actors)
+
+    first = _set_hidden(client, actors, record_id, hidden)
+    second = _set_hidden(client, actors, record_id, hidden)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert second.json()["isHidden"] is hidden
+
+
+def test_another_patients_record_is_indistinguishable_from_one_that_does_not_exist(
+    client: TestClient, actors: Actors
+) -> None:
+    """The 403-vs-404 rule at its sharpest: the endpoint must not become an oracle telling
+    a stranger which record ids are real. Same status, same body, byte for byte."""
+    record_id = _own_record(client, actors)
+
+    someone_elses = client.patch(
+        _visibility(record_id), json={"isHidden": True}, headers=actors.other_patient
+    )
+    imaginary = client.patch(
+        _visibility(str(uuid4())), json={"isHidden": True}, headers=actors.other_patient
+    )
+
+    assert someone_elses.status_code == imaginary.status_code == 404
+    assert someone_elses.json()["detail"] == imaginary.json()["detail"] == "Record not found."
+    assert someone_elses.headers["content-type"].startswith("application/problem+json")
+    # And the refusal changed nothing.
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.patient).json()["isHidden"] is False
+
+
+def test_a_patient_token_without_a_profile_row_is_the_usual_404(
+    client: TestClient, actors: Actors, fake_auth: FakeAuthProvider
+) -> None:
+    """PATIENT claims for a user that has no patient row — the same gap every other
+    patient-scoped surface answers 404 for."""
+    fake_auth.register_user("ghost", user_id=uuid4(), firebase_uid="fb-ghost", role=Role.PATIENT)
+    record_id = _own_record(client, actors)
+
+    refused = client.patch(
+        _visibility(record_id), json={"isHidden": True}, headers=_bearer("ghost")
+    )
+
+    assert refused.status_code == 404
+    assert refused.json()["detail"] == "Profile not found for this account."
+
+
+def test_a_malformed_record_id_is_a_validation_error(client: TestClient, actors: Actors) -> None:
+    response = client.patch(
+        _visibility("not-a-uuid"), json={"isHidden": True}, headers=actors.patient
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"isHidden": None},
+        # Not coerced: Pydantic's lax mode would read every one of these as a boolean, and
+        # a guessed privacy setting is worse than a refused request. ``StrictBool`` is what
+        # makes them 422, in both directions — a wrongly-typed "unhide" is as bad as a
+        # wrongly-typed "hide".
+        {"isHidden": "yes"},
+        {"isHidden": "true"},
+        {"isHidden": 1},
+        {"isHidden": "no"},
+        {"isHidden": "on"},
+        {"isHidden": 0},
+        {"hidden": True},
+        {"isHidden": True, "patientId": "00000000-0000-4000-8000-000000000000"},
+        {"isHidden": True, "recordId": "00000000-0000-4000-8000-000000000000"},
+        {"isHidden": True, "description": "rewritten"},
+        {"isHidden": True, "categoryCode": "MRI"},
+    ],
+)
+def test_invalid_bodies_are_422_and_write_nothing(
+    client: TestClient, actors: Actors, body: dict[str, object]
+) -> None:
+    """An empty body is a mistake rather than a no-op, and a clinical field named alongside
+    a valid flag poisons the whole request — a caller that believes it re-categorised a
+    record must be told otherwise."""
+    record_id = _own_record(client, actors)
+    before = client.get(f"{RECORDS}/{record_id}", headers=actors.patient).json()
+
+    assert (
+        client.patch(_visibility(record_id), json=body, headers=actors.patient).status_code == 422
+    )
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.patient).json() == before
+
+
+def test_hiding_changes_is_hidden_and_updated_at_and_nothing_else(
+    client: TestClient, actors: Actors, db_engine: AsyncEngine
+) -> None:
+    """Read at the database rather than through the API, because the fields most worth
+    protecting — ``s3_key`` above all — are ones no response carries."""
+    record_id = _own_record(client, actors)
+    before = _record_columns(db_engine, record_id)
+
+    assert _set_hidden(client, actors, record_id, True).status_code == 200
+
+    after = _record_columns(db_engine, record_id)
+    assert after["is_hidden"] is True and before["is_hidden"] is False
+    volatile = {"is_hidden", "updated_at"}
+    assert {key: value for key, value in after.items() if key not in volatile} == {
+        key: value for key, value in before.items() if key not in volatile
+    }
+    # Named individually as well, so a future column added to the model cannot quietly
+    # join the comparison above and be asserted about by accident.
+    for column in [
+        "id",
+        "patient_id",
+        "category_id",
+        "origin",
+        "uploaded_by_hospital_id",
+        "uploaded_by_doctor_id",
+        "date_of_service",
+        "description",
+        "original_filename",
+        "content_type",
+        "size_bytes",
+        "s3_key",
+        "processing_status",
+        "created_at",
+    ]:
+        assert after[column] == before[column], column
+
+
+def test_the_stored_file_is_untouched_by_hiding(
+    client: TestClient, actors: Actors, fake_storage: FakeObjectStorage, db_engine: AsyncEngine
+) -> None:
+    """Hiding is not deleting. The object keeps its key and its bytes, which is what makes
+    unhiding possible at all."""
+    record_id = _own_record(client, actors)
+    s3_key = str(_record_columns(db_engine, record_id)["s3_key"])
+    before = dict(fake_storage.objects)
+
+    _set_hidden(client, actors, record_id, True)
+    _set_hidden(client, actors, record_id, False)
+
+    assert fake_storage.objects == before
+    assert s3_key in fake_storage.objects
+
+
+def test_a_visibility_change_writes_no_audit_and_no_consent_row(
+    client: TestClient, actors: Actors, db_engine: AsyncEngine
+) -> None:
+    """The audit decision, as a test rather than a comment (design report §8). ``AuditAction``
+    has no member that states an owner's own visibility change truthfully, so this endpoint
+    writes none — and hiding is not a revocation, so no grant moves either. If someone later
+    routes this through ``consent.enforce``, this is what fails."""
+    record_id = _own_record(client, actors)
+    before = _side_effect_counts(db_engine)
+
+    _set_hidden(client, actors, record_id, True)
+    _set_hidden(client, actors, record_id, False)
+    _set_hidden(client, actors, record_id, True)
+
+    assert _side_effect_counts(db_engine) == before
+
+
+def test_a_hidden_record_stays_in_its_owners_listing_and_says_so(
+    client: TestClient, actors: Actors
+) -> None:
+    """The owner must keep seeing what they hid, or hiding would be a one-way door. The
+    listing carries the flag too, so the badge does not need a per-row detail read."""
+    record_id = _own_record(client, actors)
+    _set_hidden(client, actors, record_id, True)
+
+    (item,) = client.get(RECORDS, headers=actors.patient).json()["items"]
+
+    assert item["id"] == record_id
+    assert item["isHidden"] is True
+    assert client.get(f"{RECORDS}/{record_id}", headers=actors.patient).status_code == 200
+    assert (
+        client.post(f"{RECORDS}/{record_id}/download-url", headers=actors.patient).status_code
+        == 200
+    )
+
+
+def test_hiding_does_not_disturb_search_filtering_sorting_or_paging(
+    client: TestClient, actors: Actors
+) -> None:
+    """Visibility is not a query dimension in this slice: every listing control returns
+    exactly what it returned before, hidden rows included and in the same places."""
+    oldest = _own_record(client, actors, categoryCode="CBC", dateOfService="2024-01-01")
+    middle = _own_record(client, actors, categoryCode="MRI", dateOfService="2025-01-01")
+    newest = _own_record(client, actors, categoryCode="CBC", dateOfService="2026-01-01")
+
+    def ids(**params: str | int) -> list[str]:
+        response = client.get(RECORDS, params=params, headers=actors.patient)
+        assert response.status_code == 200, response.text
+        return [item["id"] for item in response.json()["items"]]
+
+    before = {
+        "default": ids(),
+        "oldest": ids(sort="oldest"),
+        "category": ids(category="CBC"),
+        "search": ids(search="Routine"),
+    }
+    assert before["default"] == [newest, middle, oldest]
+
+    _set_hidden(client, actors, middle, True)
+
+    assert ids() == before["default"]
+    assert ids(sort="oldest") == before["oldest"]
+    assert ids(category="CBC") == before["category"]
+    assert ids(category="MRI") == [middle]
+    assert ids(search="Routine") == before["search"]
+
+    # And the cursor still walks the whole sequence exactly once, hidden row included.
+    walked: list[str] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, str | int] = {"limit": 1}
+        if cursor is not None:
+            params["cursor"] = cursor
+        page = client.get(RECORDS, params=params, headers=actors.patient).json()
+        walked.extend(item["id"] for item in page["items"])
+        cursor = page["nextCursor"]
+        if cursor is None:
+            break
+    assert walked == [newest, middle, oldest]

@@ -31,6 +31,7 @@ const RECORD: RecordMetadata = {
   contentType: "application/pdf",
   sizeBytes: 2_400_000,
   processingStatus: "UPLOADED",
+  isHidden: false,
   uploadedByHospital: { hid: "HID-0001", name: "Tata Main Hospital" },
   createdAt: "2026-09-04T09:30:00Z",
 };

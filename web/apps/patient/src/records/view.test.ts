@@ -12,10 +12,17 @@ import {
   NO_DESCRIPTION,
   searchParam,
   SORT_OPTIONS,
+  applyVisibility,
+  applyVisibilityTo,
+  HIDE_ACTION,
+  HIDING_LABEL,
   providerLabel,
   recordDescription,
   recordTitle,
   todayIsoDate,
+  UNHIDE_ACTION,
+  UNHIDING_LABEL,
+  visibilityActionLabel,
 } from "./view";
 
 const RECORD: RecordMetadata = {
@@ -29,6 +36,7 @@ const RECORD: RecordMetadata = {
   contentType: "application/pdf",
   sizeBytes: 248_000,
   processingStatus: "UPLOADED",
+  isHidden: false,
   uploadedByHospital: { hid: "HID-0001", name: "TMH Jamshedpur" },
   createdAt: "2026-08-24T10:00:00Z",
 };
@@ -113,4 +121,57 @@ test("today is a local calendar date the upload form can use as its ceiling", ()
   expect(today).toBe(
     `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, "0")}-${`${now.getDate()}`.padStart(2, "0")}`,
   );
+});
+
+test("the action names what pressing it will do, not the state the record is in", () => {
+  expect(visibilityActionLabel(false, false)).toBe(HIDE_ACTION);
+  expect(visibilityActionLabel(true, false)).toBe(UNHIDE_ACTION);
+});
+
+test("while a change is in flight the label says which way it is going", () => {
+  expect(visibilityActionLabel(false, true)).toBe(HIDING_LABEL);
+  expect(visibilityActionLabel(true, true)).toBe(UNHIDING_LABEL);
+});
+
+test("an empty overlay leaves the listing exactly as the API sent it", () => {
+  const records = [withRecord({ id: "a" }), withRecord({ id: "b" })];
+
+  expect(applyVisibility(records, new Map())).toBe(records);
+});
+
+test("an overlay changes the record it names and no other", () => {
+  const records = [withRecord({ id: "a" }), withRecord({ id: "b" })];
+
+  const applied = applyVisibility(records, new Map([["a", true]]));
+
+  expect(applied.map((record) => [record.id, record.isHidden])).toEqual([
+    ["a", true],
+    ["b", false],
+  ]);
+  // Untouched rows keep their identity, so React re-renders only what changed.
+  expect(applied[1]).toBe(records[1]);
+});
+
+test("the overlay is a rearrangement of one field and nothing else", () => {
+  const record = withRecord({ id: "a", description: "Routine full blood count." });
+
+  const applied = applyVisibilityTo(record, new Map([["a", true]]));
+
+  expect(applied).toEqual({ ...record, isHidden: true });
+  // Order and membership of the listing are the page's business, never this function's.
+  expect(applyVisibility([record], new Map([["a", true]]))).toHaveLength(1);
+});
+
+test("an overlay agreeing with the server is a no-op rather than a new object", () => {
+  const record = withRecord({ id: "a", isHidden: true });
+
+  expect(applyVisibilityTo(record, new Map([["a", true]]))).toBe(record);
+});
+
+test("an overlay naming a record that is not on the page changes nothing", () => {
+  const records = [withRecord({ id: "a" })];
+
+  const applied = applyVisibility(records, new Map([["gone", true]]));
+
+  expect(applied[0]).toBe(records[0]);
 });

@@ -15,6 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from app.core.queue import InMemoryJobQueue
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.models import User
 from app.modules.consent.dependencies import RecordsStaffDirectory
@@ -29,8 +30,10 @@ from app.modules.consent.repository import (
 )
 from app.modules.consent.service import ConsentService
 from app.modules.patients.directory import PatientDirectoryService
+from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
 from app.modules.records.directory import staff_directory
+from app.modules.records.errors import RecordNotFoundError
 from app.modules.records.fake import FakeObjectStorage
 from app.modules.records.fhir_import import RosterEntry, SyntheaImporter
 from app.modules.records.models import (
@@ -40,8 +43,17 @@ from app.modules.records.models import (
     HospitalVerificationStatus,
     MedicalRecord,
     RecordCategory,
+    RecordOrigin,
+)
+from app.modules.records.repository import (
+    DoctorRepository,
+    HospitalAdminRepository,
+    HospitalRepository,
+    MedicalRecordRepository,
+    RecordCategoryRepository,
 )
 from app.modules.records.seed import seed_reference_data
+from app.modules.records.service import RecordService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -311,5 +323,150 @@ def test_hiding_an_imported_record_removes_it_from_the_existence_projection() ->
             after = set(await records.list_category_ids_with_records(s.patient_id))
             assert s.categories["ALLERGY"] not in after
             assert after == before - {s.categories["ALLERGY"]}
+
+    asyncio.run(run())
+
+
+def _record_service(session: AsyncSession, scenario: "Scenario") -> RecordService:
+    """A real ``RecordService`` over the imported corpus, sharing the scenario's consent
+    service so the seams are the production ones rather than stand-ins."""
+    return RecordService(
+        records=MedicalRecordRepository(session),
+        categories=RecordCategoryRepository(session),
+        admins=HospitalAdminRepository(session),
+        doctors=DoctorRepository(session),
+        hospitals=HospitalRepository(session),
+        patients=PatientDirectoryService(PatientRepository(session)),
+        storage=FakeObjectStorage(),
+        queue=InMemoryJobQueue(),
+        consent=scenario.service,
+        grant_scope=scenario.service,
+        listing_auditor=scenario.service,
+        record_auditor=scenario.service,
+        presign_ttl_seconds=300,
+        max_upload_bytes=1024,
+        clock=scenario.clock,
+    )
+
+
+def test_hiding_an_imported_record_changes_visibility_and_nothing_else() -> None:
+    """The regression that matters most for a corpus of ~900 imported documents: the new
+    write path must be able to touch exactly one boolean on one row and nothing clinical.
+
+    Asserted against records that came out of the importer rather than hand-built rows,
+    because that is the data the demo runs on. Also asserts the two silences the design
+    decided on: no audit row, and no consent row.
+    """
+
+    async def run() -> None:
+        async with sqlite_session() as session:
+            s = await _scenario(session)
+            service = _record_service(session, s)
+            record = (await s.records_in("ALLERGY"))[0]
+            before = {
+                column.key: getattr(record, column.key) for column in MedicalRecord.__table__.c
+            }
+            corpus_before = [
+                (row.id, row.category_id, row.s3_key, row.date_of_service)
+                for row in (
+                    await session.execute(
+                        select(MedicalRecord).where(MedicalRecord.patient_id == s.patient_id)
+                    )
+                )
+                .scalars()
+                .all()
+            ]
+            audit_before = await s.actions()
+
+            view = await service.set_visibility(s.patient, record.id, is_hidden=True)
+            await session.flush()
+            # ``updated_at`` carries a SQL-side ``onupdate``, so the row is expired by the
+            # UPDATE and has to be re-read — which is what we want anyway: the assertions
+            # below should describe what the database holds, not what the session remembers.
+            await session.refresh(record)
+
+            assert view.record.id == record.id
+            assert view.record.is_hidden is True
+            after = {
+                column.key: getattr(record, column.key) for column in MedicalRecord.__table__.c
+            }
+            volatile = {"is_hidden", "updated_at"}
+            assert {k: v for k, v in after.items() if k not in volatile} == {
+                k: v for k, v in before.items() if k not in volatile
+            }
+
+            # The rest of the imported corpus is untouched: same rows, same keys, same dates.
+            corpus_after = [
+                (row.id, row.category_id, row.s3_key, row.date_of_service)
+                for row in (
+                    await session.execute(
+                        select(MedicalRecord).where(MedicalRecord.patient_id == s.patient_id)
+                    )
+                )
+                .scalars()
+                .all()
+            ]
+            assert sorted(corpus_after) == sorted(corpus_before)
+            assert await s.actions() == audit_before
+
+    asyncio.run(run())
+
+
+def test_an_imported_record_hidden_by_its_owner_is_restored_by_unhiding() -> None:
+    """Hiding is reversible for imported records exactly as for uploaded ones — the
+    importer's ``origin`` plays no part on either side (D1: any record the patient owns)."""
+
+    async def run() -> None:
+        async with sqlite_session() as session:
+            s = await _scenario(session)
+            service = _record_service(session, s)
+            records = MedicalRecordRepository(session)
+            record = (await s.records_in("ALLERGY"))[0]
+            assert record.origin is RecordOrigin.PATIENT_LOCKER  # what the importer writes
+
+            await service.set_visibility(s.patient, record.id, is_hidden=True)
+            await session.flush()
+            assert s.categories["ALLERGY"] not in set(
+                await records.list_category_ids_with_records(s.patient_id)
+            )
+
+            await service.set_visibility(s.patient, record.id, is_hidden=False)
+            await session.flush()
+            assert s.categories["ALLERGY"] in set(
+                await records.list_category_ids_with_records(s.patient_id)
+            )
+
+    asyncio.run(run())
+
+
+def test_one_patient_cannot_hide_another_patients_imported_record() -> None:
+    """Ownership is compared against the row, not asserted by the caller: a second patient
+    holding a real record id reaches nothing."""
+
+    async def run() -> None:
+        async with sqlite_session() as session:
+            s = await _scenario(session)
+            service = _record_service(session, s)
+            record = (await s.records_in("ALLERGY"))[0]
+
+            intruder_user = User(firebase_uid="fb-intruder", role=Role.PATIENT)
+            session.add(intruder_user)
+            await session.flush()
+            session.add(
+                Patient(
+                    user_id=intruder_user.id,
+                    health_id="PHI-IND-2026-2QE8DVR",
+                    full_name="Intruder (Demo)",
+                )
+            )
+            await session.flush()
+            intruder = AuthenticatedUser(
+                user_id=intruder_user.id, firebase_uid="fb-intruder", role=Role.PATIENT
+            )
+
+            with pytest.raises(RecordNotFoundError):
+                await service.set_visibility(intruder, record.id, is_hidden=True)
+
+            assert record.is_hidden is False
 
     asyncio.run(run())
