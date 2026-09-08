@@ -1254,6 +1254,49 @@
         "title": "PatientProfileResponse",
         "type": "object"
       },
+      "PatientProfileUpdateRequest": {
+        "additionalProperties": false,
+        "description": "A partial update of the caller's own profile.\n\nThree fields, and deliberately only three: they are the whole of what ``patients``\nstores about a person beyond their identity. ``healthId``, ``firebaseUid``, ``role``,\n``status`` and ``createdAt`` are not omitted from this model as an oversight to be\ntolerated \u2014 ``RequestModel`` forbids unknown fields, so naming one is a 422 rather than\na silently ignored key. That is the enforcement; this docstring is only the reason.\n\nValidation is not restated here. ``PatientRegistrationRequest``'s rules are reused\noutright, because a name that could not be registered must not be reachable by editing.",
+        "properties": {
+          "dateOfBirth": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dateofbirth"
+          },
+          "fullName": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fullname"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Gender"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "PatientProfileUpdateRequest",
+        "type": "object"
+      },
       "PatientRegistrationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2844,6 +2887,46 @@
           }
         },
         "summary": "Read Own Profile",
+        "tags": [
+          "patients"
+        ]
+      },
+      "patch": {
+        "description": "Update the caller's own patient profile. Partial: omitted fields are left unchanged.\n\nThree fields are editable \u2014 ``fullName``, ``dateOfBirth`` and ``gender`` \u2014 because they\nare the whole of what this module stores about a person beyond their identity. The\nHealth ID, the auth subject, the role, the account status and ``createdAt`` are not\neditable, and naming one in the body is a 422 rather than a silent no-op\n(``RequestModel`` forbids unknown fields).\n\n``dateOfBirth`` and ``gender`` are nullable, so an explicit ``null`` clears them; an\nomitted key leaves them alone. An empty body is refused: answering 200 to a request\nthat named no field would report an edit that did not happen.\n\n**There is no patient id in the path.** Scope comes from the token, exactly as\n``GET /me`` does, so editing another patient's profile is not expressible.\n\nRoles: PATIENT (ADR-013 layer 1 + own-profile relationship by construction).\nFailure modes: 401, 403 (wrong role / unprovisioned), 404 (no profile row),\n422 (validation, unknown or immutable field, empty body).",
+        "operationId": "update_own_profile_api_v1_patients_me_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatientProfileUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatientProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Own Profile",
         "tags": [
           "patients"
         ]

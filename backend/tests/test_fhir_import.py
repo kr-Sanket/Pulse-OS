@@ -310,3 +310,91 @@ def test_the_canonical_demo_patient_is_first_and_stable() -> None:
     assert canonical.expected_name == "Joaquin141 Rice937"
     assert canonical.health_id == "PHI-IND-2026-J0TA0DK"
     assert canonical.email == "joaquin141.rice937@synthea.pulseos.test"
+
+
+# -- profile editing must not disturb imported clinical data ------------------------------
+
+
+def test_editing_an_imported_patients_profile_leaves_their_records_intact() -> None:
+    """The Joaquin case. A Synthea patient linked to a real Firebase account edits their
+    name, date of birth and gender.
+
+    Clinical data hangs off ``patients.id``, which no profile edit assigns, so the records
+    must be untouched — but that is an argument, and this is the check. The Health ID and
+    the owning user must survive too: the first is what a hospital looks the patient up by,
+    the second is what the identity link rewrote.
+    """
+
+    async def scenario() -> None:
+        from datetime import date
+
+        from app.modules.auth.accounts import UserAccountService
+        from app.modules.auth.fake import FakeAuthProvider
+        from app.modules.auth.repository import UserRepository
+        from app.modules.patients.models import Gender
+        from app.modules.patients.service import PatientService
+
+        async with sqlite_session() as session:
+            storage = await _prepare(session)
+            await SyntheaImporter(session, storage=storage).import_bundle(FIXTURE_ENTRY, raw())
+
+            patients_repo = PatientRepository(session)
+            patient = await patients_repo.get_by_health_id(FIXTURE_ENTRY.health_id)
+            assert patient is not None
+            patient_id, health_id, user_id = patient.id, patient.health_id, patient.user_id
+            before = {record.id: record.s3_key for record in await _records(session)}
+            assert len(before) == 7
+
+            service = PatientService(
+                accounts=UserAccountService(UserRepository(session), FakeAuthProvider()),
+                patients=patients_repo,
+            )
+            updated = await service.update_profile(
+                user_id,
+                full_name="Joaquin Rice",
+                date_of_birth=date(1962, 8, 27),
+                gender=Gender.MALE,
+            )
+
+            assert updated.full_name == "Joaquin Rice"
+            # Identity is untouched by an edit.
+            assert updated.id == patient_id
+            assert updated.health_id == health_id
+            assert updated.user_id == user_id
+            # And every imported record still belongs to them, unchanged.
+            after = {record.id: record.s3_key for record in await _records(session)}
+            assert after == before
+            assert all(record.patient_id == patient_id for record in await _records(session))
+            assert len(storage.objects) == len(after)
+
+    asyncio.run(scenario())
+
+
+def test_a_profile_edit_creates_no_consent_or_audit_rows() -> None:
+    """This slice adds no audit action (the approved scope), so an edit must leave the
+    trail exactly as it was — not write a row that no vocabulary member describes."""
+
+    async def scenario() -> None:
+        from app.modules.auth.accounts import UserAccountService
+        from app.modules.auth.fake import FakeAuthProvider
+        from app.modules.auth.repository import UserRepository
+        from app.modules.consent.models import AuditLog, ConsentGrant, ConsentRequest
+        from app.modules.patients.service import PatientService
+
+        async with sqlite_session() as session:
+            storage = await _prepare(session)
+            await SyntheaImporter(session, storage=storage).import_bundle(FIXTURE_ENTRY, raw())
+            patients_repo = PatientRepository(session)
+            patient = await patients_repo.get_by_health_id(FIXTURE_ENTRY.health_id)
+            assert patient is not None
+
+            service = PatientService(
+                accounts=UserAccountService(UserRepository(session), FakeAuthProvider()),
+                patients=patients_repo,
+            )
+            await service.update_profile(patient.user_id, full_name="Renamed Patient")
+
+            for table in (AuditLog, ConsentGrant, ConsentRequest):
+                assert list((await session.execute(select(table))).scalars()) == []
+
+    asyncio.run(scenario())

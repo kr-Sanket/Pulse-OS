@@ -36,6 +36,21 @@ class PatientRepository:
         result = await self._session.execute(select(Patient).where(Patient.id.in_(patient_ids)))
         return list(result.scalars())
 
+    async def update(self, patient: Patient) -> Patient:
+        """Persist changes already applied to a loaded row.
+
+        No column list and no keyword arguments: which fields may change is a domain rule,
+        and stating it here as well would give the schema a second opinion about it. The
+        service mutates the attributes it is allowed to and this makes them durable —
+        ``updated_at`` is stamped by the ``onupdate`` on TimestampMixin, not by hand.
+
+        Unlike ``add`` there is no savepoint: this touches no unique column, so the only
+        failures available to it are ones no domain error could usefully translate.
+        """
+        self._session.add(patient)
+        await self._session.flush()
+        return patient
+
     async def add(self, patient: Patient) -> Patient:
         """Flush a new patient; the violated unique constraint decides the domain error
         (constraint names/columns are stable across Postgres and SQLite messages)."""

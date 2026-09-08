@@ -2,7 +2,8 @@
 
 import asyncio
 from collections.abc import Iterator
-from uuid import UUID
+from datetime import date
+from uuid import UUID, uuid4
 
 import pytest
 from app.modules.auth.accounts import UserAccountService
@@ -19,6 +20,7 @@ from app.modules.patients.errors import (
     RegistrationConflictError,
 )
 from app.modules.patients.health_id import generate_health_id, is_valid_health_id
+from app.modules.patients.models import Gender
 from app.modules.patients.repository import PatientRepository
 from app.modules.patients.service import PatientService
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -235,5 +237,124 @@ def test_lookup_says_nothing_about_what_the_caller_may_do() -> None:
 
             assert not hasattr(found, "permissions")
             assert found.health_id == registered.patient.health_id
+
+    asyncio.run(scenario())
+
+
+# -- profile editing --------------------------------------------------------------------
+
+
+async def _registered(
+    session: AsyncSession, provider: FakeAuthProvider
+) -> tuple[PatientService, UUID]:
+    """A registered patient, and the user id everything below is scoped by."""
+    service = _service(session, provider)
+    outcome = await service.register(
+        IDENTITY, full_name="Asha Rao", date_of_birth=date(1990, 5, 4), gender=Gender.FEMALE
+    )
+    return service, outcome.patient.user_id
+
+
+def test_an_omitted_field_is_left_alone() -> None:
+    """Partial semantics: naming one field must not blank the others."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service, user_id = await _registered(session, FakeAuthProvider())
+
+            updated = await service.update_profile(user_id, full_name="Asha Sharma")
+
+            assert updated.full_name == "Asha Sharma"
+            assert updated.date_of_birth == date(1990, 5, 4)
+            assert updated.gender is Gender.FEMALE
+
+    asyncio.run(scenario())
+
+
+def test_an_explicit_none_clears_a_nullable_field() -> None:
+    """The distinction the sentinel exists for: ``None`` is an instruction, not an absence."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service, user_id = await _registered(session, FakeAuthProvider())
+
+            updated = await service.update_profile(user_id, date_of_birth=None, gender=None)
+
+            assert updated.date_of_birth is None
+            assert updated.gender is None
+            assert updated.full_name == "Asha Rao"  # untouched
+
+    asyncio.run(scenario())
+
+
+def test_updating_nothing_changes_nothing() -> None:
+    """All three sentinels: a service call that names no field is a no-op, not a wipe."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service, user_id = await _registered(session, FakeAuthProvider())
+
+            updated = await service.update_profile(user_id)
+
+            assert updated.full_name == "Asha Rao"
+            assert updated.date_of_birth == date(1990, 5, 4)
+            assert updated.gender is Gender.FEMALE
+
+    asyncio.run(scenario())
+
+
+def test_the_identity_columns_are_never_touched_by_an_edit() -> None:
+    """The Health ID, the owning user and the creation instant are not assignable through
+    this path — there is no argument that reaches them."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service, user_id = await _registered(session, FakeAuthProvider())
+            before = await service.get_profile(user_id)
+            assert before is not None
+            health_id, patient_id, created_at = before.health_id, before.id, before.created_at
+
+            updated = await service.update_profile(
+                user_id, full_name="Renamed", date_of_birth=None, gender=Gender.OTHER
+            )
+
+            assert updated.health_id == health_id
+            assert updated.id == patient_id
+            assert updated.created_at == created_at
+            assert updated.user_id == user_id
+
+    asyncio.run(scenario())
+
+
+def test_editing_an_absent_profile_is_refused() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            service = _service(session, FakeAuthProvider())
+            with pytest.raises(PatientNotFoundError):
+                await service.update_profile(uuid4(), full_name="Nobody")
+
+    asyncio.run(scenario())
+
+
+def test_one_patients_edit_cannot_reach_another() -> None:
+    """Ownership is the signature: the row comes from the authenticated user id, and no
+    argument names a patient."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            provider = FakeAuthProvider()
+            service, first_user = await _registered(session, provider)
+            second = await service.register(
+                VerifiedToken(firebase_uid="fb-second", claims={"email": "b@example.test"}),
+                full_name="Bharat Singh",
+                date_of_birth=None,
+                gender=None,
+            )
+
+            await service.update_profile(first_user, full_name="Only Mine")
+
+            other = await service.get_profile(second.patient.user_id)
+            assert other is not None
+            assert other.full_name == "Bharat Singh"
 
     asyncio.run(scenario())

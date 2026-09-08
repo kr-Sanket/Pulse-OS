@@ -353,3 +353,30 @@ def test_the_record_listing_search_is_length_bounded() -> None:
     )
     assert constraints["maxLength"] == 100
     assert constraints["minLength"] == 1
+
+
+def test_the_patient_profile_update_is_declared_and_strict() -> None:
+    """The three editable fields, and the strictness that makes the other columns
+    unreachable: ``additionalProperties: false`` is what turns ``healthId`` in a PATCH body
+    into a 422 rather than a silently dropped key."""
+    spec = _spec()
+    assert "patch" in spec["paths"]["/api/v1/patients/me"]
+
+    schema = spec["components"]["schemas"]["PatientProfileUpdateRequest"]
+    assert set(schema["properties"]) == {"fullName", "dateOfBirth", "gender"}
+    assert schema.get("additionalProperties") is False
+    # Every field optional: PATCH semantics are partial, so nothing may be required.
+    assert schema.get("required", []) == []
+
+
+def test_the_profile_update_has_no_patient_identifier_in_its_path_or_query() -> None:
+    """Ownership comes from the token. A path or query parameter naming a patient would be
+    a way to ask about somebody else, whatever the service then did with it."""
+    operation = _spec()["paths"]["/api/v1/patients/me"]["patch"]
+    assert operation.get("parameters", []) == []
+
+
+def test_the_profile_response_shape_is_unchanged_by_editing() -> None:
+    """Reads and writes answer with the same model; adding a write must not widen it."""
+    properties = _spec()["components"]["schemas"]["PatientProfileResponse"]["properties"]
+    assert set(properties) == {"healthId", "fullName", "dateOfBirth", "gender", "createdAt"}

@@ -592,7 +592,28 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Own Profile
+         * @description Update the caller's own patient profile. Partial: omitted fields are left unchanged.
+         *
+         *     Three fields are editable — ``fullName``, ``dateOfBirth`` and ``gender`` — because they
+         *     are the whole of what this module stores about a person beyond their identity. The
+         *     Health ID, the auth subject, the role, the account status and ``createdAt`` are not
+         *     editable, and naming one in the body is a 422 rather than a silent no-op
+         *     (``RequestModel`` forbids unknown fields).
+         *
+         *     ``dateOfBirth`` and ``gender`` are nullable, so an explicit ``null`` clears them; an
+         *     omitted key leaves them alone. An empty body is refused: answering 200 to a request
+         *     that named no field would report an edit that did not happen.
+         *
+         *     **There is no patient id in the path.** Scope comes from the token, exactly as
+         *     ``GET /me`` does, so editing another patient's profile is not expressible.
+         *
+         *     Roles: PATIENT (ADR-013 layer 1 + own-profile relationship by construction).
+         *     Failure modes: 401, 403 (wrong role / unprovisioned), 404 (no profile row),
+         *     422 (validation, unknown or immutable field, empty body).
+         */
+        patch: operations["update_own_profile_api_v1_patients_me_patch"];
         trace?: never;
     };
     "/api/v1/patients/register": {
@@ -1479,6 +1500,26 @@ export interface components {
             gender: components["schemas"]["Gender"] | null;
             /** Healthid */
             healthId: string;
+        };
+        /**
+         * PatientProfileUpdateRequest
+         * @description A partial update of the caller's own profile.
+         *
+         *     Three fields, and deliberately only three: they are the whole of what ``patients``
+         *     stores about a person beyond their identity. ``healthId``, ``firebaseUid``, ``role``,
+         *     ``status`` and ``createdAt`` are not omitted from this model as an oversight to be
+         *     tolerated — ``RequestModel`` forbids unknown fields, so naming one is a 422 rather than
+         *     a silently ignored key. That is the enforcement; this docstring is only the reason.
+         *
+         *     Validation is not restated here. ``PatientRegistrationRequest``'s rules are reused
+         *     outright, because a name that could not be registered must not be reachable by editing.
+         */
+        PatientProfileUpdateRequest: {
+            /** Dateofbirth */
+            dateOfBirth?: string | null;
+            /** Fullname */
+            fullName?: string | null;
+            gender?: components["schemas"]["Gender"] | null;
         };
         /** PatientRegistrationRequest */
         PatientRegistrationRequest: {
@@ -2595,6 +2636,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PatientProfileResponse"];
+                };
+            };
+        };
+    };
+    update_own_profile_api_v1_patients_me_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatientProfileUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatientProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

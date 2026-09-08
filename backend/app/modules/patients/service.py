@@ -26,6 +26,7 @@ from app.modules.patients.errors import (
 from app.modules.patients.health_id import generate_health_id, is_valid_health_id
 from app.modules.patients.models import Gender, Patient
 from app.modules.patients.repository import PatientRepository
+from app.modules.patients.schemas import UNSET, Unset
 
 # 32^6 candidates per year — even a handful of retries means something is broken.
 _MAX_HEALTH_ID_ATTEMPTS = 8
@@ -88,6 +89,40 @@ class PatientService:
 
     async def get_profile(self, user_id: UUID) -> Patient | None:
         return await self._patients.get_by_user_id(user_id)
+
+    async def update_profile(
+        self,
+        user_id: UUID,
+        *,
+        full_name: str | Unset = UNSET,
+        date_of_birth: date | None | Unset = UNSET,
+        gender: Gender | None | Unset = UNSET,
+    ) -> Patient:
+        """Change the caller's own profile. Partial: an omitted field is left alone.
+
+        **Ownership is the signature, not a check.** The row is resolved from the
+        authenticated ``user_id`` and there is no parameter naming a patient, so editing
+        somebody else's profile is not expressible — the same shape ``get_profile`` uses.
+
+        Three fields, and the sentinel is what makes that safe: ``health_id``,
+        ``user_id`` and the timestamps are simply never assigned here, so no request shape
+        can reach them. ``UNSET`` distinguishes "not mentioned" from an explicit ``null``,
+        which for the two nullable columns is a real instruction to clear them.
+
+        ``updated_at`` advances by way of TimestampMixin's ``onupdate``; nothing here sets
+        a timestamp, and nothing here writes an audit event — a profile edit is not access
+        to a record, and ``AuditAction`` has no member that would state it truthfully.
+        """
+        patient = await self._patients.get_by_user_id(user_id)
+        if patient is None:
+            raise PatientNotFoundError()
+        if not isinstance(full_name, Unset):
+            patient.full_name = full_name
+        if not isinstance(date_of_birth, Unset):
+            patient.date_of_birth = date_of_birth
+        if not isinstance(gender, Unset):
+            patient.gender = gender
+        return await self._patients.update(patient)
 
     async def lookup_by_health_id(self, health_id: str) -> Patient:
         """Resolve a Health ID to the patient it identifies, for identity confirmation.

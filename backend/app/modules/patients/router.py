@@ -23,6 +23,7 @@ from app.modules.patients.errors import (
 from app.modules.patients.schemas import (
     PatientLookupResponse,
     PatientProfileResponse,
+    PatientProfileUpdateRequest,
     PatientRegistrationRequest,
 )
 
@@ -77,6 +78,43 @@ async def read_own_profile(
     patient = await service.get_profile(user.user_id)
     if patient is None:
         raise HTTPException(status_code=404, detail="Patient profile not found.")
+    return PatientProfileResponse.model_validate(patient)
+
+
+@router.patch("/me", response_model=PatientProfileResponse)
+async def update_own_profile(
+    body: PatientProfileUpdateRequest,
+    user: Annotated[AuthenticatedUser, Depends(RequirePatient)],
+    service: PatientServiceDep,
+) -> PatientProfileResponse:
+    """Update the caller's own patient profile. Partial: omitted fields are left unchanged.
+
+    Three fields are editable — ``fullName``, ``dateOfBirth`` and ``gender`` — because they
+    are the whole of what this module stores about a person beyond their identity. The
+    Health ID, the auth subject, the role, the account status and ``createdAt`` are not
+    editable, and naming one in the body is a 422 rather than a silent no-op
+    (``RequestModel`` forbids unknown fields).
+
+    ``dateOfBirth`` and ``gender`` are nullable, so an explicit ``null`` clears them; an
+    omitted key leaves them alone. An empty body is refused: answering 200 to a request
+    that named no field would report an edit that did not happen.
+
+    **There is no patient id in the path.** Scope comes from the token, exactly as
+    ``GET /me`` does, so editing another patient's profile is not expressible.
+
+    Roles: PATIENT (ADR-013 layer 1 + own-profile relationship by construction).
+    Failure modes: 401, 403 (wrong role / unprovisioned), 404 (no profile row),
+    422 (validation, unknown or immutable field, empty body).
+    """
+    try:
+        patient = await service.update_profile(
+            user.user_id,
+            full_name=body.full_name_change(),
+            date_of_birth=body.date_of_birth_change(),
+            gender=body.gender_change(),
+        )
+    except PatientNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Patient profile not found.") from exc
     return PatientProfileResponse.model_validate(patient)
 
 

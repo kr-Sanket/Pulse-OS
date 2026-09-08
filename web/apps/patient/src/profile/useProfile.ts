@@ -26,6 +26,11 @@ export type ProfileState =
 export interface ProfileResource {
   state: ProfileState;
   reload: () => void;
+  /** Adopt a profile the caller already has — the response from a save.
+   *
+   * Not a refetch: PATCH answers with the updated record, so re-reading would cost a round
+   * trip and could race a second edit into showing a stale value. */
+  replace: (profile: PatientProfile) => void;
 }
 
 export function useProfile(): ProfileResource {
@@ -64,5 +69,9 @@ export function useProfile(): ProfileResource {
     };
   }, [user, attempt]);
 
-  return { state, reload: () => setAttempt((count) => count + 1) };
+  return {
+    state,
+    reload: () => setAttempt((count) => count + 1),
+    replace: (profile) => setState({ status: "ready", profile }),
+  };
 }
