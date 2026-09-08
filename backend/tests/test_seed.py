@@ -49,7 +49,7 @@ def test_seed_is_idempotent_across_runs_and_sessions() -> None:
             async with factory() as session, session.begin():
                 first = await seed_reference_data(session)
                 assert first.hospitals_created == 3
-                assert first.categories_created == 10
+                assert first.categories_created == 13
                 first_hospitals, first_categories = await _snapshot(session)
 
             # Ten further runs insert nothing.
@@ -91,7 +91,9 @@ def test_seed_creates_exactly_the_documented_reference_data() -> None:
 
                 categories = (await session.execute(select(RecordCategory))).scalars().all()
                 assert {c.code for c in categories} == {code for code, _ in RECORD_CATEGORIES}
-                assert len(categories) == 10  # DOMAIN_MODEL vocabulary, nothing invented
+                assert (
+                    len(categories) == 13
+                )  # DOMAIN_MODEL vocabulary + the 3 Synthea clinical codes
         finally:
             await engine.dispose()
 
@@ -278,5 +280,8 @@ def test_documented_constants_match_the_specification() -> None:
         "PRESCRIPTION",
         "DISCHARGE_SUMMARY",
         "VACCINATION",
+        "CONDITION",
+        "PROCEDURE",
+        "ALLERGY",
         "OTHER",
     ]

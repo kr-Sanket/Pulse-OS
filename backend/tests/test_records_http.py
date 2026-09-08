@@ -392,8 +392,11 @@ def test_record_categories_listing(client: TestClient, actors: Actors) -> None:
     response = client.get(CATEGORIES, headers=actors.patient)
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 10
+    assert len(items) == 13
     assert {"code": "CBC", "displayName": "Complete Blood Count"} in items
+    # The Synthea import added three clinical codes; the portals read this list rather
+    # than hard-coding it, so publishing them needed no frontend change.
+    assert {"code": "CONDITION", "displayName": "Diagnosed Condition"} in items
     assert [i["code"] for i in items] == sorted(i["code"] for i in items)
 
 

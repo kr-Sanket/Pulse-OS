@@ -1,0 +1,171 @@
+{
+ "resourceType": "Bundle",
+ "type": "transaction",
+ "entry": [
+  {
+   "fullUrl": "urn:uuid:11111111-1111-4111-8111-111111111111",
+   "resource": {
+    "resourceType": "Patient",
+    "id": "11111111-1111-4111-8111-111111111111",
+    "text": {
+     "status": "generated",
+     "div": "<div>Fixture Testcase999 lives at 1 Test Road</div>"
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName",
+      "valueString": "Maidenname999"
+     }
+    ],
+    "identifier": [
+     {
+      "system": "https://github.com/synthetichealth/synthea",
+      "value": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     {
+      "type": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+         "code": "MR",
+         "display": "Medical Record Number"
+        }
+       ]
+      },
+      "system": "http://hospital.smarthealthit.org",
+      "value": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     {
+      "type": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+         "code": "SS",
+         "display": "Social Security Number"
+        }
+       ]
+      },
+      "system": "http://hl7.org/fhir/sid/us-ssn",
+      "value": "999-00-0001"
+     },
+     {
+      "type": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+         "code": "DL",
+         "display": "Driver's License"
+        }
+       ]
+      },
+      "system": "urn:oid:2.16.840.1.113883.4.3.25",
+      "value": "S99900001"
+     },
+     {
+      "type": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+         "code": "PPN",
+         "display": "Passport Number"
+        }
+       ]
+      },
+      "system": "http://standardhealthrecord.org/fhir/StructureDefinition/passportNumber",
+      "value": "X99900001X"
+     }
+    ],
+    "name": [
+     {
+      "use": "official",
+      "given": [
+       "Fixture999"
+      ],
+      "family": "Testcase999"
+     }
+    ],
+    "telecom": [
+     {
+      "system": "phone",
+      "value": "555-999-0001",
+      "use": "home"
+     }
+    ],
+    "gender": "male",
+    "birthDate": "1962-08-27",
+    "address": [
+     {
+      "line": [
+       "1 Test Road"
+      ],
+      "city": "Springfield",
+      "state": "Massachusetts"
+     }
+    ],
+    "maritalStatus": {
+     "text": "Married"
+    }
+   },
+   "request": {
+    "method": "POST",
+    "url": "Patient"
+   }
+  },
+  {
+   "fullUrl": "urn:uuid:55555555-5555-4555-8555-555555555555",
+   "resource": {
+    "resourceType": "Patient",
+    "id": "55555555-5555-4555-8555-555555555555",
+    "text": {
+     "status": "generated",
+     "div": "<div>Fixture Testcase999 lives at 1 Test Road</div>"
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName",
+      "valueString": "Maidenname999"
+     }
+    ],
+    "identifier": [
+     {
+      "system": "https://github.com/synthetichealth/synthea",
+      "value": "ffffffff-1111-4222-8333-444444444444"
+     }
+    ],
+    "name": [
+     {
+      "given": [
+       "Second999"
+      ],
+      "family": "Patient999"
+     }
+    ],
+    "telecom": [
+     {
+      "system": "phone",
+      "value": "555-999-0001",
+      "use": "home"
+     }
+    ],
+    "gender": "male",
+    "birthDate": "1962-08-27",
+    "address": [
+     {
+      "line": [
+       "1 Test Road"
+      ],
+      "city": "Springfield",
+      "state": "Massachusetts"
+     }
+    ],
+    "maritalStatus": {
+     "text": "Married"
+    }
+   },
+   "request": {
+    "method": "POST",
+    "url": "Patient"
+   }
+  }
+ ]
+}

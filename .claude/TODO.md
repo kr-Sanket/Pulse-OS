@@ -45,6 +45,37 @@ Ordered by dependency. Each item is demonstrable on its own.
       (including the new existence projection) but has no endpoint.
 - [ ] FE: QR identity generation + scanning (ROADMAP M4 scope).
 
+## 1b. Deferred from the Synthea import (Phase B)
+
+Phase A shipped ten pinned patients and 889 records; these are the parts deliberately left out.
+
+- [ ] BE/PO: **raw FHIR in a JSONB column + GIN index.** Phase A stores each resource as its
+      S3 object, which needs no migration and keeps the bytes behind the audited consent
+      path. A queryable column is a different decision and **needs its own ADR**: ADR-006
+      explicitly declines to run a FHIR server, and the "hybrid storage" plan the Review-1
+      slide describes is in no ADR or design doc. Only worth it once something queries FHIR
+      fields in SQL.
+- [ ] BE/FE: **a real clinical-content field.** Phase A puts the document title in
+      `original_filename` and the clinical line in `description` (OD-S2, Path 1), because
+      the patient portal renders `originalFilename` as the record heading. It is honest and
+      cost nothing, but "filename" holding a title is a semantic abuse a proper column +
+      response field + UI section would retire.
+- [ ] BE: **orphan Observations** — vital signs and loose labs with no DiagnosticReport
+      parent (100 of the canonical patient's 443). Skipped per OD-S4; would need a per-
+      Encounter vitals record and a `VITALS` category.
+- [ ] BE: `CarePlan` / `CareTeam` / `Goal` / `ImagingStudy` / `Device` — mapped to nothing.
+- [ ] BE: **Organization / Practitioner as first-class rows.** Deliberately not done: a
+      `Doctor` needs a `users` row (a fabricated identity) and a `Hospital` would pollute the
+      three-simulated-hospital demo *and* grant ADR-013 layer-2 read access to imported
+      records. Their names survive as text inside the stored FHIR.
+- [ ] BE: **full-corpus import via arq** for the other 1,170 patients; the mapping layer is
+      already pure so the worker can reuse it unchanged.
+- [ ] BE: **FHIR export** — ADR-006 promised the mapping is trivial in both directions and
+      only the import half now exists. A reviewer will notice the asymmetry.
+- [ ] BE/PO: **`SYNTHETIC_IMPORT` record origin.** Phase A reuses `PATIENT_LOCKER` (OD-S1,
+      zero ripple). A truthful value costs the backend enum + OpenAPI + client regen + the
+      exhaustive `ORIGIN_LABELS` map in `@pulseos/ui`.
+
 ## 2. Deferred M3 review findings (backend)
 
 Each is a stated security or correctness gap. M3-D is closed by ADR-024.

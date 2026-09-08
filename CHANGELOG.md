@@ -5,6 +5,57 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+### Added
+- **Synthea FHIR R4 import** (`app/modules/records/fhir_mapping.py`, `fhir_import.py`,
+  `scripts/import_synthea.py`) — ten pinned synthetic patients with **889 real clinical
+  records** between them, so the portals show a clinical history instead of an empty locker.
+  Verified end to end against live Postgres + MinIO: 889 rows created, a re-run creates 0,
+  and a presigned download returns byte-exact FHIR JSON.
+  **Three premises were checked against the data rather than assumed, and two were wrong.**
+  `Bundle.type` is `transaction` with no `meta.fhirVersion` anywhere; references are
+  `urn:uuid:` matching `entry.fullUrl`, **not** `Patient/{id}`, so resolution is
+  bundle-local; and `Patient.id` differs from the Synthea business identifier in 1,180 of
+  1,180 bundles. The canonical patient key is
+  `identifier[system=…/synthea].value`, verified unique across all 1,180 and identical to
+  both the filename UUID and the MRN in every one.
+  **Observations fold into the DiagnosticReport that claims them** (343 of the canonical
+  patient's 443 have such a parent), which is clinically right — a lab panel is the
+  document, its analytes are results — and takes that patient from 589 rows to 103.
+  Encounters are a grouping key, `Claim`/`ExplanationOfBenefit` are billing noise; neither
+  becomes a record.
+  **Idempotent by construction, not by bookkeeping:** the patient keys on a derived
+  `synthetic:patient:synthea:{id}` subject and each record on a UUIDv5, so the derived
+  `s3_key` collides on re-import and the UNIQUE constraint is what refuses the duplicate.
+  A `uuid4()` here — as the upload path uses — would have doubled every row on the second run.
+  **Consent-neutral.** It writes `medical_records` rows and objects, and nothing else: no
+  grant, no request, no audit event (0 of each for all ten imported patients on the live
+  database). Imported records enter the consent model exactly as uploaded ones do, because
+  `consent.enforce` keys on `(patient_id, category_id)` and never reads `origin` — so the
+  fear that ~900 rows become readable by any clinician merely by existing is answered by
+  eight tests over records that actually came out of the importer.
+  `origin` is `PATIENT_LOCKER` with both `uploaded_by_*` NULL (OD-S1). Attributing them to
+  a hospital would have handed that hospital ADR-013 layer-2 own-upload read access — a
+  consent bypass dressed up as a data-modelling shortcut.
+  **Prohibited identifiers are unrepresentable, then independently asserted absent.** Every
+  Synthea `Patient` carries a synthetic SSN, most a driver's licence and passport, plus a
+  foreign MRN and a phone number. The scrubber keeps an allow-list of one identifier system
+  and drops `subject`, every `reference` and every narrative `div`; then each object is
+  scanned for that patient's own secrets before it is stored, and an import that cannot
+  prove an object clean fails instead of proceeding. **All 889 objects were fetched back out
+  of MinIO and re-scanned: zero leaks.**
+  SNOMED/LOINC/RxNorm coding is preserved inside the stored object — the one thing that
+  cannot be recovered later without re-importing, and what M5's retrieval layer will need.
+  Raw FHIR lives in object storage rather than a JSONB column: it needs no migration, makes
+  Download meaningful, and stays behind the audited consent-checked `download-url` path. A
+  JSONB column remains deferred and **needs its own ADR** — ADR-006 explicitly declines to
+  run a FHIR server, and the "hybrid storage" plan exists only in a Review-1 slide.
+  Three seeded categories added — `CONDITION`, `PROCEDURE`, `ALLERGY` — as **rows in a
+  seedable table, so no migration and no frontend change**: the portals fetch the vocabulary
+  and render unknown codes as themselves. **No schema change, no API change, no client
+  regeneration, no frontend change.** 58 new backend tests (555 total, 97% coverage
+  maintained); fixtures are committed and hand-trimmed because the 1.3 GB corpus is
+  gitignored and no test may depend on it.
+
 ### Changed
 - **One shared login experience across the three portals** (`@pulseos/ui/src/components/AuthShell.tsx`).
   The three login pages were near-identical hand-written copies — the doctor's and the

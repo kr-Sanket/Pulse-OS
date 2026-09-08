@@ -49,6 +49,14 @@ RECORD_CATEGORIES: Final[tuple[tuple[str, str], ...]] = (
     ("PRESCRIPTION", "Prescription"),
     ("DISCHARGE_SUMMARY", "Discharge Summary"),
     ("VACCINATION", "Vaccination Record"),
+    # Added for the Synthea import: the vocabulary had codes for documents a hospital
+    # uploads, but none for the three clinical facts a FHIR history is mostly made of.
+    # Rows in a seedable table, not enum members, so this needed no migration and no
+    # frontend change — the portals fetch the vocabulary and render unknown codes as
+    # themselves (packages/ui/src/lib/recordCategories.ts).
+    ("CONDITION", "Diagnosed Condition"),
+    ("PROCEDURE", "Procedure"),
+    ("ALLERGY", "Allergy"),
     ("OTHER", "Other"),
 )
 
