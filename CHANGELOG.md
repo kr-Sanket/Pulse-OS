@@ -6,6 +6,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ## [Unreleased]
 
 ### Fixed
+- **The patient's audit trail attributed events to where the actor works *now*.** The page
+  read `StaffDisplayResponse.hospitalName`, which the staff projection resolves by joining
+  `doctors.hospital_id` — the present-affiliation join ADR-023 exists to refuse, arriving by
+  a different route. A clinician changing employer silently re-attributed every past access
+  in the patient's trail to their new hospital. It now reads `actorHospital`, resolved from
+  the `actor_hospital_id` recorded on the event itself (**ADR-025**). The regression test is
+  the whole decision in one assertion: an event written at hospital A by a doctor who now
+  works at hospital B reports **A** as the hospital and **B** as the actor's employer, on the
+  same row — it can only pass if the two come from different sources.
+
+### Added
+- **Audit History is grouped hospital → actor → events**, newest first at every level, with
+  per-group event counts, latest activity in each header, and expand/collapse. The most
+  recent hospital and its most recent actor open by default; everything else starts closed,
+  and the reader's choices then stick — pages loaded later never reopen a group they closed.
+  Two groups are deliberately **not** hospitals and say so: *Your own activity* (a patient
+  belongs to no organisation) and *Unattributed activity* (events predating migration 0005),
+  the latter carrying the reason. Neither is merged into a hospital and no hospital is
+  inferred for them — on live data the same clinician correctly appears in two groups, 20
+  events attributed to TMH and 34 unattributed.
+  **Grouping is a rearrangement, never a filter**, and a test asserts it: every visible event
+  appears exactly once and group counts sum to the input. Filtering runs *before* grouping,
+  so the own-activity toggle cannot leave a group counting hidden rows, and a group whose
+  events are all filtered disappears rather than rendering empty.
+- **Cursor-based Load more on the audit page.** The endpoint has always been paginated; the
+  page never sent a cursor, so the trail stopped at its first page — and once collapsed, a
+  group would have looked complete when it was not. Counts are labelled as covering the
+  events loaded so far: the API publishes no lifetime total, and presenting a page total as
+  one would misstate a compliance record.
+- `AuditEventResponse.actorHospital` (`{hid, name}`, nullable) and
+  `StaffDirectoryService.hospitals_by_id`. `StaffDisplayResponse` is **unchanged** and keeps
+  its current-affiliation meaning — "where does this person work now" is the right question
+  in the consent inbox and the wrong one in a historical log, and ADR-025 splits the two
+  rather than replacing one. No migration (the column and its index landed in 0005), no new
+  audit event, no hash change, no authorization change; `HospitalAuditEventResponse` did not
+  gain the field, pinned by test.
+
 - **Record listings were ordered by import time, not by when care happened.**
   ``created_at`` defaults to the transaction clock, so every record written in one
   transaction shares an instant and ``ORDER BY created_at DESC, id DESC`` collapsed onto

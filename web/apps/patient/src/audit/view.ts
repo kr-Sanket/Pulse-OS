@@ -40,6 +40,17 @@ export const SELF_ACTOR = ROLE_LABELS.PATIENT;
 /** No category is recorded for events that target a request rather than a record. */
 export const NO_CATEGORY = "—";
 
+/** Shown for a clinician event with no recorded hospital: every event written before
+ * attribution existed (migration 0005). Named rather than hidden, and never merged into a
+ * real hospital — inferring one would mean the present-affiliation join ADR-023 refuses. */
+export const UNATTRIBUTED_ORIGIN = "Unattributed activity";
+
+export const UNATTRIBUTED_NOTE =
+  "Historical hospital attribution is available for activity recorded since September 2026.";
+
+/** The heading for the patient's own actions. They belong to no organisation. */
+export const SELF_ORIGIN = "Your own activity";
+
 interface ActionPresentation {
   label: string;
   tone: Tone;
@@ -96,24 +107,35 @@ export interface AuditEventView {
   icon: LucideIcon;
 }
 
-/** Who the event came from, as two lines. A patient's own action is "You" with nothing
- * beneath it; hospital staff are their hospital with their name beneath. */
+/**
+ * Who the event came from, as two lines.
+ *
+ * **The origin is the hospital recorded on the event, never the actor's current employer**
+ * (ADR-025). `actor.hospitalName` is the staff projection's answer to "where does this
+ * person work now" — the right question in the consent inbox, the wrong one in a
+ * historical log, where it would move a clinician's past activity to a new hospital the
+ * day they changed jobs. This page used to read that field; it no longer does.
+ *
+ * An event with no recorded hospital says so rather than borrowing one.
+ */
 export function originOf(event: AuditEvent): { origin: string; actor: string | null } {
   if (event.actorRole === "PATIENT") {
     return { origin: SELF_ACTOR, actor: null };
   }
+  return { origin: event.actorHospital?.name ?? UNATTRIBUTED_ORIGIN, actor: actorNameOf(event) };
+}
+
+/** The person, as the trail can name them. Null when it knows no name — the role label
+ * already stands in for the origin in that case. */
+export function actorNameOf(event: AuditEvent): string | null {
   const actor = event.actor;
   if (actor === null) {
-    return { origin: ROLE_LABELS[event.actorRole], actor: null };
+    return null;
   }
   const specialty = actor.specialty?.trim();
-  return {
-    origin: actor.hospitalName,
-    actor:
-      specialty === undefined || specialty.length === 0
-        ? actor.fullName
-        : `${actor.fullName} · ${specialty}`,
-  };
+  return specialty === undefined || specialty.length === 0
+    ? actor.fullName
+    : `${actor.fullName} · ${specialty}`;
 }
 
 /** 64 hex characters is unreadable; the ends are enough to compare two rows by eye. */
@@ -192,6 +214,171 @@ export function filterAuditEntries(
  * the difference between "nothing has happened" and "nothing has happened *to you*". */
 export function countOwnRecordAccess(events: readonly AuditEvent[]): number {
   return events.filter(isOwnRecordAccess).length;
+}
+
+// -- grouping --------------------------------------------------------------------------
+//
+// Origin → actor → events, so a patient can answer "who has been in my records" without
+// reading every row. Three rules hold the structure honest:
+//
+//   * **Grouping happens after filtering, never before.** The own-activity toggle decides
+//     which events exist for this render; groups are built from exactly those. A hidden row
+//     can therefore never inflate a count or conjure a group that has nothing in it.
+//   * **Every visible event lands in exactly one group.** Nothing is merged for tidiness and
+//     nothing is dropped; `groupedEventCount` exists so a test can assert that against the
+//     input length rather than trusting it.
+//   * **Counts describe the events loaded so far**, not the patient's whole history. The API
+//     publishes no total, so presenting one would be a fiction — the page says "so far".
+
+/** Which kind of heading an origin group is. Only `hospital` is an organisation. */
+export type OriginKind = "hospital" | "self" | "unattributed";
+
+export interface ActorGroup {
+  /** `actorUserId` — stable, and already on every row. */
+  key: string;
+  name: string;
+  eventCount: number;
+  /** ISO instant of this group's most recent event, for the header. */
+  latestAt: string;
+  events: readonly AuditEventView[];
+}
+
+export interface OriginGroup {
+  /** The hospital's `hid`, or the sentinel for the two non-hospital groups. */
+  key: string;
+  kind: OriginKind;
+  title: string;
+  eventCount: number;
+  latestAt: string;
+  actors: readonly ActorGroup[];
+}
+
+export const SELF_GROUP_KEY = "self";
+export const UNATTRIBUTED_GROUP_KEY = "unattributed";
+
+/** Which group an event belongs to, and why. A patient's own action is theirs before it is
+ * anything else — they have no hospital, so no other branch could claim it. */
+export function originKeyOf(event: AuditEvent): { key: string; kind: OriginKind; title: string } {
+  if (event.actorRole === "PATIENT") {
+    return { key: SELF_GROUP_KEY, kind: "self", title: SELF_ORIGIN };
+  }
+  const hospital = event.actorHospital;
+  if (hospital === null) {
+    return { key: UNATTRIBUTED_GROUP_KEY, kind: "unattributed", title: UNATTRIBUTED_ORIGIN };
+  }
+  return { key: hospital.hid, kind: "hospital", title: hospital.name };
+}
+
+/**
+ * Build the origin → actor → event tree over the events currently visible.
+ *
+ * The input is already newest-first and insertion order is preserved throughout, so events
+ * within an actor stay in the order the API returned them. Groups are then ordered by their
+ * own most recent event, which is what makes the first thing on the page the last thing
+ * that happened.
+ */
+export function groupAuditEvents(
+  events: readonly AuditEvent[],
+  labels: ReadonlyMap<string, string>,
+): readonly OriginGroup[] {
+  const origins = new Map<
+    string,
+    { kind: OriginKind; title: string; actors: Map<string, ActorGroup> }
+  >();
+
+  for (const event of events) {
+    const origin = originKeyOf(event);
+    let bucket = origins.get(origin.key);
+    if (bucket === undefined) {
+      bucket = { kind: origin.kind, title: origin.title, actors: new Map() };
+      origins.set(origin.key, bucket);
+    }
+    const actorKey = event.actorUserId;
+    const existing = bucket.actors.get(actorKey);
+    const view = toEventView(event, labels);
+    if (existing === undefined) {
+      bucket.actors.set(actorKey, {
+        key: actorKey,
+        name: actorLabelOf(event),
+        eventCount: 1,
+        latestAt: event.occurredAt,
+        events: [view],
+      });
+      continue;
+    }
+    bucket.actors.set(actorKey, {
+      ...existing,
+      eventCount: existing.eventCount + 1,
+      latestAt: laterOf(existing.latestAt, event.occurredAt),
+      events: [...existing.events, view],
+    });
+  }
+
+  const groups = [...origins.entries()].map(([key, bucket]) => {
+    const actors = [...bucket.actors.values()].sort(byLatestDescending);
+    return {
+      key,
+      kind: bucket.kind,
+      title: bucket.title,
+      eventCount: actors.reduce((total, actor) => total + actor.eventCount, 0),
+      latestAt: actors.reduce(
+        (latest, actor) => laterOf(latest, actor.latestAt),
+        actors[0]?.latestAt ?? "",
+      ),
+      actors,
+    };
+  });
+  return groups.sort(byLatestDescending);
+}
+
+/** How an actor is headed inside a group: their name, or the role the trail recorded when
+ * it knows none. Never blank — a nameless heading would read as a rendering fault. */
+function actorLabelOf(event: AuditEvent): string {
+  if (event.actorRole === "PATIENT") {
+    return SELF_ACTOR;
+  }
+  return actorNameOf(event) ?? ROLE_LABELS[event.actorRole];
+}
+
+function laterOf(a: string, b: string): string {
+  return b > a ? b : a;
+}
+
+function byLatestDescending(a: { latestAt: string }, b: { latestAt: string }): number {
+  return a.latestAt < b.latestAt ? 1 : a.latestAt > b.latestAt ? -1 : 0;
+}
+
+/** Total events across the tree — the invariant a test compares against the input length. */
+export function groupedEventCount(groups: readonly OriginGroup[]): number {
+  return groups.reduce((total, group) => total + group.eventCount, 0);
+}
+
+/**
+ * Which groups start open: the most recent origin, and the most recent actor inside it.
+ *
+ * Computed once from the first grouping the page sees and then left alone — recomputing as
+ * pages load would reopen groups the reader had deliberately closed, and Load more must not
+ * rearrange the page under them.
+ */
+export function initialExpansion(groups: readonly OriginGroup[]): {
+  origins: readonly string[];
+  actors: readonly string[];
+} {
+  const first = groups[0];
+  if (first === undefined) {
+    return { origins: [], actors: [] };
+  }
+  const actor = first.actors[0];
+  return {
+    origins: [first.key],
+    actors: actor === undefined ? [] : [actorPath(first.key, actor.key)],
+  };
+}
+
+/** Actor keys are only unique inside their origin — the same clinician can appear under two
+ * hospitals once they have worked at both. */
+export function actorPath(originKey: string, actorKey: string): string {
+  return `${originKey}/${actorKey}`;
 }
 
 /** Copy for the state where the filter leaves the timeline empty. */

@@ -765,6 +765,51 @@ are per bucket per user per window, and shared across API workers because Redis 
 
 ---
 
+## ADR-025 — The patient's audit trail attributes events to the hospital recorded on them
+
+**Date:** 2026-09-08 · **Status:** Accepted (M4) · **Extends:** ADR-023
+
+**Context:** ADR-023 captured `actor_hospital_id` at write time precisely so history would not
+move when staff transfer, and used it to scope the hospital's own audit view. The patient's
+view never received it. Instead the frontend rendered each event's origin from
+`StaffDisplayResponse.hospitalName` — the actor's **current** affiliation, resolved by joining
+`doctors.hospital_id`. That is the exact join ADR-023 exists to refuse, arriving by a different
+route: a clinician changing jobs would silently re-attribute every past access in the patient's
+trail to their new employer. Grouping the page by organisation would have promoted that from a
+per-row mislabel to the page's primary structure.
+
+**Decision:**
+
+1. **`AuditEventResponse.actorHospital` (`{hid, name}`, nullable)**, resolved from the event's
+   own `actor_hospital_id` via a batched lookup beside the existing actor projection. `hid`
+   because grouping needs a stable key and a name is not one. Null has two truthful causes and
+   no fallback: a patient acted (they belong to no organisation), or the event predates
+   migration 0005. **Never substitute the actor's present hospital for either.**
+
+2. **`StaffDisplayResponse` is unchanged and keeps its current-affiliation meaning.** The two
+   answer different questions and both are needed: "where does this person work now" is what a
+   patient weighs when granting access in the consent inbox; "which organisation did this" is
+   what a historical log must say. Splitting them is the decision — not replacing one with the
+   other.
+
+3. **The patient UI groups on `actorHospital` only.** Events with none form a named
+   *Unattributed activity* group; patient-actor events form *Your own activity*. Neither is
+   merged into a hospital, and no hospital is inferred for them.
+
+4. **No schema change, no new event, no hash change.** The column and its index landed in
+   0005; `actor_hospital_id` is already inside the v2 hashed payload, and this adds a response
+   field only. ADR-019's reserved v3 keccak transition is untouched.
+
+**Why:** an audit trail that rewrites who accessed what, whenever someone changes employer, is
+not evidence. The truthful column already existed and was already indexed; only the patient's
+projection was missing it.
+
+**Consequence:** the hospital named against pre-0005 events disappears from the patient's view,
+replaced by an honest "unattributed". That is a visible regression in coverage and a correction
+in accuracy — the previous value was a guess. Attribution is complete from September 2026.
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.

@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 
 import type { PulseOSClient } from "@pulseos/api-client";
 
-import { listAuditEvents } from "./api";
+import { AUDIT_PAGE_SIZE, listAuditEvents } from "./api";
 
 interface StubResult {
   data?: unknown;
@@ -20,16 +20,31 @@ function stubClient(result: StubResult | Error) {
 const SIGNAL = new AbortController().signal;
 const PAGE = { items: [], nextCursor: null };
 
-test("the trail is fetched as a full page", async () => {
+test("the trail is fetched a page at a time, with no cursor on the first request", async () => {
   const { client, call } = stubClient({ data: PAGE, response: { status: 200 } });
 
   const result = await listAuditEvents(client, SIGNAL);
 
   expect(result).toEqual({ status: "ready", data: PAGE });
   expect(call).toHaveBeenCalledWith("/api/v1/audit-logs", {
-    params: { query: { limit: 100 } },
+    params: { query: { limit: AUDIT_PAGE_SIZE, cursor: undefined } },
     signal: SIGNAL,
   });
+});
+
+test("a cursor is forwarded so Load more continues the trail", async () => {
+  const { client, call } = stubClient({ data: PAGE, response: { status: 200 } });
+
+  await listAuditEvents(client, SIGNAL, "opaque-token");
+
+  expect(call).toHaveBeenCalledWith("/api/v1/audit-logs", {
+    params: { query: { limit: AUDIT_PAGE_SIZE, cursor: "opaque-token" } },
+    signal: SIGNAL,
+  });
+});
+
+test("the page size is well under the API cap, because the page now pages", () => {
+  expect(AUDIT_PAGE_SIZE).toBeLessThan(100);
 });
 
 test("an RFC 7807 detail is preferred over any wording of ours", async () => {

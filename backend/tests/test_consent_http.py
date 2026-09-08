@@ -507,6 +507,7 @@ def test_the_trail_returns_the_patients_events_with_stored_identifiers(world: Wo
         "actorUserId",
         "actorRole",
         "actor",
+        "actorHospital",
         "targetRecordId",
         "targetCategoryCode",
         "targetRequestId",
@@ -521,6 +522,9 @@ def test_the_trail_returns_the_patients_events_with_stored_identifiers(world: Wo
     assert asked["actorUserId"] == str(world.doctor_user_id)
     assert asked["targetRequestId"] == request_id
     assert len(asked["eventHash"]) == 64
+    # ADR-025: the organisation comes from the event, and a patient's own action has none.
+    assert approval["actorHospital"] is None
+    assert asked["actorHospital"] == {"hid": "HID-0001", "name": "TMH"}
     # The clinician who asked is named; the patient's own decision is not — actorRole
     # already says it was them, and this module knows no name for a patient.
     assert asked["actor"] == {"fullName": "Dr Verma", "specialty": None, "hospitalName": "TMH"}
@@ -796,6 +800,7 @@ def test_openapi_schemas_are_camel_case_and_paginated(consent_app: FastAPI) -> N
         "actorUserId",
         "actorRole",
         "actor",
+        "actorHospital",
         "targetRecordId",
         "targetCategoryCode",
         "targetRequestId",

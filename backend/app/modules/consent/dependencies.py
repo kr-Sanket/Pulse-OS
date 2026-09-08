@@ -60,6 +60,7 @@ from app.modules.consent.service import (
     Clinician,
     ClinicianDirectory,
     ConsentService,
+    OrganizationDisplay,
     PersonDisplay,
     StaffDirectory,
 )
@@ -231,6 +232,14 @@ class RecordsStaffDirectory:
 
     async def hospital_names(self, hospital_ids: Collection[UUID]) -> Mapping[UUID, str]:
         return await self._directory.hospital_names(hospital_ids)
+
+    async def hospitals_by_id(
+        self, hospital_ids: Collection[UUID]
+    ) -> Mapping[UUID, OrganizationDisplay]:
+        return {
+            key: OrganizationDisplay(hid=display.hid, name=display.name)
+            for key, display in (await self._directory.hospitals_by_id(hospital_ids)).items()
+        }
 
     async def administered_hospital_id(self, user_id: UUID) -> UUID | None:
         return await self._directory.administered_hospital_id(user_id)

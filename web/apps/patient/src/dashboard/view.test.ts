@@ -74,6 +74,10 @@ const EVENT: AuditEvent = {
   actorUserId: "user-1",
   actorRole: "DOCTOR",
   actor: { fullName: "Dr Meera Sharma", specialty: "Cardiology", hospitalName: "Apollo" },
+  // The hospital the event was attributed to when written, which is what the trail groups
+  // on. Deliberately *not* the same as `actor.hospitalName` above: the fixtures disagree so
+  // that any test reading the wrong one fails (ADR-025).
+  actorHospital: { hid: "HID-0001", name: "TMH Jamshedpur" },
   targetRecordId: "rec-1",
   targetCategoryCode: "CBC",
   targetRequestId: null,
@@ -103,7 +107,9 @@ test("recent records are styled exactly as the Records page styles them", () => 
 test("recent activity reuses the audit vocabulary rather than restating it", () => {
   const [entry] = toActivityEntries([EVENT], LABELS, NOW);
 
-  expect(entry?.title).toBe("Apollo");
+  // The recorded hospital, like the audit page — the dashboard summarises the same trail
+  // and must not name a different organisation for the same event (ADR-025).
+  expect(entry?.title).toBe("TMH Jamshedpur");
   expect(entry?.description).toBe("Dr Meera Sharma · Cardiology · Complete Blood Count");
   expect(entry?.badgeLabel).toBe("Viewed");
   expect(entry?.timestamp).toBe("2 hours ago");

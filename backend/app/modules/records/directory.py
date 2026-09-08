@@ -66,6 +66,22 @@ class StaffDisplay:
     hospital_name: str
 
 
+@dataclass(frozen=True, slots=True)
+class HospitalDisplay:
+    """An organisation as a patient may be shown one: the identifier they already see on
+    their records, and its name.
+
+    Distinct from ``StaffDisplay.hospital_name`` and not interchangeable with it.
+    ``StaffDisplay`` answers "where does this person work **now**", which is what a patient
+    weighing a consent request needs. This answers "which organisation is this", and the
+    caller supplies the id — so an audit trail can name the hospital an event was
+    *attributed to at the time* (ADR-023) instead of the actor's present employer.
+    """
+
+    hid: str
+    name: str
+
+
 class StaffDirectoryService:
     """Display names for the staff a patient-facing listing refers to.
 
@@ -136,6 +152,20 @@ class StaffDirectoryService:
         """Hospital display names by id — an organisation is public as its name alone."""
         hospitals = await self._hospitals.list_by_ids(hospital_ids)
         return {hospital.id: hospital.name for hospital in hospitals}
+
+    async def hospitals_by_id(self, hospital_ids: Collection[UUID]) -> dict[UUID, HospitalDisplay]:
+        """Organisations keyed by id, with the identifier a patient already sees on records.
+
+        A sibling of ``hospital_names`` rather than a replacement: that one serves a caller
+        that has only ever needed a label, and widening its return type would make every
+        consumer restate a field it does not use. This one exists because a *grouped* view
+        needs a stable key — a name is not one, and two organisations may share it.
+        """
+        hospitals = await self._hospitals.list_by_ids(hospital_ids)
+        return {
+            hospital.id: HospitalDisplay(hid=hospital.hid, name=hospital.name)
+            for hospital in hospitals
+        }
 
 
 def _clinician_display(doctor: Doctor, hospital: Hospital) -> StaffDisplay:

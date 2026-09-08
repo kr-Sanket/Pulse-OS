@@ -241,21 +241,46 @@ def test_hospital_audit_response_discloses_activity_not_patients() -> None:
 
 def test_the_patient_audit_contract_is_unchanged_by_the_hospital_view() -> None:
     """Two scopes over one table; the patient's response shape must not drift because a
-    hospital gained its own."""
-    properties = _spec()["components"]["schemas"]["AuditEventResponse"]["properties"]
+    hospital gained its own.
 
-    assert set(properties) == {
+    ``actorHospital`` was added deliberately by ADR-025 — the historical attribution the
+    patient's trail groups on. It is the patient projection only: the assertion below that
+    the hospital's own response did *not* acquire it is the half that still guards ADR-023's
+    separation.
+    """
+    schemas = _spec()["components"]["schemas"]
+
+    assert set(schemas["AuditEventResponse"]["properties"]) == {
         "id",
         "action",
         "actorUserId",
         "actorRole",
         "actor",
+        "actorHospital",
         "targetRecordId",
         "targetCategoryCode",
         "targetRequestId",
         "occurredAt",
         "eventHash",
     }
+    # The hospital reads its own activity; every row already has its hospital, and
+    # publishing one per row would be noise at best (ADR-023 §5).
+    assert "actorHospital" not in schemas["HospitalAuditEventResponse"]["properties"]
+
+
+def test_the_audit_hospital_is_the_public_organisation_pair() -> None:
+    """``hid`` and ``name`` — the same shape a patient already sees against every record,
+    and nothing that would turn an organisation into a profile."""
+    properties = _spec()["components"]["schemas"]["AuditHospitalResponse"]["properties"]
+    assert set(properties) == {"hid", "name"}
+
+
+def test_the_staff_projection_still_carries_the_current_affiliation() -> None:
+    """ADR-025 splits two questions rather than replacing one. ``StaffDisplayResponse`` is
+    still where "where does this person work now" is answered, for the consent inbox and
+    the grants list; the audit trail simply stops using it for attribution."""
+    properties = _spec()["components"]["schemas"]["StaffDisplayResponse"]["properties"]
+    assert set(properties) == {"fullName", "specialty", "hospitalName"}
 
 
 def test_the_four_rate_limited_endpoints_declare_429() -> None:

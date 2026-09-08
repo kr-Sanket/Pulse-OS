@@ -16,8 +16,8 @@ import { Download } from "lucide-react";
 import { AuditActivityToggle } from "@/components/audit/AuditActivityToggle";
 import { AuditEmptyState } from "@/components/audit/AuditEmptyState";
 import { AuditInfoCard } from "@/components/audit/AuditInfoCard";
+import { AuditOriginGroup } from "@/components/audit/AuditOriginGroup";
 import { AuditSummaryCard } from "@/components/audit/AuditSummaryCard";
-import { AuditTimelineItem } from "@/components/audit/AuditTimelineItem";
 import { AuditTimelineSkeleton } from "@/components/audit/AuditTimelineSkeleton";
 import { ErrorState } from "@/components/common/ErrorState";
 import { Badge, Button } from "@pulseos/ui";
@@ -26,7 +26,6 @@ import { useAudit } from "@/audit/useAudit";
 
 export function AuditPage() {
   const trail = useAudit();
-  const lastIndex = trail.events.length - 1;
 
   return (
     <div className="space-y-10">
@@ -66,22 +65,47 @@ export function AuditPage() {
               </h3>
               <Badge variant="info">{trail.events.length}</Badge>
             </div>
-            {trail.events.length === 0 ? (
+            {trail.groups.length === 0 ? (
               <AuditEmptyState
                 hiddenCount={trail.hiddenOwnActivity}
                 onShowOwnActivity={() => trail.setShowOwnActivity(true)}
               />
             ) : (
-              <ol>
-                {trail.events.map((event, index) => (
-                  <AuditTimelineItem key={event.id} event={event} isLast={index === lastIndex} />
+              <div className="space-y-4">
+                {trail.groups.map((group) => (
+                  <AuditOriginGroup
+                    key={group.key}
+                    group={group}
+                    expanded={trail.isOriginExpanded(group.key)}
+                    onToggle={() => trail.toggleOrigin(group.key)}
+                    isActorExpanded={(actorKey) => trail.isActorExpanded(group.key, actorKey)}
+                    onToggleActor={(actorKey) => trail.toggleActor(group.key, actorKey)}
+                  />
                 ))}
-              </ol>
+              </div>
             )}
             {trail.truncated ? (
-              <p className="text-muted-foreground text-xs">
-                Showing the {trail.pageSize} most recent events. Older ones are not listed yet.
-              </p>
+              <div className="space-y-2">
+                {/* Counts above describe what has been loaded. The API publishes no
+                    lifetime total, so the page says "so far" rather than implying one. */}
+                <p className="text-muted-foreground text-xs">
+                  Counts cover the {trail.events.length} events loaded so far. Older activity is not
+                  listed yet.
+                </p>
+                <Button
+                  variant="outline"
+                  className="w-full justify-center"
+                  onClick={trail.loadMore}
+                  disabled={trail.loadingMore}
+                >
+                  {trail.loadingMore ? "Loading…" : "Load more activity"}
+                </Button>
+                {trail.moreMessage === null ? null : (
+                  <p role="alert" className="text-destructive text-xs leading-relaxed">
+                    {trail.moreMessage}
+                  </p>
+                )}
+              </div>
             ) : null}
           </section>
 

@@ -1404,3 +1404,96 @@ def test_the_hospital_listing_keyset_walks_without_repeating() -> None:
             assert {row.id for row in first}.isdisjoint({row.id for row in second})
 
     asyncio.run(scenario())
+
+
+# -- ADR-025: the patient's trail groups on the historical hospital ------------------------
+
+
+def test_the_patient_trail_reports_the_hospital_recorded_on_the_event() -> None:
+    """**The regression test for ADR-025.**
+
+    A clinician raises a request while employed at hospital A, then transfers to hospital
+    B. The patient's trail must still attribute that event to **A**.
+
+    The test deliberately asserts both halves. ``hospital`` is the historical attribution
+    read from ``actor_hospital_id``; ``actor.hospital_name`` is the *current* affiliation the
+    staff projection resolves, and it genuinely says **B** afterwards. Asserting only the
+    first would pass even if the two were the same value; asserting both proves the response
+    distinguishes them, which is the entire decision.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            original = h.clinicians.by_user_id[h.doctor.user_id]
+            request_id = await _request(h, "CBC")
+
+            elsewhere = Hospital(
+                hid="HID-8888",
+                name="Elsewhere General",
+                verification_status=HospitalVerificationStatus.VERIFIED,
+            )
+            session.add(elsewhere)
+            await session.flush()
+
+            # Move the real Doctor row: the staff projection joins `doctors.hospital_id`,
+            # so this is what makes the "current" answer differ from the historical one.
+            doctor = await session.get(Doctor, original.id)
+            assert doctor is not None
+            doctor.hospital_id = elsewhere.id
+            await session.flush()
+
+            page = await h.service.list_audit_events(h.patient, after=None, limit=20)
+            asked = next(view for view in page.items if view.entry.target_request_id == request_id)
+
+            assert asked.hospital is not None
+            assert asked.hospital.hid == "HID-0001"  # where the event happened
+            assert asked.hospital.name == "TMH"
+            # ...while the person is now somewhere else, and the response says so separately.
+            assert asked.actor is not None
+            assert asked.actor.hospital_name == "Elsewhere General"
+
+    asyncio.run(scenario())
+
+
+def test_a_patients_own_action_is_attributed_to_no_hospital() -> None:
+    """A patient belongs to no organisation, so the trail must not invent one for them —
+    the reason the column is nullable rather than defaulted."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+            await h.service.approve_categories(h.patient, request_id, [h.categories["CBC"]])
+
+            page = await h.service.list_audit_events(h.patient, after=None, limit=20)
+            approval = next(view for view in page.items if view.entry.actor_role is Role.PATIENT)
+            assert approval.hospital is None
+            assert approval.actor is None
+
+    asyncio.run(scenario())
+
+
+def test_an_unattributed_legacy_event_stays_unattributed() -> None:
+    """Rows written before migration 0005 carry no hospital. The response must leave them
+    empty rather than falling back to the actor's present employer — the fallback would be
+    the very join ADR-023 refuses, and it would look indistinguishable from a real answer."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+
+            rows = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            legacy = next(row for row in rows if row.target_request_id == request_id)
+            legacy.actor_hospital_id = None  # as a pre-0005 row would be
+            await session.flush()
+
+            page = await h.service.list_audit_events(h.patient, after=None, limit=20)
+            view = next(v for v in page.items if v.entry.target_request_id == request_id)
+            assert view.hospital is None
+            # The actor is still named — only the attribution is missing.
+            assert view.actor is not None
+            assert view.actor.hospital_name == "TMH"
+
+    asyncio.run(scenario())

@@ -7,13 +7,18 @@ import {
   filterAuditEntries,
   humanizeAction,
   isOwnRecordAccess,
+  groupAuditEvents,
+  groupedEventCount,
+  initialExpansion,
   NO_CATEGORY,
   NO_EXTERNAL_ACCESS,
   originOf,
+  SELF_ORIGIN,
   SELF_ACTOR,
   summarizeAuditEntries,
   toEventView,
   toEventViews,
+  UNATTRIBUTED_ORIGIN,
 } from "./view";
 
 const NOW = Date.parse("2026-09-03T12:00:00Z");
@@ -26,6 +31,10 @@ const EVENT: AuditEvent = {
   actorUserId: "user-1",
   actorRole: "DOCTOR",
   actor: { fullName: "Dr Meera Sharma", specialty: "Cardiology", hospitalName: "Apollo" },
+  // The hospital the event was attributed to when written, which is what the trail groups
+  // on. Deliberately *not* the same as `actor.hospitalName` above: the fixtures disagree so
+  // that any test reading the wrong one fails (ADR-025).
+  actorHospital: { hid: "HID-0001", name: "TMH Jamshedpur" },
   targetRecordId: "rec-1",
   targetCategoryCode: "CBC",
   targetRequestId: null,
@@ -63,19 +72,41 @@ test("the patient's own actions read as You, with nothing beneath", () => {
   });
 });
 
-test("hospital staff read as their hospital, with their name beneath", () => {
-  expect(originOf(EVENT)).toEqual({ origin: "Apollo", actor: "Dr Meera Sharma · Cardiology" });
+test("the origin is the hospital recorded on the event, not where the actor works now", () => {
+  // **The ADR-025 rule.** The fixture's actor currently works at Apollo; the event was
+  // written at TMH Jamshedpur. Reading `actor.hospitalName` here would move a clinician's
+  // past activity to a new employer the day they changed jobs.
+  expect(EVENT.actor?.hospitalName).toBe("Apollo");
+  expect(originOf(EVENT)).toEqual({
+    origin: "TMH Jamshedpur",
+    actor: "Dr Meera Sharma · Cardiology",
+  });
+
   const noSpecialty = withEvent({
-    actor: { fullName: "Rina Admin", specialty: null, hospitalName: "TMH" },
+    actor: { fullName: "Rina Admin", specialty: null, hospitalName: "Apollo" },
+    actorHospital: { hid: "HID-0002", name: "CMC Vellore" },
     actorRole: "HOSPITAL_ADMIN",
   });
-  expect(originOf(noSpecialty)).toEqual({ origin: "TMH", actor: "Rina Admin" });
+  expect(originOf(noSpecialty)).toEqual({ origin: "CMC Vellore", actor: "Rina Admin" });
 });
 
-test("an actor the projection cannot name falls back to the role it recorded", () => {
-  expect(originOf(withEvent({ actor: null })).origin).toBe("A clinician");
-  expect(originOf(withEvent({ actor: null, actorRole: "HOSPITAL_ADMIN" })).origin).toBe(
-    "Hospital staff",
+test("an event with no recorded hospital says so rather than borrowing the actor's", () => {
+  const legacy = withEvent({ actorHospital: null });
+  // The actor is still named and still has a current employer — neither may stand in.
+  expect(legacy.actor?.hospitalName).toBe("Apollo");
+  expect(originOf(legacy)).toEqual({
+    origin: UNATTRIBUTED_ORIGIN,
+    actor: "Dr Meera Sharma · Cardiology",
+  });
+});
+
+test("an actor the projection cannot name still groups by its recorded hospital", () => {
+  expect(originOf(withEvent({ actor: null }))).toEqual({
+    origin: "TMH Jamshedpur",
+    actor: null,
+  });
+  expect(originOf(withEvent({ actor: null, actorHospital: null })).origin).toBe(
+    UNATTRIBUTED_ORIGIN,
   );
 });
 
@@ -122,7 +153,9 @@ test("the summary counts only the events on this page and says so", () => {
   expect(byId.get("loaded")?.note).toBe("On this page only");
   // The patient is not an organisation, so their own action is not counted as one.
   expect(byId.get("organisations")?.value).toBe("1");
-  expect(byId.get("organisations")?.note).toBe("Apollo");
+  // The organisation counted is the one recorded on the event (ADR-025), so the summary
+  // and the groups beneath it can never name different hospitals for the same activity.
+  expect(byId.get("organisations")?.note).toBe("TMH Jamshedpur");
   expect(byId.get("busiest")?.value).toBe("2");
   expect(byId.get("busiest")?.note).toBe("Complete Blood Count");
   expect(byId.get("latest")?.value).toBe("2 hours ago");
@@ -320,4 +353,175 @@ test("an empty timeline is detectable, and its copy names the question the page 
     "No doctors, hospitals or other users have accessed your records yet.",
   );
   expect(NO_EXTERNAL_ACCESS.action).toBe("Show my activity");
+});
+
+// -- grouping ---------------------------------------------------------------------------
+
+const TMH = { hid: "HID-0001", name: "TMH Jamshedpur" };
+const CMC = { hid: "HID-0002", name: "CMC Vellore" };
+
+/** A trail spanning both hospitals, two clinicians at one of them, an unattributed legacy
+ * event and the patient's own read — every branch of `originKeyOf` in one fixture. */
+function trail(): AuditEvent[] {
+  return [
+    withEvent({
+      id: "a",
+      actorUserId: "verma",
+      actorHospital: TMH,
+      occurredAt: "2026-09-08T11:42:00Z",
+    }),
+    withEvent({
+      id: "b",
+      actorUserId: "verma",
+      actorHospital: TMH,
+      occurredAt: "2026-09-08T11:40:00Z",
+    }),
+    withEvent({
+      id: "c",
+      actorUserId: "nair",
+      actorHospital: TMH,
+      occurredAt: "2026-09-07T09:00:00Z",
+    }),
+    withEvent({
+      id: "d",
+      actorUserId: "george",
+      actorHospital: CMC,
+      occurredAt: "2026-09-06T09:00:00Z",
+    }),
+    withEvent({
+      id: "e",
+      actorUserId: "ghost",
+      actorHospital: null,
+      occurredAt: "2026-09-05T09:00:00Z",
+    }),
+    withEvent({
+      id: "f",
+      actorRole: "PATIENT",
+      actor: null,
+      actorHospital: null,
+      occurredAt: "2026-09-04T09:00:00Z",
+    }),
+  ];
+}
+
+test("events group by recorded hospital, then by actor, newest group first", () => {
+  const groups = groupAuditEvents(trail(), LABELS);
+
+  expect(groups.map((group) => group.title)).toEqual([
+    "TMH Jamshedpur",
+    "CMC Vellore",
+    UNATTRIBUTED_ORIGIN,
+    SELF_ORIGIN,
+  ]);
+  expect(groups.map((group) => group.kind)).toEqual([
+    "hospital",
+    "hospital",
+    "unattributed",
+    "self",
+  ]);
+  const tmh = groups[0]!;
+  expect(tmh.eventCount).toBe(3);
+  expect(tmh.actors.map((actor) => actor.key)).toEqual(["verma", "nair"]); // newest actor first
+  expect(tmh.actors[0]!.eventCount).toBe(2);
+  expect(tmh.actors[0]!.events.map((event) => event.id)).toEqual(["a", "b"]); // newest event first
+  expect(tmh.latestAt).toBe("2026-09-08T11:42:00Z");
+});
+
+test("every visible event appears exactly once and the counts sum to the input", () => {
+  // The invariant the whole design rests on: grouping is a rearrangement, never a filter.
+  const events = trail();
+  const groups = groupAuditEvents(events, LABELS);
+
+  const ids = groups.flatMap((group) => group.actors.flatMap((a) => a.events.map((e) => e.id)));
+  expect(ids).toHaveLength(events.length);
+  expect(new Set(ids)).toEqual(new Set(events.map((event) => event.id)));
+  expect(groupedEventCount(groups)).toBe(events.length);
+  for (const group of groups) {
+    expect(group.eventCount).toBe(
+      group.actors.reduce((total, actor) => total + actor.events.length, 0),
+    );
+  }
+});
+
+test("a legacy event is never absorbed into a hospital, and never invents one", () => {
+  const groups = groupAuditEvents(trail(), LABELS);
+  const unattributed = groups.find((group) => group.kind === "unattributed")!;
+
+  expect(unattributed.eventCount).toBe(1);
+  expect(unattributed.actors[0]!.events[0]!.id).toBe("e");
+  // Its actor still works somewhere — that hospital must not have claimed the event.
+  expect(groups.filter((group) => group.kind === "hospital").map((g) => g.title)).toEqual([
+    "TMH Jamshedpur",
+    "CMC Vellore",
+  ]);
+});
+
+test("the patient's own events form their own group and get no hospital", () => {
+  const groups = groupAuditEvents(trail(), LABELS);
+  const own = groups.find((group) => group.kind === "self")!;
+
+  expect(own.title).toBe(SELF_ORIGIN);
+  expect(own.eventCount).toBe(1);
+  expect(own.actors).toHaveLength(1);
+  expect(own.actors[0]!.name).toBe(SELF_ACTOR);
+});
+
+test("filtering happens before grouping, so a hidden row inflates no count", () => {
+  const events = [
+    ...trail(),
+    withEvent({ id: "own-read", actorRole: "PATIENT", actor: null, actorHospital: null }),
+  ];
+  const visible = filterAuditEntries(events, false);
+  const groups = groupAuditEvents(visible, LABELS);
+
+  expect(groupedEventCount(groups)).toBe(visible.length);
+  // Both patient rows are RECORD_VIEWED, so the default view drops both and the group has
+  // nothing left to hold — it must vanish rather than render as "Your own activity · 0".
+  expect(groups.find((group) => group.kind === "self")).toBeUndefined();
+  expect(groupedEventCount(groups)).toBe(events.length - 2);
+  // Toggling on restores every event, grouped and counted in full.
+  expect(groupedEventCount(groupAuditEvents(events, LABELS))).toBe(events.length);
+  const withOwn = groupAuditEvents(filterAuditEntries(events, true), LABELS);
+  expect(withOwn.find((group) => group.kind === "self")?.eventCount).toBe(2);
+});
+
+test("a group whose every event is filtered out disappears rather than rendering empty", () => {
+  const onlyOwnReads = [
+    withEvent({ id: "x", actorRole: "PATIENT", actor: null, actorHospital: null }),
+  ];
+  expect(groupAuditEvents(filterAuditEntries(onlyOwnReads, false), LABELS)).toEqual([]);
+});
+
+test("the same actor at two hospitals is two groups, keyed per hospital", () => {
+  const moved = [
+    withEvent({
+      id: "later",
+      actorUserId: "verma",
+      actorHospital: CMC,
+      occurredAt: "2026-09-09T09:00:00Z",
+    }),
+    withEvent({
+      id: "earlier",
+      actorUserId: "verma",
+      actorHospital: TMH,
+      occurredAt: "2026-09-01T09:00:00Z",
+    }),
+  ];
+  const groups = groupAuditEvents(moved, LABELS);
+
+  expect(groups.map((group) => group.title)).toEqual(["CMC Vellore", "TMH Jamshedpur"]);
+  expect(groups.every((group) => group.actors.length === 1)).toBe(true);
+  expect(groupedEventCount(groups)).toBe(2);
+});
+
+test("the newest hospital and its newest actor start expanded, nothing else", () => {
+  const groups = groupAuditEvents(trail(), LABELS);
+  const expansion = initialExpansion(groups);
+
+  expect(expansion.origins).toEqual(["HID-0001"]);
+  expect(expansion.actors).toEqual(["HID-0001/verma"]);
+});
+
+test("an empty trail expands nothing", () => {
+  expect(initialExpansion([])).toEqual({ origins: [], actors: [] });
 });

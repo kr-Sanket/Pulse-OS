@@ -46,6 +46,7 @@ from app.modules.consent.schemas import (
     AccessRequestResponse,
     AuditEventListResponse,
     AuditEventResponse,
+    AuditHospitalResponse,
     CategorySelectionRequest,
     ConsentDecisionResponse,
     ConsentGrantListItemResponse,
@@ -64,6 +65,7 @@ from app.modules.consent.service import (
     DecisionOutcome,
     GrantPage,
     GrantView,
+    OrganizationDisplay,
     PersonDisplay,
     RequestPage,
     RequestView,
@@ -234,7 +236,17 @@ def _to_audit_response(view: AuditView, vocabulary: CategoryVocabulary) -> Audit
         occurred_at=entry.occurred_at,
         event_hash=entry.event_hash,
         actor=_to_staff_display(view.actor),
+        actor_hospital=_to_audit_hospital(view.hospital),
     )
+
+
+def _to_audit_hospital(hospital: OrganizationDisplay | None) -> AuditHospitalResponse | None:
+    """The historical attribution, or nothing. Never falls back to the actor's current
+    hospital: an absent attribution is the truthful answer for a patient's own action and
+    for every event written before migration 0005 (ADR-025)."""
+    if hospital is None:
+        return None
+    return AuditHospitalResponse(hid=hospital.hid, name=hospital.name)
 
 
 def _to_hospital_audit_list_response(page: AuditPage) -> HospitalAuditEventListResponse:

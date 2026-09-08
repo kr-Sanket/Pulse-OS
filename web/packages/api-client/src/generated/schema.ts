@@ -949,10 +949,12 @@ export interface components {
          * AuditEventResponse
          * @description One entry in the patient's append-only trail, as its subject sees it.
          *
-         *     Carries what the row carries and nothing else — no clinician or hospital name, because
-         *     ``AuditLog`` stores neither and this module may not query the tables that do. The actor
-         *     is the opaque user id recorded at the time, alongside the role they *then* held: roles
-         *     change, and the trail must show the authority someone acted under, not today's.
+         *     The actor is the opaque user id recorded at the time, alongside the role they *then*
+         *     held: roles change, and the trail must show the authority someone acted under, not
+         *     today's. ``actorHospital`` follows the same principle for the organisation — it is
+         *     resolved from the hospital stored on the event, never from where the actor works now
+         *     (ADR-025). ``actor`` remains a *current* identity projection, because naming a person
+         *     is a different question from attributing an event.
          *
          *     Three fields are deliberately absent. ``patientId`` is the caller, constant for every
          *     row in the listing and never part of this API's public vocabulary (a patient is public
@@ -973,6 +975,7 @@ export interface components {
         AuditEventResponse: {
             action: components["schemas"]["AuditAction"];
             actor: components["schemas"]["StaffDisplayResponse"] | null;
+            actorHospital: components["schemas"]["AuditHospitalResponse"] | null;
             actorRole: components["schemas"]["Role"];
             /**
              * Actoruserid
@@ -997,6 +1000,26 @@ export interface components {
             targetRecordId: string | null;
             /** Targetrequestid */
             targetRequestId: string | null;
+        };
+        /**
+         * AuditHospitalResponse
+         * @description The organisation an audit event was attributed to **when it was written**.
+         *
+         *     Not the actor's current employer. ``StaffDisplayResponse.hospitalName`` answers that,
+         *     and it is the right answer where a patient is weighing a consent request — but in a
+         *     historical log it would move a clinician's past activity to a new hospital the day they
+         *     changed jobs, which is exactly what ADR-023 captured ``actor_hospital_id`` to prevent.
+         *     ADR-025 records the split.
+         *
+         *     ``hid`` is the identifier a patient already sees against every record
+         *     (``UploadingHospitalResponse``), and it is here because grouping needs a stable key: a
+         *     name is not one, and two organisations may share it.
+         */
+        AuditHospitalResponse: {
+            /** Hid */
+            hid: string;
+            /** Name */
+            name: string;
         };
         /** AuthenticatedUserResponse */
         AuthenticatedUserResponse: {

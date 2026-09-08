@@ -186,6 +186,20 @@ class PersonDisplay:
     hospital_name: str
 
 
+@dataclass(frozen=True, slots=True)
+class OrganizationDisplay:
+    """An organisation as the patient's trail names one.
+
+    Separate from ``PersonDisplay.hospital_name`` deliberately, and the separation is the
+    point of ADR-025: that field is the actor's **current** employer, which is the right
+    answer when a patient is deciding whether to grant access and the wrong one in a
+    historical log. This is resolved from the hospital recorded on the event itself.
+    """
+
+    hid: str
+    name: str
+
+
 class StaffDirectory(Protocol):
     """How consent turns the ids it stores into something a patient can read.
 
@@ -208,6 +222,10 @@ class StaffDirectory(Protocol):
     ) -> Mapping[UUID, PersonDisplay]: ...
 
     async def hospital_names(self, hospital_ids: Collection[UUID]) -> Mapping[UUID, str]: ...
+
+    async def hospitals_by_id(
+        self, hospital_ids: Collection[UUID]
+    ) -> Mapping[UUID, OrganizationDisplay]: ...
 
     #: The scope for the hospital audit view (ADR-023). Not batched, unlike the rest: it
     #: answers a question about the caller, and there is one caller per request.
@@ -299,6 +317,11 @@ class AuditView:
 
     entry: AuditLog
     actor: PersonDisplay | None
+    #: The organisation the event was attributed to **when it was written** (ADR-023's
+    #: ``actor_hospital_id``), never the actor's present affiliation. Null for a patient's
+    #: own action, which belongs to no hospital, and for any event written before migration
+    #: 0005 — those stay unattributed rather than being reconstructed (ADR-025).
+    hospital: OrganizationDisplay | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,8 +532,25 @@ class ConsentService:
         rows = await self._audit.list_page_by_patient(patient.id, after=after, limit=limit + 1)
         page, next_cursor = _split_page(rows, limit=limit, key=_row_occurred_at)
         actors = await self._staff.staff_by_user_id({row.actor_user_id for row in page})
+        # Attribution comes from the event, not from the actor (ADR-025). One batched
+        # lookup for the page, like the actor projection beside it, and the empty set costs
+        # no statement at all.
+        hospitals = await self._staff.hospitals_by_id(
+            {row.actor_hospital_id for row in page if row.actor_hospital_id is not None}
+        )
         return AuditPage(
-            items=[AuditView(entry=row, actor=actors.get(row.actor_user_id)) for row in page],
+            items=[
+                AuditView(
+                    entry=row,
+                    actor=actors.get(row.actor_user_id),
+                    hospital=(
+                        None
+                        if row.actor_hospital_id is None
+                        else hospitals.get(row.actor_hospital_id)
+                    ),
+                )
+                for row in page
+            ],
             next_cursor=next_cursor,
         )
 
