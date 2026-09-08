@@ -5,6 +5,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+### Added
+- **Patients can edit their own profile** — `PATCH /api/v1/patients/me`. The Edit Profile
+  button had been a deliberate placeholder because the API had no `PATCH` or `PUT` endpoint
+  anywhere; this adds the first one. Three fields are editable, and only three, because they
+  are the whole of what `patients` stores about a person beyond their identity: `fullName`,
+  `dateOfBirth` and `gender`.
+  **Partial semantics, with clearing distinguishable from omission.** An absent key means
+  "leave alone" and an explicit `null` means "clear" — `None` cannot carry both for a
+  nullable column, so an `Unset` sentinel carries the difference from the request model
+  through to the service and no layer has to consult a set of field names. An empty body is
+  a 422 rather than a 200, because answering success to a request that named no field would
+  report an edit that did not happen.
+  **Ownership is the signature, not a check.** The row is resolved from the authenticated
+  `user_id`, and no path, query or body parameter names a patient — pinned by a test
+  asserting the operation declares no parameters at all. The Health ID, Firebase UID, role,
+  status and `createdAt` are unreachable rather than merely undocumented: `RequestModel`
+  forbids unknown fields, so naming one is a 422, asserted alongside a follow-up read
+  proving nothing moved. Registration and editing now share one set of validators, so a
+  value that could not be registered cannot be reached by editing either.
+  Email and Health ID render as read-only text rather than disabled inputs — a greyed-out
+  box reads as a control that broke, not as a fact that cannot change.
+  **No migration** (every column exists and `updated_at` already auto-stamps) and **no audit
+  action**: a profile edit is not access to a record, and `AuditAction` has no member that
+  would state it truthfully. The name a hospital verifies against at `/patients/lookup` is
+  therefore self-editable and unlogged — accepted for Review-1, and revisited when the
+  deferred operational audit log lands.
+  A Synthea regression test covers the imported-patient case: editing an imported patient's
+  name, date of birth and gender leaves every one of their records, their patient id, Health
+  ID and owning user untouched, and writes no consent or audit rows. 32 new backend tests
+  (610 total, 97% coverage held) and 13 new web tests.
+
 ### Fixed
 - **The patient's audit trail attributed events to where the actor works *now*.** The page
   read `StaffDisplayResponse.hospitalName`, which the staff projection resolves by joining
