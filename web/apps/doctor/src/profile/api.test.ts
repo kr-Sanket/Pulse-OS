@@ -40,6 +40,38 @@ test("no clinician profile is an outcome, not an error — it routes to onboardi
   }
 });
 
+test("a pre-registration Firebase token is refreshed and retried before onboarding", async () => {
+  const profile = { fullName: "Dr Meera Sharma", status: "ACTIVE" };
+  const get = vi
+    .fn()
+    .mockResolvedValueOnce({ error: {}, response: { status: 403 } })
+    .mockResolvedValueOnce({ data: profile, response: { status: 200 } });
+  const refreshToken = vi.fn().mockResolvedValue(undefined);
+  const client = { GET: get } as unknown as PulseOSClient;
+
+  expect(await loadDoctorProfile(client, SIGNAL, refreshToken)).toEqual({
+    status: "ready",
+    data: { kind: "registered", profile },
+  });
+  expect(refreshToken).toHaveBeenCalledOnce();
+  expect(get).toHaveBeenCalledTimes(2);
+});
+
+test("a still-unprovisioned account is routed to onboarding after one refresh", async () => {
+  const get = vi
+    .fn()
+    .mockResolvedValueOnce({ error: {}, response: { status: 403 } })
+    .mockResolvedValueOnce({ error: {}, response: { status: 403 } });
+  const refreshToken = vi.fn().mockResolvedValue(undefined);
+  const client = { GET: get } as unknown as PulseOSClient;
+
+  expect(await loadDoctorProfile(client, SIGNAL, refreshToken)).toEqual({
+    status: "ready",
+    data: { kind: "unregistered" },
+  });
+  expect(refreshToken).toHaveBeenCalledOnce();
+});
+
 test("an expired session is still a genuine error", async () => {
   const { client } = stubClient({ error: {}, response: { status: 401 } });
 

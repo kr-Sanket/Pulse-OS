@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 
-import { useApiResource, type Resource } from "@pulseos/ui";
+import { useApiResource, useAuth, type Resource } from "@pulseos/ui";
 
 import { api } from "@/api";
 
@@ -14,6 +14,17 @@ export interface DoctorProfileResource {
 }
 
 export function useDoctorProfile(): DoctorProfileResource {
-  const load = useCallback((signal: AbortSignal) => loadDoctorProfile(api, signal), []);
+  const { user } = useAuth();
+  const load = useCallback(
+    (signal: AbortSignal) =>
+      loadDoctorProfile(api, signal, async () => {
+        // Claims set during registration only appear in a freshly minted Firebase ID token.
+        // ProtectedRoute has already established a signed-in user before this loader runs.
+        if (user !== null) {
+          await user.getIdToken(true);
+        }
+      }),
+    [user],
+  );
   return useApiResource(load);
 }

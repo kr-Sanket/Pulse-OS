@@ -17,11 +17,10 @@ export type DoctorStatus = components["schemas"]["DoctorStatus"];
  * than to an error screen. Only genuine failures (expired session, server trouble, no
  * network) come back as errors.
  *
- * Both 403 and 404 map to `unregistered`, deliberately. 403 covers two cases the API does
- * not distinguish by status — no PulseOS claims at all, and claims naming another role —
- * and guessing between them from a message string would be brittle. Registration answers
- * the question authoritatively: an account already registered as something else is refused
- * with 409, and the form shows the API's own words.
+ * A 403 can also be a Firebase ID token minted before registration provisioned the
+ * PulseOS claims. The caller refreshes that token once and this loader retries before
+ * classifying the account as unregistered. That matters after a browser refresh too:
+ * Firebase persists its cached token across page loads.
  */
 export type ClinicianIdentity =
   { kind: "registered"; profile: DoctorProfile } | { kind: "unregistered" };
@@ -37,9 +36,17 @@ const UNREGISTERED_STATUSES: ReadonlySet<number> = new Set([403, 404]);
 export async function loadDoctorProfile(
   client: PulseOSClient,
   signal: AbortSignal,
+  refreshToken?: () => Promise<void>,
 ): Promise<ApiResult<ClinicianIdentity>> {
   return attempt<ClinicianIdentity>(async () => {
-    const result = await client.GET("/api/v1/doctors/me", { signal });
+    let result = await client.GET("/api/v1/doctors/me", { signal });
+    // Registration sets custom claims server-side. A normal getIdToken() may still return
+    // the pre-registration token, including after a browser reload. Refresh only after the
+    // expected unprovisioned response, then let the API make the authorization decision again.
+    if (result.data === undefined && result.response.status === 403 && refreshToken !== undefined) {
+      await refreshToken();
+      result = await client.GET("/api/v1/doctors/me", { signal });
+    }
     if (result.data === undefined) {
       if (UNREGISTERED_STATUSES.has(result.response.status)) {
         return { status: "ready", data: { kind: "unregistered" } };
