@@ -1,0 +1,274 @@
+"""Anchoring and integrity verification for audit events (ADR-004, ADR-026).
+
+The lifecycle this owns, end to end:
+
+    clinical/consent operation → audit_logs row (authoritative, append-only)
+        → canonical digest (already stored as ``event_hash``)
+        → AuditAnchor.submit(digest)
+        → AnchorReceipt
+        → audit_anchors row (digest + network + reference)
+
+**Anchoring is deferred, never inline.** No clinical path calls into this service, and that
+is the design rather than an omission (ADR-026). ``_write_audit`` runs inside the caller's
+transaction, so anchoring there would put an external adapter on the critical path of every
+record read and every consent decision — precisely what ADR-004 forbids ("chain downtime
+never blocks or delays a consent decision"). A sweep also matches the eventual shape: a real
+chain answers in seconds and charges gas, and batching many digests into one transaction is
+only expressible over a backlog.
+
+**Verification is computed, never stored.** There is no ``status`` column to go stale; a
+verdict is derived on demand from three independently stored things:
+
+1. the digest recomputed from the ``audit_logs`` row's own columns,
+2. the ``event_hash`` recorded on that row,
+3. the ``digest`` recorded on the anchor when it was published.
+
+Tampering that edits a row and recomputes its hash still diverges from (3); tampering that
+edits only the row diverges from (2). What the *local* adapter cannot defend against is an
+attacker who rewrites all three, because everything lives in one database — that is exactly
+the gap a real chain closes, and the honest limit of this milestone.
+"""
+
+import logging
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from uuid import UUID
+
+from app.modules.auth.domain import AuthenticatedUser
+from app.modules.consent.anchoring import AnchorReceipt, AuditAnchor, InvalidDigestError
+from app.modules.consent.errors import (
+    AuditEventNotFoundError,
+    DuplicateAnchorError,
+    PatientProfileNotFoundError,
+)
+from app.modules.consent.models import AuditAnchorEntry, AuditLog
+from app.modules.consent.repository import AuditAnchorRepository, AuditLogRepository
+from app.modules.consent.service import recompute_event_hash, sha256_event_hash
+from app.modules.patients.directory import PatientDirectoryService
+
+logger = logging.getLogger(__name__)
+
+
+class IntegrityStatus(StrEnum):
+    """The verdict for one audit event.
+
+    Four members rather than a boolean, because "we cannot vouch for this yet" and "this has
+    been altered" are opposite messages to show a patient, and the two failure modes point
+    at different culprits.
+    """
+
+    #: No anchor exists yet. Says nothing about the event's integrity — every event is here
+    #: between being written and being swept, and every event written before ADR-026.
+    NOT_ANCHORED = "NOT_ANCHORED"
+    #: Row hashes to its stored digest, that digest is what was anchored, and the anchor's
+    #: reference is the one this network produces for it.
+    VERIFIED = "VERIFIED"
+    #: The row no longer hashes to what was anchored — the event's own columns were altered.
+    EVENT_ALTERED = "EVENT_ALTERED"
+    #: The anchor row does not match what the network would have produced for its digest.
+    ANCHOR_ALTERED = "ANCHOR_ALTERED"
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrityReport:
+    """One event's verdict, plus the anchor facts a caller may see.
+
+    Carries no digest and no canonical payload: a verdict is what an audit reader needs,
+    and republishing the hashed material would hand out a re-identification oracle for a
+    trail the reader can otherwise only see rows of.
+    """
+
+    audit_log_id: UUID
+    status: IntegrityStatus
+    anchor: AuditAnchorEntry | None
+
+    @property
+    def is_anchored(self) -> bool:
+        return self.anchor is not None
+
+
+@dataclass(frozen=True, slots=True)
+class AnchorOutcome:
+    """The result of anchoring one event: the anchor, and whether this call created it."""
+
+    anchor: AuditAnchorEntry
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SweepResult:
+    """What one sweep did. ``failed`` counts events the adapter refused or errored on;
+    they stay unanchored and are retried by the next sweep, in the same order."""
+
+    anchored: int
+    failed: int
+    remaining: int
+
+
+class AuditAnchorService:
+    """Anchors audit digests and answers integrity questions about them.
+
+    Owns no transaction, like every other service here: repositories flush, the request or
+    the script commits. Verification performs no writes at all.
+    """
+
+    def __init__(
+        self,
+        *,
+        audit: AuditLogRepository,
+        anchors: AuditAnchorRepository,
+        anchor_provider: AuditAnchor,
+        patients: PatientDirectoryService,
+        event_hasher: Callable[[str], str] = sha256_event_hash,
+    ) -> None:
+        self._audit = audit
+        self._anchors = anchors
+        self._provider = anchor_provider
+        self._patients = patients
+        # The same hasher the events were written with. Injected rather than imported so a
+        # keccak transition (ADR-019) reaches verification and writing through one seam.
+        self._hash = event_hasher
+
+    # -- anchoring ---------------------------------------------------------------------
+
+    async def anchor_event(self, entry: AuditLog) -> AnchorOutcome:
+        """Anchor one audit event's digest, idempotently.
+
+        **Only ``entry.event_hash`` crosses the port** — the digest and nothing else. No
+        actor, no patient, no action, no target, no timestamp from the event (ADR-004:
+        hashes only, never identifiers or PHI). ``require_digest`` in the port refuses
+        anything that is not a bare hex digest, so a clinical payload cannot reach an
+        adapter even by mistake.
+
+        Idempotent two ways. An event already anchored returns its existing anchor without
+        calling the adapter, and a concurrent caller that wins the race is resolved by the
+        UNIQUE on ``audit_log_id``: the loser reads the winner's row back rather than
+        failing. ``created`` distinguishes the two for a caller that cares.
+        """
+        existing = await self._anchors.get_by_audit_log_id(entry.id)
+        if existing is not None:
+            return AnchorOutcome(anchor=existing, created=False)
+
+        receipt = await self._provider.submit(entry.event_hash)
+        try:
+            anchor = await self._anchors.add(
+                AuditAnchorEntry(
+                    audit_log_id=entry.id,
+                    # The digest **as published**, kept beside the event's own copy so a
+                    # later divergence between them is detectable (see the model).
+                    digest=entry.event_hash,
+                    hash_version=entry.hash_version,
+                    network=receipt.network,
+                    reference=receipt.reference,
+                    anchored_at=receipt.anchored_at,
+                )
+            )
+        except DuplicateAnchorError:
+            # Lost the race. The other writer's anchor is as good as this one — same digest,
+            # same deterministic reference — so read it back instead of surfacing a conflict.
+            winner = await self._anchors.get_by_audit_log_id(entry.id)
+            if winner is None:  # pragma: no cover — UNIQUE fired, so the row exists
+                raise
+            return AnchorOutcome(anchor=winner, created=False)
+        return AnchorOutcome(anchor=anchor, created=True)
+
+    async def anchor_pending(self, *, limit: int) -> SweepResult:
+        """Anchor the oldest unanchored events, up to ``limit``.
+
+        The reconciliation job of ADR-004, and the only writer in normal operation. One
+        adapter failure does not abandon the sweep: the event stays unanchored, is counted,
+        and the next run picks it up again in the same position. Nothing here touches the
+        audit rows themselves, so a sweep can never damage the trail it is attesting to.
+        """
+        pending = await self._anchors.list_unanchored_events(limit=limit)
+        anchored = 0
+        failed = 0
+        for entry in pending:
+            try:
+                await self.anchor_event(entry)
+            except (InvalidDigestError, OSError) as exc:
+                # Only ids are logged, never event content (docs/SECURITY.md).
+                logger.warning(
+                    "audit anchor failed", extra={"audit_log_id": str(entry.id), "error": str(exc)}
+                )
+                failed += 1
+                continue
+            anchored += 1
+        return SweepResult(
+            anchored=anchored, failed=failed, remaining=await self._anchors.count_unanchored()
+        )
+
+    # -- verification ------------------------------------------------------------------
+
+    async def verify_for_caller(
+        self, caller: AuthenticatedUser, audit_log_id: UUID
+    ) -> IntegrityReport:
+        """Verify one event of the caller's own trail.
+
+        **Scope comes from the token**, exactly as ``ConsentService.list_audit_events`` takes
+        it: the patient row is resolved from ``caller.user_id`` and becomes part of the
+        lookup, so an event belonging to somebody else is indistinguishable from one that
+        does not exist. This adds no visibility a patient did not already have over their
+        own audit log.
+        """
+        patient = await self._patients.get_by_user_id(caller.user_id)
+        if patient is None:
+            raise PatientProfileNotFoundError()
+        entry = await self._audit.get_for_patient(audit_log_id, patient_id=patient.id)
+        if entry is None:
+            raise AuditEventNotFoundError()
+        return await self.verify(entry)
+
+    async def verify(self, entry: AuditLog) -> IntegrityReport:
+        """The integrity verdict for one audit event."""
+        anchor = await self._anchors.get_by_audit_log_id(entry.id)
+        return await self._assess(entry, anchor)
+
+    async def verify_many(self, entries: Sequence[AuditLog]) -> Mapping[UUID, IntegrityReport]:
+        """Verdicts for a page of events, in a fixed number of *queries*.
+
+        One anchor lookup for the whole page, then a comparison per row. The per-row work is
+        a rehash and an adapter check, both local and cheap today. A networked provider must
+        not be verified once per rendered row — when ``PolygonAuditAnchor`` lands, the chain
+        check moves to the sweep (recording its outcome) and this reads that result instead.
+        The seam does not change; only where the network call happens does.
+        """
+        anchors = await self._anchors.by_audit_log_ids([entry.id for entry in entries])
+        return {entry.id: await self._assess(entry, anchors.get(entry.id)) for entry in entries}
+
+    async def _assess(self, entry: AuditLog, anchor: AuditAnchorEntry | None) -> IntegrityReport:
+        """The three comparisons, in the order that makes a verdict meaningful.
+
+        Order matters: an altered event is reported as ``EVENT_ALTERED`` even if the anchor
+        row is also wrong, because the event is the thing a reader is being told about and
+        the more alarming fact should not be masked by a bookkeeping one.
+        """
+        if anchor is None:
+            return IntegrityReport(
+                audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
+            )
+
+        recomputed = recompute_event_hash(entry, hasher=self._hash)
+        if recomputed != entry.event_hash or entry.event_hash != anchor.digest:
+            # Either the row no longer hashes to its own digest, or its digest is no longer
+            # the one that was published. Both mean the event changed after anchoring.
+            return IntegrityReport(
+                audit_log_id=entry.id, status=IntegrityStatus.EVENT_ALTERED, anchor=anchor
+            )
+
+        receipt = AnchorReceipt(
+            network=anchor.network, reference=anchor.reference, anchored_at=anchor.anchored_at
+        )
+        if not await self._provider.verify(anchor.digest, receipt):
+            return IntegrityReport(
+                audit_log_id=entry.id, status=IntegrityStatus.ANCHOR_ALTERED, anchor=anchor
+            )
+        return IntegrityReport(
+            audit_log_id=entry.id, status=IntegrityStatus.VERIFIED, anchor=anchor
+        )
+
+
+def anchored_event_ids(reports: Collection[IntegrityReport]) -> set[UUID]:
+    """The subset that carries an anchor — a convenience for callers summarising a page."""
+    return {report.audit_log_id for report in reports if report.is_anchored}

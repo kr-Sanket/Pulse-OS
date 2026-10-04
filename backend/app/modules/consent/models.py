@@ -31,10 +31,10 @@ requested set; ``ConsentDecision`` references it by the composite key
 category the request never named is rejected by the database rather than by a service
 check.
 
-Still not modelled here, deliberately: ``AnchorReceipt`` (docs/DOMAIN_MODEL.md §2, ADR-004)
-— the chain transaction attached to an audit event asynchronously. It must be a separate
-table precisely because ``AuditLog`` is append-only: a receipt cannot arrive as an UPDATE
-to a row that is never updated. It lands with M6.
+``AuditAnchorEntry`` is the anchor receipt of docs/DOMAIN_MODEL.md §2 and ADR-004, and it is
+a **separate table precisely because ``AuditLog`` is append-only**: a receipt arrives after
+the event and cannot be an UPDATE to a row that is never updated. It holds a digest and a
+transaction reference — never a copy of the event (ADR-026).
 """
 
 import uuid
@@ -354,10 +354,17 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     ``created_at`` would be impossible without either a second write — which append-only
     forbids — or excluding the timestamp entirely, which would leave the moment of the
     event untamper-evident and weaken exactly the property ADR-004 exists to provide.
-    The digest is keccak256 of that canonical JSON, 64 lowercase hex characters, no ``0x``
-    prefix, and it is what ``AuditAnchor`` publishes on-chain at M6 (ADR-004: hashes only,
-    never identifiers or PHI). It is not unique: two genuinely distinct events must never
-    be blocked by a collision in a column whose whole purpose is tamper evidence.
+    The digest is 64 lowercase hex characters with no ``0x`` prefix, produced by the hasher
+    injected into ``ConsentService``. **That hasher is SHA-256 today, not keccak256**
+    (ADR-019): ADR-004 specifies keccak because that is what a Solidity contract verifies,
+    but `hashlib` ships NIST SHA-3 rather than keccak and the project carries no keccak
+    dependency yet. ``hash_version`` below records which scheme produced a given row. The
+    digest is what ``AuditAnchor`` publishes (ADR-004: hashes only, never identifiers or
+    PHI) — locally today via ``LocalChainAuditAnchor``, on-chain at M6, which per ADR-019
+    **must not happen until the keccak hasher is injected**, because this table is
+    append-only and a stored digest can never be recomputed. It is not unique: two
+    genuinely distinct events must never be blocked by a collision in a column whose whole
+    purpose is tamper evidence.
 
     The actor's role is stored alongside the actor, not looked up: roles can change, and
     the trail must show the authority the actor held at the time. ``Role`` is auth's
@@ -462,4 +469,63 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
         # query that leads with them, and none of their parents is ever deleted
         # (docs/DATABASE_DESIGN.md principle 5). Revisit when a per-record or per-actor
         # trail view is actually built.
+    )
+
+
+class AuditAnchorEntry(UUIDPrimaryKeyMixin, Base):
+    """The blockchain anchor of one audit event — metadata and proof, never content
+    (ADR-004, ADR-026; docs/BLOCKCHAIN_ARCHITECTURE.md).
+
+    **This table does not duplicate the event.** It carries no actor, no patient, no action,
+    no target and no request context: those live in ``audit_logs``, which stays the
+    authoritative store and the only read path. What is here is the digest that was
+    published, where it was published, and how to find it again — the minimum needed to ask
+    "did this exact event exist when we said it did".
+
+    **One anchor per event, enforced by the schema.** ``audit_log_id`` is UNIQUE, so
+    idempotency is a database guarantee rather than a check-then-insert race: a second
+    anchoring attempt for the same event cannot create a second row even under concurrency,
+    and the service reads the winner back instead of failing.
+
+    **``digest`` is stored rather than re-read from the event, and that redundancy is the
+    entire point.** Verification compares three independently stored things — the digest
+    recomputed from the ``audit_logs`` row, the ``event_hash`` on that row, and the value
+    recorded here as anchored. Tampering that updates the row *and* recomputes its hash
+    still diverges from this copy. ``hash_version`` travels with it because a digest means
+    nothing without the scheme that produced it (ADR-023), and because ADR-019's keccak
+    transition must be able to tell anchored-under-SHA-256 rows from anchored-under-keccak
+    ones rather than silently comparing across algorithms.
+
+    Append-only, like the trail it attests to: no ``updated_at``, nothing to UPDATE. An
+    anchor that turns out to be wrong is evidence, not a row to correct.
+    """
+
+    __tablename__ = "audit_anchors"
+
+    audit_log_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("audit_logs.id"), unique=True, nullable=False
+    )
+    #: The event digest exactly as published — a copy of ``audit_logs.event_hash`` at
+    #: anchoring time, kept so a later divergence between the two is detectable.
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The hashing scheme that produced ``digest`` (app/modules/consent/service.py).
+    hash_version: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
+    #: Which chain/adapter holds the anchor — ``local-dev`` today, a real network at M6.
+    #: Stored so a development anchor can never be mistaken for a chain one.
+    network: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Transaction-like identifier returned by the adapter (``0x`` + 64 hex so far). Sized
+    #: for that and a little more; it is an opaque handle, never parsed.
+    reference: Mapped[str] = mapped_column(String(80), nullable=False)
+    #: When the adapter reported the anchor. Not the event's own ``occurred_at``, and not
+    #: hashed into anything — an anchor's job is to attest to a digest, not to re-time it.
+    anchored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        _APPEND_ONLY_CREATED_AT, server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # The sweep's query: "audit events with no anchor yet", an anti-join that leads
+        # with this column. UNIQUE already indexes it, so this is documentation of the
+        # access path rather than a second index.
+        Index("ix_audit_anchors_anchored_at", "anchored_at"),
     )

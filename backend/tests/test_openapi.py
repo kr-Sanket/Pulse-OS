@@ -252,18 +252,19 @@ def test_the_patient_audit_contract_is_unchanged_by_the_hospital_view() -> None:
     schemas = _spec()["components"]["schemas"]
 
     assert set(schemas["AuditEventResponse"]["properties"]) == {
-        "id",
-        "action",
-        "actorUserId",
-        "actorRole",
-        "actor",
-        "actorHospital",
-        "targetRecordId",
-        "targetCategoryCode",
-        "targetRequestId",
-        "occurredAt",
-        "eventHash",
-    }
+    "id",
+    "action",
+    "actorUserId",
+    "actorRole",
+    "actor",
+    "actorHospital",
+    "targetRecordId",
+    "targetCategoryCode",
+    "targetRequestId",
+    "occurredAt",
+    "eventHash",
+    "integrity",
+}
     # The hospital reads its own activity; every row already has its hospital, and
     # publishing one per row would be noise at best (ADR-023 §5).
     assert "actorHospital" not in schemas["HospitalAuditEventResponse"]["properties"]

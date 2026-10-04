@@ -13,7 +13,7 @@ through ``dependencies.to_http_error``. No handler queries anything or decides a
 including the state a grant is in, which the service reads from its own clock.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Protocol
 from uuid import UUID
 
@@ -26,8 +26,10 @@ from app.modules.auth.dependencies import (
     rate_limited,
 )
 from app.modules.auth.domain import AuthenticatedUser
+from app.modules.consent.anchor_service import IntegrityReport
 from app.modules.consent.dependencies import (
     PROBLEM,
+    AuditAnchorServiceDep,
     CategoryVocabulary,
     CategoryVocabularyDep,
     ConsentServiceDep,
@@ -46,7 +48,9 @@ from app.modules.consent.schemas import (
     AccessRequestResponse,
     AuditEventListResponse,
     AuditEventResponse,
+    AuditEventVerificationResponse,
     AuditHospitalResponse,
+    AuditIntegrityResponse,
     CategorySelectionRequest,
     ConsentDecisionResponse,
     ConsentGrantListItemResponse,
@@ -219,13 +223,17 @@ def _to_grant_list_item(
     )
 
 
-def _to_audit_response(view: AuditView, vocabulary: CategoryVocabulary) -> AuditEventResponse:
+def _to_audit_response(
+    view: AuditView, vocabulary: CategoryVocabulary, integrity: IntegrityReport
+) -> AuditEventResponse:
     """Straight projection of the row, plus the actor's name where the service resolved one.
     The one translation is the category, which the API addresses by code everywhere — the
-    same swap every other response here performs."""
+    same swap every other response here performs. ``integrity`` is resolved for the whole
+    page at once (ADR-026), never per row."""
     entry = view.entry
     category_id = entry.target_category_id
     return AuditEventResponse(
+        integrity=AuditIntegrityResponse.from_report(integrity),
         id=entry.id,
         action=entry.action,
         actor_user_id=entry.actor_user_id,
@@ -269,10 +277,14 @@ def _to_hospital_audit_list_response(page: AuditPage) -> HospitalAuditEventListR
 
 
 def _to_audit_list_response(
-    page: AuditPage, vocabulary: CategoryVocabulary
+    page: AuditPage,
+    vocabulary: CategoryVocabulary,
+    integrity: Mapping[UUID, IntegrityReport],
 ) -> AuditEventListResponse:
     return AuditEventListResponse(
-        items=[_to_audit_response(view, vocabulary) for view in page.items],
+        items=[
+            _to_audit_response(view, vocabulary, integrity[view.entry.id]) for view in page.items
+        ],
         next_cursor=page.next_cursor,
     )
 
@@ -549,6 +561,7 @@ async def revoke_grant(
 async def list_audit_events(
     user: PatientUser,
     service: ConsentServiceDep,
+    anchors: AuditAnchorServiceDep,
     vocabulary: CategoryVocabularyDep,
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
@@ -570,7 +583,54 @@ async def list_audit_events(
         page = await service.list_audit_events(user, after=parse_cursor(cursor), limit=limit)
     except ConsentError as exc:
         raise to_http_error(exc) from exc
-    return _to_audit_list_response(page, vocabulary)
+    # One anchor query for the page, then a comparison per row (ADR-026) — the listing costs
+    # one extra statement whether it shows one event or twenty-five.
+    integrity = await anchors.verify_many([view.entry for view in page.items])
+    return _to_audit_list_response(page, vocabulary, integrity)
+
+
+@audit_logs_router.get(
+    "/{audit_log_id}/verification",
+    response_model=AuditEventVerificationResponse,
+    responses={
+        **_UNAUTHENTICATED,
+        **_WRONG_ROLE,
+        404: {"description": "No such audit event for this patient", "content": PROBLEM},
+    },
+)
+async def verify_audit_event(
+    audit_log_id: UUID,
+    user: PatientUser,
+    anchors: AuditAnchorServiceDep,
+) -> AuditEventVerificationResponse:
+    """Check one entry of the caller's own trail against its blockchain anchor (ADR-026).
+
+    Three stored copies are compared: the digest recomputed from the event's own columns,
+    the digest recorded on the event, and the digest recorded on the anchor when it was
+    published. ``VERIFIED`` means all three agree and the anchor's reference is the one this
+    network produces for that digest. ``EVENT_ALTERED`` means the event no longer matches
+    what was anchored; ``ANCHOR_ALTERED`` means the anchor row does not match its own
+    network; ``NOT_ANCHORED`` means no anchor exists yet and says nothing about integrity.
+
+    **This grants no new visibility.** The event is resolved under the caller's patient
+    scope, so an entry belonging to somebody else answers 404 exactly as a nonexistent one
+    does; a patient can verify only what they could already read in their own trail. The
+    response carries no digest and no hashed payload — only the verdict and the two facts
+    that make an anchor checkable, its network and its transaction reference.
+
+    There is deliberately no endpoint for anchoring, and none for verifying an arbitrary
+    hash: anchoring is an operator sweep (``scripts/anchor_audit_events.py``), and a public
+    "verify this digest" surface would be an oracle for guessing audit content.
+
+    Roles: PATIENT (own trail only). Consent requirement: none — a verdict is not record
+    content. Reading it is not itself an audited event, as with the listing.
+    Failure modes: 401, 403, 404 (no such event for this caller), 422 (malformed id).
+    """
+    try:
+        report = await anchors.verify_for_caller(user, audit_log_id)
+    except ConsentError as exc:
+        raise to_http_error(exc) from exc
+    return AuditEventVerificationResponse.from_report(report)
 
 
 @hospital_audit_logs_router.get("", response_model=HospitalAuditEventListResponse)

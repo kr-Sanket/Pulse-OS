@@ -513,6 +513,7 @@ def test_the_trail_returns_the_patients_events_with_stored_identifiers(world: Wo
         "targetRequestId",
         "occurredAt",
         "eventHash",
+        "integrity",
     }
     # The decision targets a category, by code; the request targets the request itself.
     assert approval["actorRole"] == "PATIENT"
@@ -734,6 +735,7 @@ def test_openapi_declares_every_consent_path_and_its_failures(consent_app: FastA
         GRANTS,
         f"{GRANTS}/{{grant_id}}/revoke",
         AUDIT,
+        f"{AUDIT}/{{audit_log_id}}/verification",
     }
     assert set(paths[GRANTS]["get"]["responses"]) >= {"200", "401", "403", "404", "422"}
     assert set(paths[AUDIT]["get"]["responses"]) >= {"200", "401", "403", "404", "422"}
@@ -806,6 +808,7 @@ def test_openapi_schemas_are_camel_case_and_paginated(consent_app: FastAPI) -> N
         "targetRequestId",
         "occurredAt",
         "eventHash",
+        "integrity",
     }
     # Writes reject unknown fields (docs/API_GUIDELINES.md).
     assert schemas["AccessRequestCreateRequest"].get("additionalProperties") is False

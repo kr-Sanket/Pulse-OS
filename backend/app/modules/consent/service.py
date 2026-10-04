@@ -152,6 +152,48 @@ def sha256_event_hash(canonical_json: str) -> str:
     return hashlib.sha256(canonical_json.encode()).hexdigest()
 
 
+def audit_event_fields(entry: AuditLog) -> dict[str, object]:
+    """The hashed field set of one audit event, read off the row itself.
+
+    **The single construction of that field set, used when writing and when verifying.**
+    A verifier that rebuilt this independently would be a second implementation of the
+    thing it checks, and the first divergence between them would be indistinguishable from
+    tampering — the same argument ``canonical_event_payload`` makes about the serialisation
+    one level down. ``_write_audit`` builds the row first and hashes it through here, so
+    there is exactly one answer to "what does this event hash over".
+
+    ``occurred_at`` passes through ``as_utc`` because SQLite hands back naive datetimes for
+    the same column Postgres returns aware (see that helper). Without it a digest would
+    verify on one backend and fail on the other, which would read as tampering.
+    """
+    return {
+        "id": str(entry.id),
+        "actor_user_id": str(entry.actor_user_id),
+        "actor_role": entry.actor_role.value,
+        "action": entry.action.value,
+        "patient_id": str(entry.patient_id),
+        "target_record_id": str(entry.target_record_id) if entry.target_record_id else None,
+        "target_category_id": str(entry.target_category_id) if entry.target_category_id else None,
+        "target_request_id": str(entry.target_request_id) if entry.target_request_id else None,
+        "request_context": entry.request_context,
+        "occurred_at": as_utc(entry.occurred_at).isoformat(),
+        "actor_hospital_id": str(entry.actor_hospital_id) if entry.actor_hospital_id else None,
+    }
+
+
+def recompute_event_hash(
+    entry: AuditLog, *, hasher: Callable[[str], str] = sha256_event_hash
+) -> str:
+    """The digest ``entry`` should carry, recomputed from its own stored columns.
+
+    Hashed under the row's **own** ``hash_version``, not the current one: v1 rows omit
+    ``actor_hospital_id`` from the payload entirely (ADR-023), so verifying them under v2
+    would change the bytes and fail every event written before migration 0005.
+    """
+    canonical = canonical_event_payload(audit_event_fields(entry), scheme=entry.hash_version)
+    return hasher(canonical)
+
+
 @dataclass(frozen=True, slots=True)
 class Clinician:
     """The projection of a practitioner this module needs — id, affiliation, and whether
@@ -1045,39 +1087,27 @@ class ConsentService:
         history the first time a doctor changed hospitals. ``None`` is the honest value for
         a patient actor, who has no hospital at all.
         """
-        event_id = uuid4()
-        context = self._normalize_context(request_context)
-        payload: dict[str, object] = {
-            "id": str(event_id),
-            "actor_user_id": str(actor.user_id),
-            "actor_role": actor.role.value,
-            "action": action.value,
-            "patient_id": str(patient_id),
-            "target_record_id": str(target_record_id) if target_record_id else None,
-            "target_category_id": str(target_category_id) if target_category_id else None,
-            "target_request_id": str(target_request_id) if target_request_id else None,
-            "request_context": context,
-            "occurred_at": occurred_at.isoformat(),
-            "actor_hospital_id": str(actor_hospital_id) if actor_hospital_id else None,
-        }
-        canonical = canonical_event_payload(payload, scheme=CURRENT_HASH_SCHEME)
-        return await self._audit.add(
-            AuditLog(
-                id=event_id,
-                actor_user_id=actor.user_id,
-                actor_role=actor.role,
-                action=action,
-                patient_id=patient_id,
-                target_record_id=target_record_id,
-                target_category_id=target_category_id,
-                target_request_id=target_request_id,
-                actor_hospital_id=actor_hospital_id,
-                request_context=context,
-                occurred_at=occurred_at,
-                event_hash=self._hash(canonical),
-                hash_version=CURRENT_HASH_SCHEME,
-            )
+        entry = AuditLog(
+            id=uuid4(),
+            actor_user_id=actor.user_id,
+            actor_role=actor.role,
+            action=action,
+            patient_id=patient_id,
+            target_record_id=target_record_id,
+            target_category_id=target_category_id,
+            target_request_id=target_request_id,
+            actor_hospital_id=actor_hospital_id,
+            request_context=self._normalize_context(request_context),
+            occurred_at=occurred_at,
+            hash_version=CURRENT_HASH_SCHEME,
+            # Assigned below, from the row itself. Never persisted empty: the digest is set
+            # before ``add`` flushes, so no INSERT can carry this placeholder.
+            event_hash="",
         )
+        # Hashed *through the row*, so writing and verifying cannot drift: the same
+        # ``audit_event_fields`` produces the payload on both sides (see that function).
+        entry.event_hash = recompute_event_hash(entry, hasher=self._hash)
+        return await self._audit.add(entry)
 
     @staticmethod
     def _normalize_context(request_context: str | None) -> str | None:

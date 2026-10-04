@@ -27,21 +27,24 @@ request, the decisions of one request) are returned whole, following
 so paginating them would add cursor plumbing to a fetch of at most ten rows.
 """
 
+from collections.abc import Collection
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, and_, or_, select
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.modules.consent.errors import (
+    DuplicateAnchorError,
     DuplicateDecisionError,
     DuplicateGrantError,
     DuplicateRequestCategoryError,
     UnrequestedCategoryError,
 )
 from app.modules.consent.models import (
+    AuditAnchorEntry,
     AuditLog,
     ConsentDecision,
     ConsentGrant,
@@ -289,6 +292,19 @@ class AuditLogRepository:
         await self._session.flush()
         return entry
 
+    async def get_for_patient(self, audit_log_id: UUID, *, patient_id: UUID) -> AuditLog | None:
+        """One audit event, but only if it belongs to this patient's trail.
+
+        **The patient is part of the query, not a check after it.** A caller cannot hold the
+        row of somebody else's event long enough to make a mistake with it, and a missing
+        event and another patient's event are the same answer — the 403-vs-404 rule
+        (docs/API_GUIDELINES.md), applied to the audit trail.
+        """
+        result = await self._session.execute(
+            select(AuditLog).where(AuditLog.id == audit_log_id, AuditLog.patient_id == patient_id)
+        )
+        return result.scalar_one_or_none()
+
     async def list_page_by_patient(
         self, patient_id: UUID, *, after: CursorKey | None, limit: int
     ) -> list[AuditLog]:
@@ -333,3 +349,78 @@ class AuditLogRepository:
             query = query.where(_keyset_filter(AuditLog.occurred_at, AuditLog.id, after))
         result = await self._session.execute(query)
         return list(result.scalars())
+
+
+class AuditAnchorRepository:
+    """Persistence for blockchain anchors of audit events (ADR-026).
+
+    Append-only like the trail it attests to: insert and read, no update, no delete. An
+    anchor that later fails verification is evidence and must survive as written.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, entry: AuditAnchorEntry) -> AuditAnchorEntry:
+        """Insert one anchor, in a savepoint because ``audit_log_id`` is UNIQUE.
+
+        That constraint is the idempotency guarantee, so a collision here is a *domain*
+        signal — "someone anchored this event first" — rather than a bug. Raised as
+        ``DuplicateAnchorError`` for the service to resolve by reading the winner back;
+        without the savepoint the failed INSERT would poison the caller's transaction and
+        take the read with it.
+        """
+        try:
+            async with self._session.begin_nested():
+                self._session.add(entry)
+                await self._session.flush()
+        except IntegrityError as exc:
+            raise DuplicateAnchorError() from exc
+        return entry
+
+    async def get_by_audit_log_id(self, audit_log_id: UUID) -> AuditAnchorEntry | None:
+        result = await self._session.execute(
+            select(AuditAnchorEntry).where(AuditAnchorEntry.audit_log_id == audit_log_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def by_audit_log_ids(
+        self, audit_log_ids: Collection[UUID]
+    ) -> dict[UUID, AuditAnchorEntry]:
+        """Anchors for a page of events, keyed by event id.
+
+        Batched by construction — a collection in, a mapping out — for the reason the staff
+        directory is: the patient's audit listing renders 25 rows and must cost one query
+        for their anchors, not 25. An event with no anchor is simply absent from the result.
+        """
+        if not audit_log_ids:
+            return {}
+        result = await self._session.execute(
+            select(AuditAnchorEntry).where(AuditAnchorEntry.audit_log_id.in_(audit_log_ids))
+        )
+        return {entry.audit_log_id: entry for entry in result.scalars()}
+
+    async def list_unanchored_events(self, *, limit: int) -> list[AuditLog]:
+        """The oldest audit events that carry no anchor yet — the sweep's work queue.
+
+        An anti-join rather than "everything since a watermark": anchoring can fail for one
+        event and succeed for the next, so a high-water mark would strand the gap forever.
+        Oldest first, so the trail anchors in the order it happened and a partial sweep
+        leaves a contiguous anchored prefix rather than holes.
+        """
+        anchored = select(AuditAnchorEntry.audit_log_id)
+        query: Select[tuple[AuditLog]] = (
+            select(AuditLog)
+            .where(AuditLog.id.not_in(anchored))
+            .order_by(AuditLog.occurred_at.asc(), AuditLog.id.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(query)
+        return list(result.scalars())
+
+    async def count_unanchored(self) -> int:
+        anchored = select(AuditAnchorEntry.audit_log_id)
+        result = await self._session.execute(
+            select(func.count()).select_from(AuditLog).where(AuditLog.id.not_in(anchored))
+        )
+        return int(result.scalar_one())

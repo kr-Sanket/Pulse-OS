@@ -25,6 +25,7 @@ from uuid import UUID
 from pydantic import Field, field_validator
 
 from app.modules.auth.domain import Role
+from app.modules.consent.anchor_service import IntegrityReport, IntegrityStatus
 from app.modules.consent.models import AuditAction, ConsentDecisionStatus, ConsentRequestStatus
 from app.modules.consent.service import ConsentGrantState
 from app.shared.schemas import ApiModel, RequestModel
@@ -214,6 +215,39 @@ class ConsentGrantListResponse(ApiModel):
     next_cursor: str | None
 
 
+class AuditIntegrityResponse(ApiModel):
+    """Whether this audit entry's digest is anchored, and whether it still checks out.
+
+    **Deliberately not the digest, and not the canonical payload.** ``eventHash`` is already
+    published on the entry for the trail's owner; repeating the anchored copy here would
+    only invite a client to do the comparison itself, and the comparison is the server's job
+    precisely because it must be made against all three stored copies (see
+    ``AuditAnchorService``).
+
+    ``network`` and ``reference`` are the two facts that make an anchor checkable by a human
+    — which chain, and which transaction. They are opaque handles: ``local-dev`` today, a
+    real network and explorer link at M6. Nothing else about the adapter is exposed.
+    """
+
+    status: IntegrityStatus
+    #: Null exactly when ``status`` is ``NOT_ANCHORED``.
+    network: str | None
+    reference: str | None
+    anchored_at: datetime | None
+
+    @classmethod
+    def from_report(cls, report: IntegrityReport) -> "AuditIntegrityResponse":
+        anchor = report.anchor
+        if anchor is None:
+            return cls(status=report.status, network=None, reference=None, anchored_at=None)
+        return cls(
+            status=report.status,
+            network=anchor.network,
+            reference=anchor.reference,
+            anchored_at=anchor.anchored_at,
+        )
+
+
 class AuditEventResponse(ApiModel):
     """One entry in the patient's append-only trail, as its subject sees it.
 
@@ -259,6 +293,29 @@ class AuditEventResponse(ApiModel):
     target_request_id: UUID | None
     occurred_at: datetime
     event_hash: str
+    #: Blockchain integrity of this entry (ADR-026). Always present, because "not anchored
+    #: yet" is a real answer rather than a missing one — every event is unanchored between
+    #: being written and being swept, and every event written before ADR-026 stays so.
+    integrity: AuditIntegrityResponse
+
+
+class AuditEventVerificationResponse(ApiModel):
+    """The answer to "is this entry of my trail still intact?".
+
+    The same integrity block the listing carries, plus the event it describes, so a client
+    that verified one entry can show *which* one without holding the listing row. Nothing
+    about the adapter beyond the network and the reference; no digest, no payload.
+    """
+
+    audit_log_id: UUID
+    integrity: AuditIntegrityResponse
+
+    @classmethod
+    def from_report(cls, report: IntegrityReport) -> "AuditEventVerificationResponse":
+        return cls(
+            audit_log_id=report.audit_log_id,
+            integrity=AuditIntegrityResponse.from_report(report),
+        )
 
 
 class AuditEventListResponse(ApiModel):

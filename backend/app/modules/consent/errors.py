@@ -92,3 +92,21 @@ class GrantNotFoundError(ConsentError):
 class AccessDeniedError(ConsentError):
     """``enforce`` refused the read: no active grant covers this
     (patient, requester, category). Raised only after the denial has been audited."""
+
+
+class DuplicateAnchorError(ConsentError):
+    """This audit event already has an anchor (ADR-026).
+
+    Raised by the repository when the UNIQUE on ``audit_anchors.audit_log_id`` refuses a
+    second row, which is how anchoring is idempotent under concurrency rather than by a
+    check-then-insert. The service catches it and returns the existing anchor: two callers
+    racing to anchor one event is not an error to surface, it is the constraint working.
+    """
+
+
+class AuditEventNotFoundError(ConsentError):
+    """No such audit event *for this caller* — missing, or belonging to another patient.
+
+    One error for both, deliberately: the 403-vs-404 rule (docs/API_GUIDELINES.md) means a
+    patient asking about somebody else's event must not learn that it exists.
+    """

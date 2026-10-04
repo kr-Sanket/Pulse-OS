@@ -32,8 +32,11 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_session
+from app.modules.consent.anchor_service import AuditAnchorService
+from app.modules.consent.anchoring import AuditAnchor, LocalChainAuditAnchor
 from app.modules.consent.errors import (
     AccessDeniedError,
+    AuditEventNotFoundError,
     ClinicianNotActiveError,
     ClinicianProfileNotFoundError,
     ConsentError,
@@ -50,6 +53,7 @@ from app.modules.consent.errors import (
     UnrequestedCategoryError,
 )
 from app.modules.consent.repository import (
+    AuditAnchorRepository,
     AuditLogRepository,
     ConsentDecisionRepository,
     ConsentGrantRepository,
@@ -100,6 +104,9 @@ def to_http_error(exc: ConsentError) -> HTTPException:
         return HTTPException(status_code=404, detail="Access request not found.")
     if isinstance(exc, GrantNotFoundError):
         return HTTPException(status_code=404, detail="Consent grant not found.")
+    if isinstance(exc, AuditEventNotFoundError):
+        # Another patient's event answers exactly this, so the two are indistinguishable.
+        return HTTPException(status_code=404, detail="Audit event not found.")
     if isinstance(exc, AccessDeniedError):
         # Never "forbidden": a caller without consent must not learn the record exists.
         return HTTPException(status_code=404, detail="Not found.")
@@ -304,6 +311,36 @@ def get_consent_service(
     )
 
 
+def get_audit_anchor(request: Request) -> AuditAnchor:
+    """The anchoring adapter (ADR-026).
+
+    ``LocalChainAuditAnchor`` is the only implementation today and needs no configuration,
+    so it is constructed here rather than assembled in the lifespan the way the storage and
+    queue clients are. ``PolygonAuditAnchor`` will need an RPC URL, a contract address and a
+    signing key, and at that point this becomes a lifespan-built singleton read off
+    ``request.app.state`` — which is why the request is already in the signature.
+
+    An ordinary overridable dependency, so a test substitutes a failing or recording adapter
+    without touching app state.
+    """
+    del request  # not needed by the local adapter; see above
+    return LocalChainAuditAnchor()
+
+
+def get_audit_anchor_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    anchor: Annotated[AuditAnchor, Depends(get_audit_anchor)],
+) -> AuditAnchorService:
+    """Anchoring and verification over the request's session (ADR-026)."""
+    return AuditAnchorService(
+        audit=AuditLogRepository(session),
+        anchors=AuditAnchorRepository(session),
+        anchor_provider=anchor,
+        patients=PatientDirectoryService(PatientRepository(session)),
+    )
+
+
 ConsentServiceDep = Annotated[ConsentService, Depends(get_consent_service)]
+AuditAnchorServiceDep = Annotated[AuditAnchorService, Depends(get_audit_anchor_service)]
 CategoryVocabularyDep = Annotated[CategoryVocabulary, Depends(get_category_vocabulary)]
 RequestContextDep = Annotated[str | None, Depends(get_request_context)]
