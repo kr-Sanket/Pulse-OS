@@ -85,6 +85,9 @@ async def run(args: argparse.Namespace) -> int:
     from app.core.config import get_settings
     from app.core.db import create_db_engine, create_session_factory
     from app.modules.records.errors import StorageUnavailableError
+    from app.modules.ai.ingestion import AIRecordIngestion
+    from app.modules.ai.repository import AIRepository
+    from app.modules.ai.service import AIIngestionService
     from app.modules.records.fhir_import import (
         SYNTHEA_DEMO_ROSTER,
         ImportRefused,
@@ -151,9 +154,15 @@ async def run(args: argparse.Namespace) -> int:
                 # One transaction per bundle: a bad bundle leaves nothing behind, and its
                 # neighbours still import.
                 async with factory() as session, session.begin():
-                    outcome = await SyntheaImporter(session, storage=storage).import_bundle(
-                        entry, raw
-                    )
+                    ai_repository = AIRepository(session)
+                    ai_service = AIIngestionService(ai_repository)
+                    ai_ingestion = AIRecordIngestion(ai_service)
+
+                    outcome = await SyntheaImporter(
+                        session,
+                        storage=storage,
+                        ai_ingestion=ai_ingestion,
+                    ).import_bundle(entry, raw)
             except (BundleInvalid, ImportRefused, ProhibitedDataError) as exc:
                 # The filename and the reason only — never bundle content (docs/SECURITY.md).
                 failures.append((entry.filename, f"{type(exc).__name__}: {exc}"))

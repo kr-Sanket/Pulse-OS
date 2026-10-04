@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.db import Base
 
 # Module models — imported so their tables register on Base.metadata for autogenerate.
+from app.modules.ai import models as ai_models  # noqa: F401
 from app.modules.auth import models as auth_models  # noqa: F401
 from app.modules.consent import models as consent_models  # noqa: F401
 from app.modules.patients import models as patients_models  # noqa: F401

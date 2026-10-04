@@ -38,6 +38,10 @@ class ObjectStorage(ABC):
         """Store ``data`` under ``key``. Raises ``StorageUnavailableError`` on failure."""
 
     @abstractmethod
+    async def get_object(self, key: str) -> bytes:
+        """Retrieve object data by key. Raises ``StorageUnavailableError`` on failure."""
+
+    @abstractmethod
     async def create_download_url(
         self, key: str, *, expires_in_seconds: int, filename: str, content_type: str
     ) -> str:
@@ -81,6 +85,19 @@ class S3ObjectStorage(ObjectStorage):
 
         try:
             await asyncio.to_thread(_put)
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageUnavailableError() from exc
+
+    async def get_object(self, key: str) -> bytes:
+        def _get() -> bytes:
+            response = self._get_client().get_object(
+                Bucket=self._bucket,
+                Key=key,
+            )
+            return response["Body"].read()
+
+        try:
+            return await asyncio.to_thread(_get)
         except (BotoCoreError, ClientError) as exc:
             raise StorageUnavailableError() from exc
 

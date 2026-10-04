@@ -36,6 +36,9 @@ def test_fake_storage_stores_and_presigns() -> None:
         assert storage.objects["records/p/r"].data == b"%PDF-"
         assert storage.objects["records/p/r"].content_type == "application/pdf"
 
+        stored = await storage.get_object("records/p/r")
+        assert stored == b"%PDF-"
+
         url = await storage.create_download_url(
             "records/p/r",
             expires_in_seconds=300,
@@ -84,6 +87,25 @@ def test_s3_put_object_sends_bucket_key_body_and_content_type() -> None:
 
     asyncio.run(scenario())
 
+def test_s3_get_object_reads_body() -> None:
+    async def scenario() -> None:
+        client = MagicMock()
+        body = MagicMock()
+        body.read.return_value = b'{"resourceType":"Condition"}'
+        client.get_object.return_value = {"Body": body}
+
+        storage = _s3(client)
+
+        result = await storage.get_object("records/p/r")
+
+        assert result == b'{"resourceType":"Condition"}'
+        client.get_object.assert_called_once_with(
+            Bucket="pulseos-records",
+            Key="records/p/r",
+        )
+        body.read.assert_called_once_with()
+
+    asyncio.run(scenario())
 
 def test_s3_presign_includes_ttl_disposition_and_content_type() -> None:
     async def scenario() -> None:
@@ -132,3 +154,12 @@ def test_s3_client_is_created_lazily_and_reused() -> None:
         second = storage._get_client()
         assert first is second
         boto3_mock.client.assert_called_once()
+
+def test_fake_storage_missing_object_raises_storage_error() -> None:
+    async def scenario() -> None:
+        storage = FakeObjectStorage()
+
+        with pytest.raises(StorageUnavailableError):
+            await storage.get_object("missing")
+
+    asyncio.run(scenario())

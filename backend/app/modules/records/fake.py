@@ -30,6 +30,15 @@ class FakeObjectStorage(ObjectStorage):
             raise self.storage_error
         self.objects[key] = StoredObject(data=data, content_type=content_type)
 
+    async def get_object(self, key: str) -> bytes:
+        if self.storage_error is not None:
+            raise self.storage_error
+
+        try:
+            return self.objects[key].data
+        except KeyError as exc:
+            raise StorageUnavailableError() from exc
+
     async def create_download_url(
         self, key: str, *, expires_in_seconds: int, filename: str, content_type: str
     ) -> str:

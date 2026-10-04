@@ -33,6 +33,7 @@ from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.ai.ingestion import AIRecordIngestion
 from app.modules.auth.domain import Role
 from app.modules.auth.repository import UserRepository
 from app.modules.auth.seed import get_or_create_synthetic_user
@@ -197,9 +198,10 @@ class SyntheaImporter:
     across files, fail-fast within one).
     """
 
-    def __init__(self, session: AsyncSession, *, storage: ObjectStorage) -> None:
+    def __init__(self,session: AsyncSession,*,storage: ObjectStorage,ai_ingestion: AIRecordIngestion | None = None,) -> None:
         self._session = session
         self._storage = storage
+        self._ai_ingestion = ai_ingestion
         self._users = UserRepository(session)
         self._patients = PatientRepository(session)
         self._categories = RecordCategoryRepository(session)
@@ -243,8 +245,19 @@ class SyntheaImporter:
                 )
             )
             await self._storage.put_object(
-                s3_key, mapped.resource_json, content_type=FHIR_CONTENT_TYPE
+                s3_key,
+                mapped.resource_json,
+                content_type=FHIR_CONTENT_TYPE,
             )
+
+            if self._ai_ingestion is not None:
+                await self._ai_ingestion.index_fhir_resource(
+                    record_id=mapped.record_id,
+                    patient_id=patient.id,
+                    category_id=category.id,
+                    resource=mapped.resource_json,
+                )
+
             record_created += 1
 
         return ImportOutcome(
