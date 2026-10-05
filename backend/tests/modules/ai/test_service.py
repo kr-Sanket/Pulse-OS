@@ -2,8 +2,7 @@ import asyncio
 from uuid import uuid4
 
 from app.modules.ai.models import AIDocument, AIChunk
-from app.modules.ai.service import AIIngestionService
-
+from app.modules.ai.service import AIIngestionService, AIRetrievalService
 
 class FakeAIRepository:
     def __init__(self) -> None:
@@ -20,6 +19,20 @@ class FakeAIRepository:
     async def add_chunks(self, chunks):
         self.chunks.extend(chunks)
         return chunks
+
+    async def get_document_by_id(self, document_id):
+        for document in self.documents.values():
+            if document.id == document_id:
+                return document
+        return None
+
+    async def search_chunks(self, *, patient_id, category_ids):
+        return [
+            chunk
+            for chunk in self.chunks
+            if chunk.patient_id == patient_id
+            and chunk.category_id in category_ids
+        ]
 
 
 def test_index_record_creates_document_and_chunks():
@@ -102,3 +115,69 @@ def test_index_record_is_idempotent():
 
     assert repository.chunks[0].content == "one two"
     assert repository.chunks[1].content == "three four"
+
+def test_retrieval_service_returns_ranked_consent_scoped_chunks():
+    repository = FakeAIRepository()
+    ingestion = AIIngestionService(repository)
+
+    patient_id = uuid4()
+    allowed_category_id = uuid4()
+    other_category_id = uuid4()
+
+    first_document = asyncio.run(
+        ingestion.index_record(
+            record_id=uuid4(),
+            patient_id=patient_id,
+            category_id=allowed_category_id,
+            normalized_text="diabetes active condition",
+            max_tokens=20,
+        )
+    )
+
+    second_document = asyncio.run(
+        ingestion.index_record(
+            record_id=uuid4(),
+            patient_id=patient_id,
+            category_id=allowed_category_id,
+            normalized_text="diabetes diabetes active condition",
+            max_tokens=20,
+        )
+    )
+
+    asyncio.run(
+        ingestion.index_record(
+            record_id=uuid4(),
+            patient_id=patient_id,
+            category_id=other_category_id,
+            normalized_text="diabetes diabetes diabetes",
+            max_tokens=20,
+        )
+    )
+
+    service = AIRetrievalService(repository)
+
+    results = asyncio.run(
+        service.search(
+            patient_id=patient_id,
+            category_ids=frozenset({allowed_category_id}),
+            query="diabetes active",
+            limit=10,
+        )
+    )
+
+    assert len(results) == 2
+
+    # More matching query terms → higher score.
+    assert results[0].score == 2
+    assert results[1].score == 2
+
+    # Only the authorized category is searched.
+    assert all(
+        result.category_id == allowed_category_id
+        for result in results
+    )
+
+    assert results[0].record_id in {
+        first_document.record_id,
+        second_document.record_id,
+    }

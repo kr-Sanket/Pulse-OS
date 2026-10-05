@@ -103,3 +103,67 @@ def test_ai_repository_persists_document_and_chunks():
             assert chunks[1].document_id == document.id
 
     asyncio.run(scenario())
+
+def test_get_document_by_id():
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            category = RecordCategory(
+                code="LAB_REPORT",
+                display_name="Lab Report",
+            )
+            session.add(category)
+            await session.flush()
+
+            user = User(
+                firebase_uid=f"fb-{uuid4()}",
+                role=Role.PATIENT,
+            )
+            session.add(user)
+            await session.flush()
+
+            patient = Patient(
+                user_id=user.id,
+                health_id=f"PHI-IND-2026-{str(uuid4())[:7].upper()}",
+                full_name="Test Patient",
+            )
+            session.add(patient)
+            await session.flush()
+
+            record_id = uuid4()
+
+            record = MedicalRecord(
+                id=record_id,
+                patient_id=patient.id,
+                category_id=category.id,
+                origin=RecordOrigin.PATIENT_LOCKER,
+                uploaded_by_hospital_id=None,
+                uploaded_by_doctor_id=None,
+                date_of_service=date(2026, 1, 1),
+                description="Test record",
+                original_filename="test.json",
+                content_type="application/fhir+json",
+                size_bytes=100,
+                s3_key=f"records/{patient.id}/{record_id}",
+            )
+            session.add(record)
+            await session.flush()
+
+            document = AIDocument(
+                record_id=record_id,
+                patient_id=patient.id,
+                category_id=category.id,
+                content_hash="a" * 64,
+                source_version=1,
+            )
+            session.add(document)
+            await session.flush()
+
+            repository = AIRepository(session)
+
+            result = await repository.get_document_by_id(document.id)
+
+            assert result is not None
+            assert result.id == document.id
+            assert result.record_id == record_id
+
+    asyncio.run(scenario())

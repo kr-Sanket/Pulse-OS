@@ -22,6 +22,7 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.core.queue import ArqJobQueue
 from app.core.ratelimit import build_rate_limiter
+from app.modules.ai.router import router as ai_router
 from app.modules.auth.firebase import FirebaseAuthProvider
 from app.modules.auth.router import router as auth_router
 from app.modules.consent.router import (
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
     application.include_router(access_requests_router, prefix=API_V1_PREFIX)
     application.include_router(consent_grants_router, prefix=API_V1_PREFIX)
     application.include_router(audit_logs_router, prefix=API_V1_PREFIX)
+    application.include_router(ai_router, prefix=API_V1_PREFIX)
     # /hospitals/me/audit-logs is consent-owned data on a records-owned URL prefix (ADR-023).
     application.include_router(hospital_audit_logs_router, prefix=API_V1_PREFIX)
     return application

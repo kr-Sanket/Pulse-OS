@@ -50,3 +50,38 @@ class AIRepository:
         self._session.add_all(chunks)
         await self._session.flush()
         return chunks
+
+    async def search_chunks(
+        self,
+        *,
+        patient_id: UUID,
+        category_ids: frozenset[UUID],
+    ) -> list[AIChunk]:
+        """Return AI chunks within the caller's already-authorized scope."""
+        if not category_ids:
+            return []
+
+        stmt = (
+            select(AIChunk)
+            .where(
+                AIChunk.patient_id == patient_id,
+                AIChunk.category_id.in_(category_ids),
+            )
+            .order_by(
+                AIChunk.document_id,
+                AIChunk.chunk_index,
+                AIChunk.id,
+            )
+        )
+
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_document_by_id(
+        self,
+        document_id: UUID,
+    ) -> AIDocument | None:
+        result = await self._session.execute(
+            select(AIDocument).where(AIDocument.id == document_id)
+        )
+        return result.scalar_one_or_none()
