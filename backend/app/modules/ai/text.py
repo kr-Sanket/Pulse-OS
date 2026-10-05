@@ -1,15 +1,45 @@
-"""Deterministic text normalization for AI/RAG ingestion.
+"""Deterministic text normalization and sanitization for AI/RAG ingestion.
 
 This module converts sanitized FHIR resource JSON into stable, readable text
-that can later be chunked and embedded.
+that can later be chunked and embedded, and sanitizes clinical queries before
+prompt construction for external LLM providers.
 
 It deliberately has no database, storage, FastAPI, or model dependencies.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Final
+
+HEALTH_ID_PLACEHOLDER: Final[str] = "[HEALTH_ID]"
+PHONE_PLACEHOLDER: Final[str] = "[PHONE]"
+
+_HEALTH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\bPHI-IND-\d{4}-[A-Za-z0-9*]+\b",
+    re.IGNORECASE,
+)
+
+_PHONE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?<!\w)(?:\+91[\s\-]|\+91|91[\s\-]|91)(?:\d{10}|\d{5}[\s\-]\d{5})(?!\d)|(?<!\w)[6-9]\d{9}(?!\d)"
+)
+
+
+def sanitize_clinical_query(query: str) -> str:
+    """Sanitize clinician query by replacing direct identifiers with neutral tokens.
+
+    Direct identifiers like PulseOS Health IDs (e.g. PHI-IND-2026-XXXXXXC)
+    and Indian phone numbers are replaced with [HEALTH_ID] and [PHONE]
+    respectively before prompt formatting for LLM generation.
+    """
+    if not query:
+        return query
+
+    sanitized = _HEALTH_ID_PATTERN.sub(HEALTH_ID_PLACEHOLDER, query)
+    sanitized = _PHONE_PATTERN.sub(PHONE_PLACEHOLDER, sanitized)
+    return sanitized
+
 
 
 def normalize_fhir_resource(resource: Mapping[str, Any]) -> str:

@@ -2,7 +2,9 @@
 
 from uuid import UUID
 
-from app.shared.schemas import ApiModel
+from pydantic import Field
+
+from app.shared.schemas import ApiModel, RequestModel
 
 
 class AIChunkSearchResponse(ApiModel):
@@ -23,3 +25,39 @@ class AIChunkSearchListResponse(ApiModel):
 
 
 AISearchResponse = AIChunkSearchListResponse
+
+
+class AIAnswerRequest(RequestModel):
+    """Request payload for synthesizing a clinical answer."""
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Clinical query or question to be answered from patient records.",
+    )
+    max_tokens: int = Field(
+        default=1000,
+        gt=0,
+        le=4000,
+        description="Maximum token budget for assembled clinical context.",
+    )
+
+
+class AICitationResponse(ApiModel):
+    """Citation provenance linking synthesized text to an underlying medical record."""
+
+    citation_index: int
+    record_id: UUID
+    category_code: str
+    chunk_index: int
+
+
+class AIAnswerResponse(ApiModel):
+    """Synthesized clinical answer and verifiable provenance."""
+
+    answer: str
+    citations: list[AICitationResponse]
+    provider: str
+    model: str
+    disclaimer: str

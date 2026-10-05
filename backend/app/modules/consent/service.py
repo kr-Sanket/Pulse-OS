@@ -889,6 +889,32 @@ class ConsentService:
             else None,
         )
 
+    async def record_summary_generated(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None:
+        """Append the single audit event for one generated AI clinical summary.
+
+        Scope-level event: like RECORDS_LISTED, an AI summary synthesizes evidence
+        across multiple records within a patient's granted scope. It sets none of
+        the three target columns; patient_id carries the subject.
+        """
+        clinician = await self._acting_clinician(requester)
+        await self._write_audit(
+            requester,
+            action=AuditAction.SUMMARY_GENERATED,
+            patient_id=patient_id,
+            occurred_at=at,
+            request_context=request_context,
+            actor_hospital_id=clinician.hospital_id
+            if clinician is not None
+            else None,
+        )
+
     async def _acting_clinician(self, requester: AuthenticatedUser) -> Clinician | None:
         """The requester as a practitioner who may act clinically, or None.
 

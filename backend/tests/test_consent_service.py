@@ -1186,6 +1186,33 @@ def test_a_listing_with_nothing_in_scope_is_recorded_as_a_refusal() -> None:
     asyncio.run(scenario())
 
 
+def test_a_summary_generated_is_recorded_with_no_target() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            await h.service.record_summary_generated(
+                h.doctor,
+                patient_id=h.patient_id,
+                at=h.clock.now,
+                request_context="req-ai-test",
+            )
+
+            (event,) = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            assert event.action is AuditAction.SUMMARY_GENERATED
+            assert event.actor_user_id == h.doctor.user_id
+            assert event.actor_role is Role.DOCTOR
+            assert event.patient_id == h.patient_id
+            assert event.request_context == "req-ai-test"
+            assert event.target_record_id is None
+            assert event.target_category_id is None
+            assert event.target_request_id is None
+            assert event.event_hash
+            assert event.actor_hospital_id == h.clinicians.by_user_id[h.doctor.user_id].hospital_id
+
+    asyncio.run(scenario())
+
+
 # -- ADR-023: historical hospital attribution and hash schemes -------------------------------
 
 

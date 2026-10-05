@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # Only the named buckets change; the rest keep their defaults.
     rate_limits: dict[str, str] = {}
 
+    # AI Provider configuration (ADR-007)
+    ai_provider: Literal["fake", "gemini"] = "fake"
+    ai_model: str = "gemini-3.8-flash"
+    gemini_api_key: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:
