@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { PulseOSClient, AIAnswerResponse } from "@pulseos/api-client";
 import { generatePatientAnswer, AIClientError, getAIErrorMessage } from "@pulseos/api-client";
 
+import * as assistantModule from "./AIAssistantPanel";
 import { AIAssistantPanel, MAX_QUESTION_LENGTH } from "./AIAssistantPanel";
 import { PatientRecordsPage } from "@/pages/PatientRecordsPage";
 
@@ -18,6 +19,7 @@ vi.mock("@/granted/useGrantedRecords", () => ({
     outcome: healthId
       ? {
           kind: "loaded",
+          patientId: "00000000-0000-0000-0000-000000000001",
           categories: ["Complete Blood Count"],
           records: [
             {
@@ -280,3 +282,65 @@ test("15. Existing PatientRecordsPage records list and headers remain unaffected
   // AI Assistant section is also present
   expect(html).toContain("Clinical AI Assistant");
 });
+
+// 16. Regression: Assistant receives internal patient UUID from granted-records outcome, not route Health ID
+test("16. Regression: PatientRecordsPage passes resolved internal UUID to assistant, calling generatePatientAnswer with UUID instead of route Health ID", async () => {
+  const ROUTE_HEALTH_ID = "PHI-IND-2026-9XCR0PC";
+  const RESOLVED_UUID = "00000000-0000-0000-0000-000000000001";
+
+  const assistantSpy = vi.spyOn(assistantModule, "AIAssistantPanel");
+
+  const html = renderToString(
+    <MemoryRouter initialEntries={[`/patients/${ROUTE_HEALTH_ID}/records`]}>
+      <Routes>
+        <Route path="/patients/:healthId/records" element={<PatientRecordsPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  // Assistant was rendered
+  expect(html).toContain("Clinical AI Assistant");
+
+  // The Assistant received the internal UUID, NOT the route Health ID
+  const firstCall = assistantSpy.mock.calls[0];
+  expect(firstCall).toBeDefined();
+  if (!firstCall) throw new Error("AIAssistantPanel was not called");
+  expect(firstCall[0].patientId).toBe(RESOLVED_UUID);
+  expect(firstCall[0].patientId).not.toBe(ROUTE_HEALTH_ID);
+  expect(firstCall[0].patientHealthId).toBe(ROUTE_HEALTH_ID);
+
+  // When generatePatientAnswer is called with the patientId received by the Assistant,
+  // it targets the internal UUID and NOT the route Health ID
+  const lastCallProps = firstCall[0];
+  const { client, postCall } = stubClient({
+    data: {
+      answer: "Sample answer.",
+      citations: [],
+      provider: "gemini",
+      model: "gemini-3.8-flash",
+      disclaimer: "Disclaimer",
+    },
+    response: { status: 200 },
+  });
+
+  await generatePatientAnswer(client, {
+    patientId: lastCallProps.patientId,
+    query: "Clinical question",
+  });
+
+  expect(postCall).toHaveBeenCalledWith(
+    "/api/v1/ai/patients/{patient_id}/answer",
+    expect.objectContaining({
+      params: { path: { patient_id: RESOLVED_UUID } },
+    }),
+  );
+  expect(postCall).not.toHaveBeenCalledWith(
+    "/api/v1/ai/patients/{patient_id}/answer",
+    expect.objectContaining({
+      params: { path: { patient_id: ROUTE_HEALTH_ID } },
+    }),
+  );
+
+  assistantSpy.mockRestore();
+});
+

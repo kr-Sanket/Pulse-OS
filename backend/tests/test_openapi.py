@@ -179,6 +179,7 @@ def test_granted_record_listing_reports_the_scope_beside_the_page() -> None:
         "grantedCategories",
         "items",
         "nextCursor",
+        "patientId",
     }
 
 

@@ -291,6 +291,7 @@ class GrantedRecordListResponse(ApiModel):
     a convenience.
     """
 
+    patient_id: UUID
     granted_categories: list[RecordCategoryResponse]
     items: list[GrantedRecordResponse]
     next_cursor: str | None

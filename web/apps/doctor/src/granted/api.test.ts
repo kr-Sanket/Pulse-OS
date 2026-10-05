@@ -19,7 +19,8 @@ function stubClient(result: StubResult | Error) {
 
 const SIGNAL = new AbortController().signal;
 const HEALTH_ID = "PHI-IND-2026-1QE8DVR";
-const PAGE = { grantedCategories: [], items: [], nextCursor: null };
+const PATIENT_ID = "00000000-0000-0000-0000-000000000001";
+const PAGE = { patientId: PATIENT_ID, grantedCategories: [], items: [], nextCursor: null };
 
 test("the listing asks for one full page of the named patient's records", async () => {
   const { client, call } = stubClient({ data: PAGE, response: { status: 200 } });

@@ -396,7 +396,12 @@ def test_a_clinician_can_reach_a_record_id_only_through_consent(
     mri_record = _upload(client, cast, "MRI")
 
     before = _granted_records(client, cast)
-    assert before == {"grantedCategories": [], "items": [], "nextCursor": None}
+    assert before == {
+        "patientId": str(cast.patient_id),
+        "grantedCategories": [],
+        "items": [],
+        "nextCursor": None,
+    }
 
     _grant_cbc(client, cast)
 
@@ -430,6 +435,7 @@ def test_a_listed_record_id_is_worthless_once_the_grant_is_revoked(
         == 404
     )
     assert _granted_records(client, cast) == {
+        "patientId": str(cast.patient_id),
         "grantedCategories": [],
         "items": [],
         "nextCursor": None,

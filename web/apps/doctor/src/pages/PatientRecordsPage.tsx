@@ -30,7 +30,8 @@ export function PatientRecordsPage({ patientId: propPatientId }: PatientRecordsP
   const navigate = useNavigate();
   const records = useGrantedRecords(healthId.length === 0 ? null : healthId);
   const { outcome } = records;
-  const patientId = propPatientId ?? healthId;
+  const patientId =
+    propPatientId ?? (outcome?.kind === "loaded" ? outcome.patientId : "");
 
   const handleSelectCitation = (recordId: string) => {
     const el =
@@ -111,11 +112,13 @@ export function PatientRecordsPage({ patientId: propPatientId }: PatientRecordsP
 
           <Separator className="my-8" />
 
-          <AIAssistantPanel
-            patientId={patientId}
-            patientHealthId={healthId}
-            onSelectCitation={handleSelectCitation}
-          />
+          {patientId ? (
+            <AIAssistantPanel
+              patientId={patientId}
+              patientHealthId={healthId}
+              onSelectCitation={handleSelectCitation}
+            />
+          ) : null}
         </>
       )}
     </div>

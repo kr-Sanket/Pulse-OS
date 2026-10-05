@@ -37,8 +37,10 @@ const LOCKER_RECORD: GrantedRecord = {
 const CBC = { code: "CBC", displayName: "Complete Blood Count" };
 const MRI = { code: "MRI", displayName: "MRI Scan" };
 
+const PATIENT_ID = "00000000-0000-0000-0000-000000000001";
+
 function page(overrides: Partial<GrantedRecordPage> = {}): GrantedRecordPage {
-  return { grantedCategories: [], items: [], nextCursor: null, ...overrides };
+  return { patientId: PATIENT_ID, grantedCategories: [], items: [], nextCursor: null, ...overrides };
 }
 
 // -- view mapping -------------------------------------------------------------------------
@@ -132,7 +134,11 @@ test("no granted category is 'no grant', whatever the items say", () => {
 test("a live grant over an empty patient is a different answer from no grant", () => {
   const outcome = outcomeFor(page({ grantedCategories: [CBC] }));
 
-  expect(outcome).toEqual({ kind: "granted-empty", categories: ["Complete Blood Count"] });
+  expect(outcome).toEqual({
+    kind: "granted-empty",
+    categories: ["Complete Blood Count"],
+    patientId: PATIENT_ID,
+  });
   expect(outcome.kind).not.toBe("no-grant");
   expect(hasGrant(page({ grantedCategories: [CBC] }))).toBe(true);
 });
@@ -149,6 +155,7 @@ test("records under a grant load, and the scope is reported beside them", () => 
   expect(outcome.records.map((record) => record.id)).toEqual(["rec-1", "rec-2"]);
   expect(outcome.categories).toEqual(["Complete Blood Count", "MRI Scan"]);
   expect(outcome.truncated).toBe(false);
+  expect(outcome.patientId).toBe(PATIENT_ID);
 });
 
 test("a full page admits that there is more rather than implying it is everything", () => {

@@ -1567,6 +1567,11 @@ export interface components {
             items: components["schemas"]["GrantedRecordResponse"][];
             /** Nextcursor */
             nextCursor: string | null;
+            /**
+             * Patientid
+             * Format: uuid
+             */
+            patientId: string;
         };
         /**
          * GrantedRecordResponse

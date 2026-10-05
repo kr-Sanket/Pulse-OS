@@ -585,7 +585,24 @@ def test_a_clinician_with_no_grant_gets_an_empty_page_rather_than_a_refusal(
     response = _granted(client, actors.doctor)
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"grantedCategories": [], "items": [], "nextCursor": None}
+    data = response.json()
+    assert data["grantedCategories"] == []
+    assert data["items"] == []
+    assert data["nextCursor"] is None
+    assert "patientId" in data
+    assert UUID(data["patientId"])
+
+
+def test_granted_records_returns_patient_uuid(client: TestClient, actors: Actors) -> None:
+    """The listing carries the patient's internal UUID so authorized clients (e.g. AI assistant)
+    can address patient-scoped endpoints without separate lookups."""
+    response = _granted(client, actors.doctor)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "patientId" in data
+    patient_id = UUID(data["patientId"])
+    assert str(patient_id) == data["patientId"]
 
 
 # -- listing controls: sort, search, cursor validity -------------------------------------

@@ -1148,9 +1148,15 @@
               }
             ],
             "title": "Nextcursor"
+          },
+          "patientId": {
+            "format": "uuid",
+            "title": "Patientid",
+            "type": "string"
           }
         },
         "required": [
+          "patientId",
           "grantedCategories",
           "items",
           "nextCursor"

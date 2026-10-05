@@ -395,6 +395,7 @@ async def list_granted_records(
     except RecordsError as exc:
         raise to_http_error(exc) from exc
     return GrantedRecordListResponse(
+        patient_id=page.patient_id,
         granted_categories=[
             RecordCategoryResponse.model_validate(category) for category in page.granted_categories
         ],

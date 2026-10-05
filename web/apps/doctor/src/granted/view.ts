@@ -82,13 +82,14 @@ export function grantedCategoryNames(categories: readonly RecordCategory[]): rea
  */
 export type GrantedRecordsOutcome =
   | { kind: "no-grant" }
-  | { kind: "granted-empty"; categories: readonly string[] }
+  | { kind: "granted-empty"; categories: readonly string[]; patientId: string }
   | {
       kind: "loaded";
       categories: readonly string[];
       records: readonly GrantedRecordView[];
       /** True when the patient has more granted records than one page holds. */
       truncated: boolean;
+      patientId: string;
     };
 
 export function outcomeFor(page: GrantedRecordPage): GrantedRecordsOutcome {
@@ -99,13 +100,14 @@ export function outcomeFor(page: GrantedRecordPage): GrantedRecordsOutcome {
     return { kind: "no-grant" };
   }
   if (page.items.length === 0) {
-    return { kind: "granted-empty", categories };
+    return { kind: "granted-empty", categories, patientId: page.patientId };
   }
   return {
     kind: "loaded",
     categories,
     records: toGrantedRecordViews(page.items),
     truncated: page.nextCursor !== null,
+    patientId: page.patientId,
   };
 }
 

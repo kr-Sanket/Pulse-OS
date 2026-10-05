@@ -212,6 +212,7 @@ class GrantedRecordPage:
     items: list[RecordView]
     next_cursor: str | None
     granted_categories: list[RecordCategory]
+    patient_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,7 +492,12 @@ class RecordService:
         )
         if not granted:
             # Nothing is in scope, so there is nothing to ask medical_records for.
-            return GrantedRecordPage(items=[], next_cursor=None, granted_categories=[])
+            return GrantedRecordPage(
+                items=[],
+                next_cursor=None,
+                granted_categories=[],
+                patient_id=patient.id,
+            )
 
         # Ordered by the vocabulary, like the existence projection: two clinicians holding
         # the same categories always see them listed identically.
@@ -519,6 +525,7 @@ class RecordService:
             items=[self._to_view(row) for row in page],
             next_cursor=next_cursor,
             granted_categories=categories,
+            patient_id=patient.id,
         )
 
     async def get_for_caller(
