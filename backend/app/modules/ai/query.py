@@ -1,8 +1,10 @@
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from uuid import UUID
 
 from app.modules.auth.domain import AuthenticatedUser
 
+from .context import AssembledContext, assemble_context
 from .retrieval import RetrievedChunk
 from .service import AIRetrievalService, RetrievalScope
 
@@ -37,4 +39,29 @@ class AIQueryService:
             category_ids=category_ids,
             query=query,
             limit=limit,
+        )
+
+    async def assemble_context(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        query: str,
+        category_codes: Mapping[UUID, str],
+        limit: int = 10,
+        max_tokens: int = 1000,
+    ) -> AssembledContext:
+        chunks = await self.search(
+            requester,
+            patient_id=patient_id,
+            query=query,
+            limit=limit,
+        )
+
+        return assemble_context(
+            query=query,
+            patient_id=patient_id,
+            chunks=chunks,
+            category_codes=category_codes,
+            max_tokens=max_tokens,
         )
