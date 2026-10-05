@@ -132,6 +132,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai/patients/{patient_id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate Patient Answer */
+        post: operations["generate_patient_answer_api_v1_ai_patients__patient_id__answer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/patients/{patient_id}/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Patient Records */
+        get: operations["search_patient_records_api_v1_ai_patients__patient_id__search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-logs": {
         parameters: {
             query?: never;
@@ -155,6 +189,47 @@ export interface paths {
          *     Failure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).
          */
         get: operations["list_audit_events_api_v1_audit_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit-logs/{audit_log_id}/verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify Audit Event
+         * @description Check one entry of the caller's own trail against its blockchain anchor (ADR-026).
+         *
+         *     Three stored copies are compared: the digest recomputed from the event's own columns,
+         *     the digest recorded on the event, and the digest recorded on the anchor when it was
+         *     published. ``VERIFIED`` means all three agree and the anchor's reference is the one this
+         *     network produces for that digest. ``EVENT_ALTERED`` means the event no longer matches
+         *     what was anchored; ``ANCHOR_ALTERED`` means the anchor row does not match its own
+         *     network; ``NOT_ANCHORED`` means no anchor exists yet and says nothing about integrity.
+         *
+         *     **This grants no new visibility.** The event is resolved under the caller's patient
+         *     scope, so an entry belonging to somebody else answers 404 exactly as a nonexistent one
+         *     does; a patient can verify only what they could already read in their own trail. The
+         *     response carries no digest and no hashed payload — only the verdict and the two facts
+         *     that make an anchor checkable, its network and its transaction reference.
+         *
+         *     There is deliberately no endpoint for anchoring, and none for verifying an arbitrary
+         *     hash: anchoring is an operator sweep (``scripts/anchor_audit_events.py``), and a public
+         *     "verify this digest" surface would be an oracle for guessing audit content.
+         *
+         *     Roles: PATIENT (own trail only). Consent requirement: none — a verdict is not record
+         *     content. Reading it is not itself an audited event, as with the listing.
+         *     Failure modes: 401, 403, 404 (no such event for this caller), 422 (malformed id).
+         */
+        get: operations["verify_audit_event_api_v1_audit_logs__audit_log_id__verification_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -884,6 +959,88 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AIAnswerRequest
+         * @description Request payload for synthesizing a clinical answer.
+         */
+        AIAnswerRequest: {
+            /**
+             * Maxtokens
+             * @description Maximum token budget for assembled clinical context.
+             * @default 1000
+             */
+            maxTokens: number;
+            /**
+             * Query
+             * @description Clinical query or question to be answered from patient records.
+             */
+            query: string;
+        };
+        /**
+         * AIAnswerResponse
+         * @description Synthesized clinical answer and verifiable provenance.
+         */
+        AIAnswerResponse: {
+            /** Answer */
+            answer: string;
+            /** Citations */
+            citations: components["schemas"]["AICitationResponse"][];
+            /** Disclaimer */
+            disclaimer: string;
+            /** Model */
+            model: string;
+            /** Provider */
+            provider: string;
+        };
+        /**
+         * AIChunkSearchListResponse
+         * @description Enveloped list of AI chunk search results.
+         */
+        AIChunkSearchListResponse: {
+            /** Items */
+            items: components["schemas"]["AIChunkSearchResponse"][];
+        };
+        /**
+         * AIChunkSearchResponse
+         * @description One retrieved AI chunk in search results.
+         */
+        AIChunkSearchResponse: {
+            /** Categorycode */
+            categoryCode: string;
+            /**
+             * Chunkid
+             * Format: uuid
+             */
+            chunkId: string;
+            /** Chunkindex */
+            chunkIndex: number;
+            /** Content */
+            content: string;
+            /**
+             * Recordid
+             * Format: uuid
+             */
+            recordId: string;
+            /** Tokencount */
+            tokenCount: number;
+        };
+        /**
+         * AICitationResponse
+         * @description Citation provenance linking synthesized text to an underlying medical record.
+         */
+        AICitationResponse: {
+            /** Categorycode */
+            categoryCode: string;
+            /** Chunkindex */
+            chunkIndex: number;
+            /** Citationindex */
+            citationIndex: number;
+            /**
+             * Recordid
+             * Format: uuid
+             */
+            recordId: string;
+        };
         /** AccessRequestCreateRequest */
         AccessRequestCreateRequest: {
             /** Categorycodes */
@@ -1058,6 +1215,7 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            integrity: components["schemas"]["AuditIntegrityResponse"];
             /**
              * Occurredat
              * Format: date-time
@@ -1069,6 +1227,22 @@ export interface components {
             targetRecordId: string | null;
             /** Targetrequestid */
             targetRequestId: string | null;
+        };
+        /**
+         * AuditEventVerificationResponse
+         * @description The answer to "is this entry of my trail still intact?".
+         *
+         *     The same integrity block the listing carries, plus the event it describes, so a client
+         *     that verified one entry can show *which* one without holding the listing row. Nothing
+         *     about the adapter beyond the network and the reference; no digest, no payload.
+         */
+        AuditEventVerificationResponse: {
+            /**
+             * Auditlogid
+             * Format: uuid
+             */
+            auditLogId: string;
+            integrity: components["schemas"]["AuditIntegrityResponse"];
         };
         /**
          * AuditHospitalResponse
@@ -1089,6 +1263,29 @@ export interface components {
             hid: string;
             /** Name */
             name: string;
+        };
+        /**
+         * AuditIntegrityResponse
+         * @description Whether this audit entry's digest is anchored, and whether it still checks out.
+         *
+         *     **Deliberately not the digest, and not the canonical payload.** ``eventHash`` is already
+         *     published on the entry for the trail's owner; repeating the anchored copy here would
+         *     only invite a client to do the comparison itself, and the comparison is the server's job
+         *     precisely because it must be made against all three stored copies (see
+         *     ``AuditAnchorService``).
+         *
+         *     ``network`` and ``reference`` are the two facts that make an anchor checkable by a human
+         *     — which chain, and which transaction. They are opaque handles: ``local-dev`` today, a
+         *     real network and explorer link at M6. Nothing else about the adapter is exposed.
+         */
+        AuditIntegrityResponse: {
+            /** Anchoredat */
+            anchoredAt: string | null;
+            /** Network */
+            network: string | null;
+            /** Reference */
+            reference: string | null;
+            status: components["schemas"]["IntegrityStatus"];
         };
         /** AuthenticatedUserResponse */
         AuthenticatedUserResponse: {
@@ -1517,6 +1714,16 @@ export interface components {
          * @enum {string}
          */
         HospitalVerificationStatus: "PENDING" | "VERIFIED";
+        /**
+         * IntegrityStatus
+         * @description The verdict for one audit event.
+         *
+         *     Four members rather than a boolean, because "we cannot vouch for this yet" and "this has
+         *     been altered" are opposite messages to show a patient, and the two failure modes point
+         *     at different culprits.
+         * @enum {string}
+         */
+        IntegrityStatus: "NOT_ANCHORED" | "VERIFIED" | "EVENT_ALTERED" | "ANCHOR_ALTERED";
         /**
          * PatientLookupResponse
          * @description Identity confirmation for a hospital, and deliberately nothing else.
@@ -2152,6 +2359,74 @@ export interface operations {
             };
         };
     };
+    generate_patient_answer_api_v1_ai_patients__patient_id__answer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                patient_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AIAnswerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AIAnswerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_patient_records_api_v1_ai_patients__patient_id__search_get: {
+        parameters: {
+            query: {
+                query: string;
+            };
+            header?: never;
+            path: {
+                patient_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AIChunkSearchListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_audit_events_api_v1_audit_logs_get: {
         parameters: {
             query?: {
@@ -2207,6 +2482,64 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    verify_audit_event_api_v1_audit_logs__audit_log_id__verification_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                audit_log_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventVerificationResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No such audit event for this patient */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

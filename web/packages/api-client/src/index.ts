@@ -63,3 +63,5 @@ export function createPulseOSClient(options: PulseOSClientOptions): PulseOSClien
   client.use(bearerAuth);
   return client;
 }
+
+export * from "./ai";

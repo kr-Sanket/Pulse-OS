@@ -1,6 +1,157 @@
 {
   "components": {
     "schemas": {
+      "AIAnswerRequest": {
+        "additionalProperties": false,
+        "description": "Request payload for synthesizing a clinical answer.",
+        "properties": {
+          "maxTokens": {
+            "default": 1000,
+            "description": "Maximum token budget for assembled clinical context.",
+            "exclusiveMinimum": 0.0,
+            "maximum": 4000.0,
+            "title": "Maxtokens",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Clinical query or question to be answered from patient records.",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "AIAnswerRequest",
+        "type": "object"
+      },
+      "AIAnswerResponse": {
+        "description": "Synthesized clinical answer and verifiable provenance.",
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/AICitationResponse"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "disclaimer": {
+            "title": "Disclaimer",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer",
+          "citations",
+          "provider",
+          "model",
+          "disclaimer"
+        ],
+        "title": "AIAnswerResponse",
+        "type": "object"
+      },
+      "AIChunkSearchListResponse": {
+        "description": "Enveloped list of AI chunk search results.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AIChunkSearchResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AIChunkSearchListResponse",
+        "type": "object"
+      },
+      "AIChunkSearchResponse": {
+        "description": "One retrieved AI chunk in search results.",
+        "properties": {
+          "categoryCode": {
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "chunkId": {
+            "format": "uuid",
+            "title": "Chunkid",
+            "type": "string"
+          },
+          "chunkIndex": {
+            "title": "Chunkindex",
+            "type": "integer"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "recordId": {
+            "format": "uuid",
+            "title": "Recordid",
+            "type": "string"
+          },
+          "tokenCount": {
+            "title": "Tokencount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "chunkId",
+          "recordId",
+          "categoryCode",
+          "chunkIndex",
+          "content",
+          "tokenCount"
+        ],
+        "title": "AIChunkSearchResponse",
+        "type": "object"
+      },
+      "AICitationResponse": {
+        "description": "Citation provenance linking synthesized text to an underlying medical record.",
+        "properties": {
+          "categoryCode": {
+            "title": "Categorycode",
+            "type": "string"
+          },
+          "chunkIndex": {
+            "title": "Chunkindex",
+            "type": "integer"
+          },
+          "citationIndex": {
+            "title": "Citationindex",
+            "type": "integer"
+          },
+          "recordId": {
+            "format": "uuid",
+            "title": "Recordid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "citationIndex",
+          "recordId",
+          "categoryCode",
+          "chunkIndex"
+        ],
+        "title": "AICitationResponse",
+        "type": "object"
+      },
       "AccessRequestCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -285,6 +436,9 @@
             "title": "Id",
             "type": "string"
           },
+          "integrity": {
+            "$ref": "#/components/schemas/AuditIntegrityResponse"
+          },
           "occurredAt": {
             "format": "date-time",
             "title": "Occurredat",
@@ -337,9 +491,29 @@
           "targetCategoryCode",
           "targetRequestId",
           "occurredAt",
-          "eventHash"
+          "eventHash",
+          "integrity"
         ],
         "title": "AuditEventResponse",
+        "type": "object"
+      },
+      "AuditEventVerificationResponse": {
+        "description": "The answer to \"is this entry of my trail still intact?\".\n\nThe same integrity block the listing carries, plus the event it describes, so a client\nthat verified one entry can show *which* one without holding the listing row. Nothing\nabout the adapter beyond the network and the reference; no digest, no payload.",
+        "properties": {
+          "auditLogId": {
+            "format": "uuid",
+            "title": "Auditlogid",
+            "type": "string"
+          },
+          "integrity": {
+            "$ref": "#/components/schemas/AuditIntegrityResponse"
+          }
+        },
+        "required": [
+          "auditLogId",
+          "integrity"
+        ],
+        "title": "AuditEventVerificationResponse",
         "type": "object"
       },
       "AuditHospitalResponse": {
@@ -359,6 +533,56 @@
           "name"
         ],
         "title": "AuditHospitalResponse",
+        "type": "object"
+      },
+      "AuditIntegrityResponse": {
+        "description": "Whether this audit entry's digest is anchored, and whether it still checks out.\n\n**Deliberately not the digest, and not the canonical payload.** ``eventHash`` is already\npublished on the entry for the trail's owner; repeating the anchored copy here would\nonly invite a client to do the comparison itself, and the comparison is the server's job\nprecisely because it must be made against all three stored copies (see\n``AuditAnchorService``).\n\n``network`` and ``reference`` are the two facts that make an anchor checkable by a human\n\u2014 which chain, and which transaction. They are opaque handles: ``local-dev`` today, a\nreal network and explorer link at M6. Nothing else about the adapter is exposed.",
+        "properties": {
+          "anchoredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchoredat"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IntegrityStatus"
+          }
+        },
+        "required": [
+          "status",
+          "network",
+          "reference",
+          "anchoredAt"
+        ],
+        "title": "AuditIntegrityResponse",
         "type": "object"
       },
       "AuthenticatedUserResponse": {
@@ -1185,6 +1409,17 @@
           "VERIFIED"
         ],
         "title": "HospitalVerificationStatus",
+        "type": "string"
+      },
+      "IntegrityStatus": {
+        "description": "The verdict for one audit event.\n\nFour members rather than a boolean, because \"we cannot vouch for this yet\" and \"this has\nbeen altered\" are opposite messages to show a patient, and the two failure modes point\nat different culprits.",
+        "enum": [
+          "NOT_ANCHORED",
+          "VERIFIED",
+          "EVENT_ALTERED",
+          "ANCHOR_ALTERED"
+        ],
+        "title": "IntegrityStatus",
         "type": "string"
       },
       "PatientLookupResponse": {
@@ -2128,6 +2363,113 @@
         ]
       }
     },
+    "/api/v1/ai/patients/{patient_id}/answer": {
+      "post": {
+        "operationId": "generate_patient_answer_api_v1_ai_patients__patient_id__answer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "patient_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Patient Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIAnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIAnswerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Patient Answer",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/api/v1/ai/patients/{patient_id}/search": {
+      "get": {
+        "operationId": "search_patient_records_api_v1_ai_patients__patient_id__search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "patient_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Patient Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": true,
+            "schema": {
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIChunkSearchListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Patient Records",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
     "/api/v1/audit-logs": {
       "get": {
         "description": "The patient's own audit trail, most recent event first.\n\nEvery consent decision, revocation and record access concerning this patient, refusals\nincluded \u2014 the append-only log is what makes the platform's promise checkable by the\nperson it is about. Ordered and paginated on the application-assigned event time, which\nis also the value the tamper-evidence hash covers.\n\nRoles: PATIENT (own trail only \u2014 the scope comes from the token, never a parameter; no\nclinician or administrator reads a patient's log through this API). Consent requirement:\nnone, an audit entry is not record content, and it names no file, date or description.\nReading the trail is not itself an audited event.\nFailure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).",
@@ -2199,6 +2541,68 @@
           }
         },
         "summary": "List Audit Events",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
+    "/api/v1/audit-logs/{audit_log_id}/verification": {
+      "get": {
+        "description": "Check one entry of the caller's own trail against its blockchain anchor (ADR-026).\n\nThree stored copies are compared: the digest recomputed from the event's own columns,\nthe digest recorded on the event, and the digest recorded on the anchor when it was\npublished. ``VERIFIED`` means all three agree and the anchor's reference is the one this\nnetwork produces for that digest. ``EVENT_ALTERED`` means the event no longer matches\nwhat was anchored; ``ANCHOR_ALTERED`` means the anchor row does not match its own\nnetwork; ``NOT_ANCHORED`` means no anchor exists yet and says nothing about integrity.\n\n**This grants no new visibility.** The event is resolved under the caller's patient\nscope, so an entry belonging to somebody else answers 404 exactly as a nonexistent one\ndoes; a patient can verify only what they could already read in their own trail. The\nresponse carries no digest and no hashed payload \u2014 only the verdict and the two facts\nthat make an anchor checkable, its network and its transaction reference.\n\nThere is deliberately no endpoint for anchoring, and none for verifying an arbitrary\nhash: anchoring is an operator sweep (``scripts/anchor_audit_events.py``), and a public\n\"verify this digest\" surface would be an oracle for guessing audit content.\n\nRoles: PATIENT (own trail only). Consent requirement: none \u2014 a verdict is not record\ncontent. Reading it is not itself an audited event, as with the listing.\nFailure modes: 401, 403, 404 (no such event for this caller), 422 (malformed id).",
+        "operationId": "verify_audit_event_api_v1_audit_logs__audit_log_id__verification_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "audit_log_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Audit Log Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventVerificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No such audit event for this patient"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Audit Event",
         "tags": [
           "consent"
         ]

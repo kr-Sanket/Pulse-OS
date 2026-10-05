@@ -9,21 +9,43 @@
 // choke point, never by this listing (ADR-020).
 
 import { ArrowLeft, FolderOpen } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ErrorState } from "@/components/common/ErrorState";
-import { Badge, Button } from "@pulseos/ui";
+import { Badge, Button, Separator } from "@pulseos/ui";
 
+import { AIAssistantPanel } from "@/components/AIAssistantPanel";
 import { EmptyGrantedRecords } from "@/granted/components/EmptyGrantedRecords";
 import { GrantedRecordList } from "@/granted/components/GrantedRecordList";
 import { GrantedRecordsSkeleton } from "@/granted/components/GrantedRecordsSkeleton";
 import { useGrantedRecords } from "@/granted/useGrantedRecords";
 import { recordCountLabel } from "@/granted/view";
 
-export function PatientRecordsPage() {
+export interface PatientRecordsPageProps {
+  patientId?: string;
+}
+
+export function PatientRecordsPage({ patientId: propPatientId }: PatientRecordsPageProps = {}) {
   const { healthId = "" } = useParams<{ healthId: string }>();
+  const navigate = useNavigate();
   const records = useGrantedRecords(healthId.length === 0 ? null : healthId);
   const { outcome } = records;
+  const patientId = propPatientId ?? healthId;
+
+  const handleSelectCitation = (recordId: string) => {
+    const el =
+      document.getElementById(`record-${recordId}`) ||
+      document.querySelector(`a[href*="/records/${recordId}"]`) ||
+      document.querySelector(`[data-record-id="${recordId}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      (el as HTMLElement).focus?.();
+    } else {
+      navigate(`/records/${encodeURIComponent(recordId)}`, {
+        state: { patientHealthId: healthId },
+      });
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -86,6 +108,14 @@ export function PatientRecordsPage() {
             Select a record to see its details and download the file. Every one you open is recorded
             on the patient's audit trail.
           </p>
+
+          <Separator className="my-8" />
+
+          <AIAssistantPanel
+            patientId={patientId}
+            patientHealthId={healthId}
+            onSelectCitation={handleSelectCitation}
+          />
         </>
       )}
     </div>
