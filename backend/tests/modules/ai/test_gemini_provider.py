@@ -454,3 +454,14 @@ def test_prompt_sanitizes_health_id_and_phone():
     assert context.query == "Show records for PHI-IND-2026-ABC123XYZ or call +919876543210"
     assert context.items[0].content == "Blood glucose is 110 mg/dL"
 
+
+def test_gemini_client_configured_with_bounded_retries() -> None:
+    generator = GeminiAnswerGenerator(api_key="test-api-key-offline")
+    client = generator._client
+    assert hasattr(client, "_api_client")
+    retry_options = client._api_client._http_options.retry_options
+    assert retry_options is not None
+    assert retry_options.attempts == 3
+    assert client._api_client._async_retry.stop.max_attempt_number == 3
+
+

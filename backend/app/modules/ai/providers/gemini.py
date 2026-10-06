@@ -106,8 +106,14 @@ class GeminiAnswerGenerator:
             self._client = client
         elif api_key:
             from google import genai
+            from google.genai import types
 
-            self._client = genai.Client(api_key=api_key)
+            self._client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(
+                    retry_options=types.HttpRetryOptions(attempts=3)
+                ),
+            )
         else:
             raise ValueError(
                 "Either client or api_key must be provided for GeminiAnswerGenerator"
