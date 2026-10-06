@@ -7,6 +7,7 @@ import pytest
 
 from app.modules.ai.context import (
     AssembledContext,
+    ContextAudience,
     ContextEvidenceItem,
     assemble_context,
 )
@@ -347,3 +348,90 @@ def test_dataclasses_are_frozen():
 
     with pytest.raises(FrozenInstanceError):
         context.items[0].citation_index = 99  # type: ignore[misc]
+
+
+def test_assemble_context_defaults_to_clinician_audience():
+    patient_id = uuid4()
+    cat_id = uuid4()
+    chunk = make_retrieved_chunk(category_id=cat_id, token_count=10)
+    context = assemble_context(
+        query="audience test",
+        patient_id=patient_id,
+        chunks=[chunk],
+        category_codes={cat_id: "LAB_REPORT"},
+    )
+    assert context.audience == ContextAudience.CLINICIAN
+
+
+def test_assemble_context_preserves_explicit_patient_audience():
+    patient_id = uuid4()
+    cat_id = uuid4()
+    chunk = make_retrieved_chunk(category_id=cat_id, token_count=10)
+    context = assemble_context(
+        query="patient audience test",
+        patient_id=patient_id,
+        chunks=[chunk],
+        category_codes={cat_id: "LAB_REPORT"},
+        audience=ContextAudience.PATIENT,
+    )
+    assert context.audience == ContextAudience.PATIENT
+
+
+def test_assemble_context_preserves_explicit_clinician_audience():
+    patient_id = uuid4()
+    cat_id = uuid4()
+    chunk = make_retrieved_chunk(category_id=cat_id, token_count=10)
+    context = assemble_context(
+        query="clinician audience test",
+        patient_id=patient_id,
+        chunks=[chunk],
+        category_codes={cat_id: "LAB_REPORT"},
+        audience=ContextAudience.CLINICIAN,
+    )
+    assert context.audience == ContextAudience.CLINICIAN
+
+
+def test_assembled_context_dataclass_default_audience():
+    context = AssembledContext(
+        query="direct test",
+        patient_id=uuid4(),
+        items=(),
+        total_tokens=0,
+        max_tokens=1000,
+        is_truncated=False,
+        dropped_chunk_count=0,
+    )
+    assert context.audience == ContextAudience.CLINICIAN
+
+
+def test_audience_does_not_affect_token_budget_or_citations():
+    patient_id = uuid4()
+    cat_id = uuid4()
+    chunk1 = make_retrieved_chunk(category_id=cat_id, token_count=40, chunk_index=0)
+    chunk2 = make_retrieved_chunk(category_id=cat_id, token_count=40, chunk_index=1)
+
+    clinician_ctx = assemble_context(
+        query="same query",
+        patient_id=patient_id,
+        chunks=[chunk1, chunk2],
+        category_codes={cat_id: "LAB_REPORT"},
+        max_tokens=50,
+        audience=ContextAudience.CLINICIAN,
+    )
+
+    patient_ctx = assemble_context(
+        query="same query",
+        patient_id=patient_id,
+        chunks=[chunk1, chunk2],
+        category_codes={cat_id: "LAB_REPORT"},
+        max_tokens=50,
+        audience=ContextAudience.PATIENT,
+    )
+
+    assert clinician_ctx.total_tokens == patient_ctx.total_tokens == 40
+    assert clinician_ctx.is_truncated is True
+    assert patient_ctx.is_truncated is True
+    assert clinician_ctx.dropped_chunk_count == patient_ctx.dropped_chunk_count == 1
+    assert len(clinician_ctx.items) == len(patient_ctx.items) == 1
+    assert clinician_ctx.items[0].citation_index == patient_ctx.items[0].citation_index == 1
+

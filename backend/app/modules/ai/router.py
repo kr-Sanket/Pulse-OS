@@ -3,7 +3,7 @@
 from typing import Annotated, Final
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.modules.ai.dependencies import (
     AIQueryServiceDep,
@@ -18,11 +18,13 @@ from app.modules.ai.schemas import (
     AIChunkSearchListResponse,
     AIChunkSearchResponse,
 )
-from app.modules.auth.dependencies import RequireDoctor
+from app.modules.auth.dependencies import RequireDoctor, RequirePatient
 from app.modules.auth.domain import AuthenticatedUser
 from app.modules.consent.dependencies import CategoryVocabularyDep
+from app.modules.patients.dependencies import PatientServiceDep
 
 DoctorUser = Annotated[AuthenticatedUser, Depends(RequireDoctor)]
+PatientUser = Annotated[AuthenticatedUser, Depends(RequirePatient)]
 
 DEFAULT_CLINICAL_DISCLAIMER: Final[str] = (
     "This clinical summary is an AI-assisted synthesis of available records and "
@@ -75,6 +77,50 @@ async def generate_patient_answer(
         result = await service.generate_answer(
             user,
             patient_id=patient_id,
+            query=body.query,
+            category_codes=vocabulary.by_id,
+            generator=generator,
+            max_tokens=body.max_tokens,
+            request_context=request_context,
+        )
+    except Exception as exc:
+        raise to_http_error(exc) from exc
+
+    return AIAnswerResponse(
+        answer=result.answer,
+        citations=[
+            AICitationResponse(
+                citation_index=cit.citation_index,
+                record_id=cit.record_id,
+                category_code=cit.category_code,
+                chunk_index=cit.chunk_index,
+            )
+            for cit in result.citations
+        ],
+        provider=result.provider,
+        model=result.model,
+        disclaimer=DEFAULT_CLINICAL_DISCLAIMER,
+    )
+
+
+@router.post("/me/answer", response_model=AIAnswerResponse)
+async def generate_patient_self_answer(
+    user: PatientUser,
+    body: AIAnswerRequest,
+    service: AIQueryServiceDep,
+    patient_service: PatientServiceDep,
+    generator: AnswerGeneratorDep,
+    vocabulary: CategoryVocabularyDep,
+    request_context: RequestContextDep,
+) -> AIAnswerResponse:
+    patient = await patient_service.get_profile(user.user_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient profile not found.")
+
+    try:
+        result = await service.generate_self_answer(
+            user,
+            patient_id=patient.id,
             query=body.query,
             category_codes=vocabulary.by_id,
             generator=generator,

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from app.modules.auth.domain import AuthenticatedUser
 
-from .context import AssembledContext, assemble_context
+from .context import AssembledContext, ContextAudience, assemble_context
 from .generation import AnswerGenerator, GeneratedAnswer
 from .retrieval import RetrievedChunk
 from .service import AIRetrievalService, RetrievalScope
@@ -89,6 +89,42 @@ class AIQueryService:
             max_tokens=max_tokens,
         )
 
+    async def _synthesize_and_audit(
+        self,
+        context: AssembledContext,
+        requester: AuthenticatedUser,
+        patient_id: UUID,
+        generator: AnswerGenerator,
+        request_context: str | None = None,
+    ) -> GeneratedAnswer:
+        now = datetime.now(timezone.utc)
+
+        # Empty-context check: do NOT call generator, do NOT write audit
+        if not context.items:
+            provider = getattr(generator, "provider", "fake" if "Fake" in type(generator).__name__ else "gemini")
+            model = getattr(generator, "model", "fake-v1" if "Fake" in type(generator).__name__ else "gemini-3.8-flash")
+            return GeneratedAnswer(
+                answer=DEFAULT_EMPTY_EVIDENCE_ANSWER,
+                citations=(),
+                provider=str(provider),
+                model=str(model),
+                generated_at=now,
+            )
+
+        # Context has evidence: invoke generator
+        generated = await generator.generate_answer(context)
+
+        # Audit recording: only after successful generation
+        if self._auditor is not None:
+            await self._auditor.record_summary_generated(
+                requester,
+                patient_id=patient_id,
+                at=generated.generated_at,
+                request_context=request_context,
+            )
+
+        return generated
+
     async def generate_answer(
         self,
         requester: AuthenticatedUser,
@@ -123,30 +159,52 @@ class AIQueryService:
             max_tokens=max_tokens,
         )
 
-        now = datetime.now(timezone.utc)
+        return await self._synthesize_and_audit(
+            context,
+            requester,
+            patient_id,
+            generator,
+            request_context=request_context,
+        )
 
-        # Empty-context check: do NOT call generator, do NOT write audit
-        if not context.items:
-            provider = getattr(generator, "provider", "fake" if "Fake" in type(generator).__name__ else "gemini")
-            model = getattr(generator, "model", "fake-v1" if "Fake" in type(generator).__name__ else "gemini-3.8-flash")
-            return GeneratedAnswer(
-                answer=DEFAULT_EMPTY_EVIDENCE_ANSWER,
-                citations=(),
-                provider=str(provider),
-                model=str(model),
-                generated_at=now,
-            )
+    async def generate_self_answer(
+        self,
+        patient_user: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        query: str,
+        category_codes: Mapping[UUID, str],
+        generator: AnswerGenerator,
+        limit: int = 10,
+        max_tokens: int = 1000,
+        request_context: str | None = None,
+    ) -> GeneratedAnswer:
+        """Synthesize an answer for an authenticated patient querying their own records.
 
-        # Context has evidence: invoke generator
-        generated = await generator.generate_answer(context)
+        Patient self-query bypasses doctor consent grants (patients own their records).
+        Retrieval scope includes all categories in the vocabulary.
+        """
+        category_ids = frozenset(category_codes.keys())
+        chunks = await self._retrieval.search(
+            patient_id=patient_id,
+            category_ids=category_ids,
+            query=query,
+            limit=limit,
+        )
 
-        # Audit recording: only after successful generation
-        if self._auditor is not None:
-            await self._auditor.record_summary_generated(
-                requester,
-                patient_id=patient_id,
-                at=generated.generated_at,
-                request_context=request_context,
-            )
+        context = assemble_context(
+            query=query,
+            patient_id=patient_id,
+            chunks=chunks,
+            category_codes=category_codes,
+            max_tokens=max_tokens,
+            audience=ContextAudience.PATIENT,
+        )
 
-        return generated
+        return await self._synthesize_and_audit(
+            context,
+            patient_user,
+            patient_id,
+            generator,
+            request_context=request_context,
+        )

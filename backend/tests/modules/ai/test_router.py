@@ -896,3 +896,369 @@ def test_unconfigured_gemini_provider_returns_503(
         app.dependency_overrides.pop(get_answer_generator, None)
 
 
+# ==============================================================================
+# Patient Health Copilot — POST /api/v1/ai/me/answer (P1.2)
+# ==============================================================================
+
+class FakePatientProfile:
+    def __init__(self, patient_id: UUID, user_id: UUID, health_id: str = "PHI-IND-2026-TEST") -> None:
+        self.id = patient_id
+        self.user_id = user_id
+        self.health_id = health_id
+
+
+class FakePatientService:
+    def __init__(self, profiles: dict[UUID, Any] | None = None) -> None:
+        self.profiles = profiles if profiles is not None else {}
+
+    async def get_profile(self, user_id: UUID) -> Any | None:
+        return self.profiles.get(user_id)
+
+
+def test_patient_can_generate_self_answer_via_ai_me(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+) -> None:
+    from app.modules.patients.dependencies import get_patient_service
+
+    user_id = uuid4()
+    patient_id = uuid4()
+    token = "patient-self-token"
+    fake_auth.register_user(
+        token,
+        user_id=user_id,
+        firebase_uid="fb-patient-self-1",
+        role=Role.PATIENT,
+    )
+
+    fake_patient_service = FakePatientService({user_id: FakePatientProfile(patient_id, user_id)})
+
+    record_id = uuid4()
+    chunk = RetrievedChunk(
+        chunk_id=uuid4(),
+        document_id=uuid4(),
+        record_id=record_id,
+        patient_id=patient_id,
+        category_id=DEFAULT_CATEGORY_ID,
+        chunk_index=0,
+        content="Patient active condition: Asthma diagnosed 2024.",
+        content_hash="hash-asthma",
+        token_count=7,
+        score=4,
+    )
+
+    fake_consent = FakeConsentScope(frozenset())  # Zero doctor consent grants
+    fake_retrieval = FakeRetrieval([chunk])
+    fake_auditor = FakeSummaryAuditor()
+    real_service = AIQueryService(
+        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        consent=fake_consent,
+        auditor=fake_auditor,
+    )
+    fake_generator = FakeAnswerGenerator(
+        answer_template="Patient has documented asthma [1]."
+    )
+
+    app.dependency_overrides[get_ai_query_service] = lambda: real_service
+    app.dependency_overrides[get_answer_generator] = lambda: fake_generator
+    app.dependency_overrides[get_patient_service] = lambda: fake_patient_service
+    try:
+        response = client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "What active conditions do I have?"},
+            headers={**_bearer(token), "X-Request-Id": "req-patient-self-42"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["answer"] == "Patient has documented asthma [1]."
+        assert data["provider"] == "fake"
+        assert data["model"] == "fake-v1"
+        assert "disclaimer" in data and len(data["disclaimer"]) > 0
+
+        assert len(data["citations"]) == 1
+        citation = data["citations"][0]
+        assert citation == {
+            "citationIndex": 1,
+            "recordId": str(record_id),
+            "categoryCode": DEFAULT_CATEGORY_CODE,
+            "chunkIndex": 0,
+        }
+
+        # Verify sensitive internal fields are NOT exposed
+        for forbidden in (
+            "patientId",
+            "patient_id",
+            "chunkId",
+            "documentId",
+            "categoryId",
+            "contentHash",
+            "s3Key",
+            "score",
+            "firebaseUid",
+            "apiKey",
+        ):
+            assert forbidden not in data
+            assert forbidden not in citation
+
+        # Verify SUMMARY_GENERATED audit was recorded with PATIENT role
+        assert len(fake_auditor.events) == 1
+        event = fake_auditor.events[0]
+        assert event["requester"].user_id == user_id
+        assert event["requester"].role == Role.PATIENT
+        assert event["patient_id"] == patient_id
+        assert event["request_context"] == "req-patient-self-42"
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)
+        app.dependency_overrides.pop(get_patient_service, None)
+
+
+@pytest.mark.parametrize("role", [Role.DOCTOR, Role.HOSPITAL_ADMIN, Role.SYSTEM_ADMIN])
+def test_patient_self_answer_rejects_non_patient_roles_with_403(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    role: Role,
+) -> None:
+    token = f"{role.value.lower()}-token"
+    fake_auth.register_user(
+        token,
+        user_id=uuid4(),
+        firebase_uid=f"fb-{token}",
+        role=role,
+    )
+
+    response = client.post(
+        "/api/v1/ai/me/answer",
+        json={"query": "What are my medications?"},
+        headers=_bearer(token),
+    )
+    assert response.status_code == 403
+
+
+def test_patient_self_answer_unauthenticated_returns_401(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/v1/ai/me/answer",
+        json={"query": "What are my medications?"},
+    )
+    assert response.status_code == 401
+
+
+def test_patient_self_answer_uses_authenticated_patient_identity(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+) -> None:
+    from app.modules.patients.dependencies import get_patient_service
+
+    patient_a_user_id = uuid4()
+    patient_a_id = uuid4()
+    token_a = "patient-a-token"
+    fake_auth.register_user(
+        token_a,
+        user_id=patient_a_user_id,
+        firebase_uid="fb-patient-a",
+        role=Role.PATIENT,
+    )
+
+    patient_b_user_id = uuid4()
+    patient_b_id = uuid4()
+
+    fake_patient_service = FakePatientService({
+        patient_a_user_id: FakePatientProfile(patient_a_id, patient_a_user_id),
+        patient_b_user_id: FakePatientProfile(patient_b_id, patient_b_user_id),
+    })
+
+    fake_retrieval = FakeRetrieval([])
+    real_service = AIQueryService(
+        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        consent=FakeConsentScope(frozenset()),
+        auditor=FakeSummaryAuditor(),
+    )
+
+    app.dependency_overrides[get_ai_query_service] = lambda: real_service
+    app.dependency_overrides[get_answer_generator] = lambda: FakeAnswerGenerator()
+    app.dependency_overrides[get_patient_service] = lambda: fake_patient_service
+    try:
+        response = client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "Summary of records"},
+            headers=_bearer(token_a),
+        )
+        assert response.status_code == 200
+
+        # Retrieval must be scoped strictly to Patient A's resolved internal UUID
+        assert len(fake_retrieval.calls) == 1
+        assert fake_retrieval.calls[0]["patient_id"] == patient_a_id
+        assert fake_retrieval.calls[0]["patient_id"] != patient_b_id
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)
+        app.dependency_overrides.pop(get_patient_service, None)
+
+
+def test_patient_self_answer_rejects_client_supplied_patient_id_with_422(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+) -> None:
+    user_id = uuid4()
+    token = "patient-token"
+    fake_auth.register_user(
+        token,
+        user_id=user_id,
+        firebase_uid="fb-patient-test",
+        role=Role.PATIENT,
+    )
+
+    # Attempt to inject patientId
+    response = client.post(
+        "/api/v1/ai/me/answer",
+        json={"query": "test query", "patientId": str(uuid4())},
+        headers=_bearer(token),
+    )
+    assert response.status_code == 422
+
+    # Attempt to inject patient_id
+    response2 = client.post(
+        "/api/v1/ai/me/answer",
+        json={"query": "test query", "patient_id": str(uuid4())},
+        headers=_bearer(token),
+    )
+    assert response2.status_code == 422
+
+
+def test_patient_self_answer_missing_profile_returns_404(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+) -> None:
+    from app.modules.patients.dependencies import get_patient_service
+
+    user_id = uuid4()
+    token = "patient-no-profile"
+    fake_auth.register_user(
+        token,
+        user_id=user_id,
+        firebase_uid="fb-patient-no-profile",
+        role=Role.PATIENT,
+    )
+
+    fake_patient_service = FakePatientService({})  # No profile for user_id
+
+    app.dependency_overrides[get_patient_service] = lambda: fake_patient_service
+    try:
+        response = client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "What are my records?"},
+            headers=_bearer(token),
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Patient profile not found."
+    finally:
+        app.dependency_overrides.pop(get_patient_service, None)
+
+
+def test_patient_self_answer_empty_evidence_behavior(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+) -> None:
+    from app.modules.patients.dependencies import get_patient_service
+
+    user_id = uuid4()
+    patient_id = uuid4()
+    token = "patient-empty-token"
+    fake_auth.register_user(
+        token,
+        user_id=user_id,
+        firebase_uid="fb-patient-empty",
+        role=Role.PATIENT,
+    )
+
+    fake_patient_service = FakePatientService({user_id: FakePatientProfile(patient_id, user_id)})
+    fake_retrieval = FakeRetrieval([])  # No matching evidence
+    fake_auditor = FakeSummaryAuditor()
+    fake_generator = FakeAnswerGenerator()
+    real_service = AIQueryService(
+        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        consent=FakeConsentScope(frozenset()),
+        auditor=fake_auditor,
+    )
+
+    app.dependency_overrides[get_ai_query_service] = lambda: real_service
+    app.dependency_overrides[get_answer_generator] = lambda: fake_generator
+    app.dependency_overrides[get_patient_service] = lambda: fake_patient_service
+    try:
+        response = client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "Unknown symptom analysis"},
+            headers=_bearer(token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["answer"] == "The available medical records do not contain information regarding the requested topic."
+        assert data["citations"] == []
+
+        # Generator was NOT called
+        assert len(fake_generator.calls) == 0
+
+        # Audit event was NOT created
+        assert len(fake_auditor.events) == 0
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)
+        app.dependency_overrides.pop(get_patient_service, None)
+
+
+def test_patient_scope_includes_all_categories_without_doctor_consent(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+) -> None:
+    from app.modules.patients.dependencies import get_patient_service
+
+    user_id = uuid4()
+    patient_id = uuid4()
+    token = "patient-scope-token"
+    fake_auth.register_user(
+        token,
+        user_id=user_id,
+        firebase_uid="fb-patient-scope",
+        role=Role.PATIENT,
+    )
+
+    fake_patient_service = FakePatientService({user_id: FakePatientProfile(patient_id, user_id)})
+    fake_retrieval = FakeRetrieval([])
+    # Deliberately empty consent scope that would block a doctor
+    fake_consent = FakeConsentScope(frozenset())
+    real_service = AIQueryService(
+        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        consent=fake_consent,
+        auditor=FakeSummaryAuditor(),
+    )
+
+    app.dependency_overrides[get_ai_query_service] = lambda: real_service
+    app.dependency_overrides[get_answer_generator] = lambda: FakeAnswerGenerator()
+    app.dependency_overrides[get_patient_service] = lambda: fake_patient_service
+    try:
+        response = client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "Show my records"},
+            headers=_bearer(token),
+        )
+        assert response.status_code == 200
+
+        # Scope must be all categories in the vocabulary, ignoring fake_consent
+        assert len(fake_retrieval.calls) == 1
+        assert fake_retrieval.calls[0]["category_ids"] == frozenset({DEFAULT_CATEGORY_ID})
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)
+        app.dependency_overrides.pop(get_patient_service, None)
+
+

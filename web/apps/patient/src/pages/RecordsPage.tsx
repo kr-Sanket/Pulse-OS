@@ -26,6 +26,7 @@ import { RecordDetailsSkeleton } from "@/components/records/RecordDetailsSkeleto
 import { RecordFilters } from "@/components/records/RecordFilters";
 import { RecordListSkeleton } from "@/components/records/RecordListSkeleton";
 import { ErrorState } from "@/components/common/ErrorState";
+import { HealthCopilotPanel } from "@/components/copilot/HealthCopilotPanel";
 import { UploadRecordDialog } from "@/components/records/UploadRecordDialog";
 import {
   createDownloadUrl,
@@ -212,6 +213,16 @@ export function RecordsPage() {
     records.reload();
   }
 
+  function handleSelectCitation(recordId: string): void {
+    setSelectedId(recordId);
+    const element =
+      document.getElementById(`record-${recordId}`) ||
+      document.querySelector(`[data-record-id="${recordId}"]`);
+    if (element) {
+      element.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -239,6 +250,8 @@ export function RecordsPage() {
         onClear={clearFilters}
         loading={categories.resource.status === "loading"}
       />
+
+      <HealthCopilotPanel onSelectCitation={handleSelectCitation} />
 
       {recordsResource.status === "loading" || recordsResource.status === "idle" ? (
         <RecordListSkeleton />

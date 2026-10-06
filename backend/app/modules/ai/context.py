@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from uuid import UUID
 
 from app.modules.ai.retrieval import RetrievedChunk
+
+
+class ContextAudience(StrEnum):
+    """The intended recipient role of the synthesized clinical context."""
+
+    CLINICIAN = "CLINICIAN"
+    PATIENT = "PATIENT"
 
 
 @dataclass(frozen=True)
@@ -33,6 +41,7 @@ class AssembledContext:
     max_tokens: int
     is_truncated: bool
     dropped_chunk_count: int
+    audience: ContextAudience = ContextAudience.CLINICIAN
 
 
 def assemble_context(
@@ -42,6 +51,7 @@ def assemble_context(
     category_codes: Mapping[UUID, str],
     *,
     max_tokens: int = 1000,
+    audience: ContextAudience = ContextAudience.CLINICIAN,
 ) -> AssembledContext:
     """Assemble a deterministic context package from retrieved chunks and budget.
 
@@ -85,4 +95,5 @@ def assemble_context(
         max_tokens=max_tokens,
         is_truncated=is_truncated,
         dropped_chunk_count=dropped_chunk_count,
+        audience=audience,
     )

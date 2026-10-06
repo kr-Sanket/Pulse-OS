@@ -2369,6 +2369,47 @@
         ]
       }
     },
+    "/api/v1/ai/me/answer": {
+      "post": {
+        "operationId": "generate_patient_self_answer_api_v1_ai_me_answer_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIAnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIAnswerResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Patient Self Answer",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
     "/api/v1/ai/patients/{patient_id}/answer": {
       "post": {
         "operationId": "generate_patient_answer_api_v1_ai_patients__patient_id__answer_post",

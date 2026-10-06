@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import Settings
-from app.modules.ai.context import AssembledContext, ContextEvidenceItem
+from app.modules.ai.context import AssembledContext, ContextAudience, ContextEvidenceItem
 from app.modules.ai.dependencies import get_answer_generator
 from app.modules.ai.generation import AnswerGenerator, FakeAnswerGenerator, GeneratedAnswer
 from app.modules.ai.providers.gemini import (
@@ -20,6 +20,8 @@ from app.modules.ai.providers.gemini import (
     GeminiSafetyError,
     GeminiTimeoutError,
     GeminiUnavailableError,
+    format_gemini_prompt,
+    format_patient_copilot_prompt,
 )
 
 
@@ -120,6 +122,7 @@ def make_assembled_context(
     *,
     query: str = "What is the patient's glucose level?",
     patient_id=None,
+    audience: ContextAudience = ContextAudience.CLINICIAN,
 ) -> AssembledContext:
     return AssembledContext(
         query=query,
@@ -129,6 +132,7 @@ def make_assembled_context(
         max_tokens=1000,
         is_truncated=False,
         dropped_chunk_count=0,
+        audience=audience,
     )
 
 
@@ -463,5 +467,209 @@ def test_gemini_client_configured_with_bounded_retries() -> None:
     assert retry_options is not None
     assert retry_options.attempts == 3
     assert client._api_client._async_retry.stop.max_attempt_number == 3
+
+
+def test_format_gemini_prompt_clinician_remains_unchanged():
+    item1 = make_evidence_item(
+        citation_index=1,
+        category_code="LAB_REPORT",
+        chunk_index=0,
+        content="Fasting glucose is 105 mg/dL",
+    )
+    item2 = make_evidence_item(
+        citation_index=2,
+        category_code="DISCHARGE_SUMMARY",
+        chunk_index=1,
+        content="Patient was discharged in stable condition.",
+    )
+    context = make_assembled_context(
+        items=(item1, item2),
+        query="What is the fasting glucose level?",
+        audience=ContextAudience.CLINICIAN,
+    )
+
+    prompt = format_gemini_prompt(context)
+
+    # Clinician prompt characteristics
+    assert "SYSTEM:\nYou are a clinical information retrieval and synthesis assistant." in prompt
+    assert "- Use only the provided evidence." in prompt
+    assert "- Do not invent or infer unsupported clinical facts." in prompt
+    assert "- Every clinical factual statement must cite evidence using [n]." in prompt
+    assert '  "The available medical records do not contain information regarding the requested topic."' in prompt
+    assert "- Do not provide an autonomous diagnosis or medical advice." in prompt
+    assert "EVIDENCE:\n\n[1] Category: LAB_REPORT (Chunk: 0)\nContent: Fasting glucose is 105 mg/dL\n\n[2] Category: DISCHARGE_SUMMARY (Chunk: 1)\nContent: Patient was discharged in stable condition." in prompt
+    assert "QUESTION:\nWhat is the fasting glucose level?" in prompt
+    # Clinician prompt does NOT contain patient copilot phrasing
+    assert "PulseOS Health Copilot" not in prompt
+    assert "PATIENT SAFETY / COMMUNICATION RULES:" not in prompt
+
+
+def test_format_patient_copilot_prompt_contains_all_safety_rules():
+    item = make_evidence_item(
+        citation_index=1,
+        category_code="LAB_REPORT",
+        chunk_index=0,
+        content="Blood glucose is 110 mg/dL",
+    )
+    context = make_assembled_context(
+        items=(item,),
+        query="What is my blood sugar?",
+        audience=ContextAudience.PATIENT,
+    )
+
+    prompt = format_patient_copilot_prompt(context)
+
+    # System header
+    assert "SYSTEM:\nYou are PulseOS Health Copilot, an AI assistant helping patients understand their medical records." in prompt
+    assert "PATIENT SAFETY / COMMUNICATION RULES:" in prompt
+
+    # All required safety / communication rules
+    assert "1. Use ONLY the provided medical-record evidence." in prompt
+    assert "2. Never invent, assume, or extrapolate facts not present in the evidence." in prompt
+    assert "3. Explain documented medical information in clear, plain language." in prompt
+    assert "4. Use an empathetic, respectful, non-alarming tone." in prompt
+    assert "5. Clearly distinguish documented facts from general educational explanations of medical terms." in prompt
+    assert "6. Every statement referring to a medical fact from the records MUST cite the relevant evidence using [n]." in prompt
+    assert "7. NEVER diagnose the patient." in prompt
+    assert "8. NEVER speculate about conditions that are not documented in the evidence." in prompt
+    assert "9. NEVER prescribe medication." in prompt
+    assert "10. NEVER recommend changing, increasing, decreasing, or stopping medication." in prompt
+    assert "11. NEVER provide a treatment plan." in prompt
+    assert '12. If the provided evidence does not answer the patient\'s question, say exactly:\n   "The available medical records do not contain information regarding the requested topic."' in prompt
+    assert "13. For medical decisions, diagnosis, treatment, or medication changes, explicitly encourage the patient to consult their doctor or clinical team." in prompt
+
+    # Evidence block and patient question
+    assert "EVIDENCE:\n\n[1] Category: LAB_REPORT (Chunk: 0)\nContent: Blood glucose is 110 mg/dL" in prompt
+    assert "PATIENT QUESTION:\nWhat is my blood sugar?" in prompt
+
+
+def test_patient_prompt_uses_sanitized_query_redacting_identifiers():
+    item = make_evidence_item(
+        citation_index=1,
+        category_code="LAB_REPORT",
+        chunk_index=0,
+        content="Blood glucose is 110 mg/dL",
+    )
+    context = make_assembled_context(
+        items=(item,),
+        query="Explain results for PHI-IND-2026-XYZ987 or SMS me at +919876543210",
+        audience=ContextAudience.PATIENT,
+    )
+
+    prompt = format_patient_copilot_prompt(context)
+
+    # Identifiers redacted
+    assert "[HEALTH_ID]" in prompt
+    assert "[PHONE]" in prompt
+    assert "PHI-IND-2026-XYZ987" not in prompt
+    assert "+919876543210" not in prompt
+
+    # Question label and sanitized query present
+    assert "PATIENT QUESTION:\nExplain results for [HEALTH_ID] or SMS me at [PHONE]" in prompt
+
+    # Original query intact on context
+    assert context.query == "Explain results for PHI-IND-2026-XYZ987 or SMS me at +919876543210"
+
+
+def test_patient_prompt_does_not_leak_internal_identifiers():
+    patient_id = uuid4()
+    record_id = uuid4()
+    chunk_id = uuid4()
+
+    item = ContextEvidenceItem(
+        chunk_id=chunk_id,
+        record_id=record_id,
+        category_code="PRESCRIPTION",
+        chunk_index=0,
+        content="Metformin 500mg once daily with meals.",
+        token_count=15,
+        citation_index=1,
+    )
+    context = make_assembled_context(
+        items=(item,),
+        query="What is my medication schedule?",
+        patient_id=patient_id,
+        audience=ContextAudience.PATIENT,
+    )
+
+    prompt = format_patient_copilot_prompt(context)
+
+    # Model-facing prompt must NEVER contain UUIDs or internal IDs
+    assert str(patient_id) not in prompt
+    assert str(record_id) not in prompt
+    assert str(chunk_id) not in prompt
+
+    # Permitted fields ONLY
+    assert "[1] Category: PRESCRIPTION (Chunk: 0)" in prompt
+    assert "Content: Metformin 500mg once daily with meals." in prompt
+
+
+def test_generator_dispatches_patient_prompt_when_audience_is_patient():
+    item = make_evidence_item(
+        citation_index=1,
+        category_code="LAB_REPORT",
+        chunk_index=0,
+        content="HbA1c is 5.6%",
+    )
+    context = make_assembled_context(
+        items=(item,),
+        query="What does my HbA1c mean?",
+        audience=ContextAudience.PATIENT,
+    )
+
+    response_payload = GeminiAnswerPayload(
+        answer="Your HbA1c is 5.6%, which is within normal range [1].",
+        cited_indices=[1],
+    )
+    client = MockGeminiClient(response=MockGenerateContentResponse(parsed=response_payload))
+    generator = GeminiAnswerGenerator(client=client)
+
+    result = asyncio.run(generator.generate_answer(context))
+    assert result.answer == "Your HbA1c is 5.6%, which is within normal range [1]."
+
+    assert len(client.aio.models.calls) == 1
+    sent_contents = client.aio.models.calls[0]["contents"]
+
+    # Verify Patient prompt was dispatched
+    assert "You are PulseOS Health Copilot" in sent_contents
+    assert "PATIENT SAFETY / COMMUNICATION RULES:" in sent_contents
+    assert "PATIENT QUESTION:\nWhat does my HbA1c mean?" in sent_contents
+    # Verify Clinician prompt header was NOT used
+    assert "You are a clinical information retrieval and synthesis assistant." not in sent_contents
+
+
+def test_generator_dispatches_clinician_prompt_when_audience_is_clinician():
+    item = make_evidence_item(
+        citation_index=1,
+        category_code="LAB_REPORT",
+        chunk_index=0,
+        content="HbA1c is 5.6%",
+    )
+    context = make_assembled_context(
+        items=(item,),
+        query="Evaluate HbA1c trend",
+        audience=ContextAudience.CLINICIAN,
+    )
+
+    response_payload = GeminiAnswerPayload(
+        answer="HbA1c documented at 5.6% [1].",
+        cited_indices=[1],
+    )
+    client = MockGeminiClient(response=MockGenerateContentResponse(parsed=response_payload))
+    generator = GeminiAnswerGenerator(client=client)
+
+    result = asyncio.run(generator.generate_answer(context))
+    assert result.answer == "HbA1c documented at 5.6% [1]."
+
+    assert len(client.aio.models.calls) == 1
+    sent_contents = client.aio.models.calls[0]["contents"]
+
+    # Verify Clinician prompt was dispatched
+    assert "You are a clinical information retrieval and synthesis assistant." in sent_contents
+    assert "QUESTION:\nEvaluate HbA1c trend" in sent_contents
+    # Verify Patient prompt header was NOT used
+    assert "You are PulseOS Health Copilot" not in sent_contents
+    assert "PATIENT SAFETY / COMMUNICATION RULES:" not in sent_contents
+
 
 

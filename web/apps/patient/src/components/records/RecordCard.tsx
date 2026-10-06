@@ -40,6 +40,8 @@ export function RecordCard({ record, selected = false, onSelect }: RecordCardPro
 
   return (
     <Card
+      id={`record-${record.id}`}
+      data-record-id={record.id}
       className={cn(
         "transition-colors duration-150",
         selected ? "ring-primary/30" : "hover:bg-accent/40",

@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.modules.ai.context import AssembledContext
+from app.modules.ai.context import AssembledContext, ContextAudience
 from app.modules.ai.generation import (
     AnswerGenerator,
     CitationReference,
@@ -88,6 +88,41 @@ def format_gemini_prompt(context: AssembledContext) -> str:
     )
 
 
+def format_patient_copilot_prompt(context: AssembledContext) -> str:
+    """Format safe model-facing prompt for patient Health Copilot."""
+    evidence_blocks: list[str] = []
+    for item in context.items:
+        evidence_blocks.append(
+            f"[{item.citation_index}] Category: {item.category_code} (Chunk: {item.chunk_index})\n"
+            f"Content: {item.content}"
+        )
+
+    evidence_text = "\n\n".join(evidence_blocks)
+    sanitized_query = sanitize_clinical_query(context.query)
+
+    return (
+        "SYSTEM:\n"
+        "You are PulseOS Health Copilot, an AI assistant helping patients understand their medical records.\n\n"
+        "PATIENT SAFETY / COMMUNICATION RULES:\n\n"
+        "1. Use ONLY the provided medical-record evidence.\n"
+        "2. Never invent, assume, or extrapolate facts not present in the evidence.\n"
+        "3. Explain documented medical information in clear, plain language.\n"
+        "4. Use an empathetic, respectful, non-alarming tone.\n"
+        "5. Clearly distinguish documented facts from general educational explanations of medical terms.\n"
+        "6. Every statement referring to a medical fact from the records MUST cite the relevant evidence using [n].\n"
+        "7. NEVER diagnose the patient.\n"
+        "8. NEVER speculate about conditions that are not documented in the evidence.\n"
+        "9. NEVER prescribe medication.\n"
+        "10. NEVER recommend changing, increasing, decreasing, or stopping medication.\n"
+        "11. NEVER provide a treatment plan.\n"
+        "12. If the provided evidence does not answer the patient's question, say exactly:\n"
+        '   "The available medical records do not contain information regarding the requested topic."\n'
+        "13. For medical decisions, diagnosis, treatment, or medication changes, explicitly encourage the patient to consult their doctor or clinical team.\n\n"
+        f"EVIDENCE:\n\n{evidence_text}\n\n"
+        f"PATIENT QUESTION:\n{sanitized_query}"
+    )
+
+
 class GeminiAnswerGenerator:
     """Gemini provider adapter implementing AnswerGenerator."""
 
@@ -138,7 +173,10 @@ class GeminiAnswerGenerator:
                 generated_at=datetime.now(timezone.utc),
             )
 
-        prompt = format_gemini_prompt(context)
+        if context.audience == ContextAudience.PATIENT:
+            prompt = format_patient_copilot_prompt(context)
+        else:
+            prompt = format_gemini_prompt(context)
 
         from google.genai import types
 

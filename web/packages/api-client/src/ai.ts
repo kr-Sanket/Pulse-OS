@@ -21,7 +21,10 @@ export const AI_STATUS_FAILURES: Readonly<Record<number, string>> = {
   504: "AI generation timed out. Please try again with a more focused question.",
 };
 
-export function getAIErrorMessage(status: number, fallback = "Could not generate clinical answer."): string {
+export function getAIErrorMessage(
+  status: number,
+  fallback = "Could not generate clinical answer.",
+): string {
   return AI_STATUS_FAILURES[status] ?? fallback;
 }
 
@@ -82,6 +85,62 @@ export async function generatePatientAnswer(
     params: {
       path: { patient_id: params.patientId },
     },
+    body: {
+      query: params.query,
+      maxTokens: params.maxTokens ?? 1000,
+    },
+    signal: params.signal,
+  });
+
+  if (result.data !== undefined) {
+    return result.data;
+  }
+
+  const status = result.response?.status ?? 500;
+  const detail = problemDetail(result.error);
+  const message = detail ?? getAIErrorMessage(status);
+  throw new AIClientError(status, message, detail);
+}
+
+export interface GeneratePatientSelfAnswerParams {
+  query: string;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Generate a synthesized clinical answer for an authenticated patient's own records.
+ *
+ * Calls POST /api/v1/ai/me/answer using the provided client.
+ * Identity is derived strictly from authentication; requires Role.PATIENT.
+ * Returns the typed AIAnswerResponse containing answer, citations, and disclaimer.
+ */
+export async function generatePatientSelfAnswer(
+  client: PulseOSClient,
+  query: string,
+  maxTokens?: number,
+  signal?: AbortSignal,
+): Promise<AIAnswerResponse>;
+export async function generatePatientSelfAnswer(
+  client: PulseOSClient,
+  params: GeneratePatientSelfAnswerParams,
+): Promise<AIAnswerResponse>;
+export async function generatePatientSelfAnswer(
+  client: PulseOSClient,
+  queryOrParams: string | GeneratePatientSelfAnswerParams,
+  maxTokensArg?: number,
+  signalArg?: AbortSignal,
+): Promise<AIAnswerResponse> {
+  const params: GeneratePatientSelfAnswerParams =
+    typeof queryOrParams === "string"
+      ? {
+          query: queryOrParams,
+          maxTokens: maxTokensArg,
+          signal: signalArg,
+        }
+      : queryOrParams;
+
+  const result = await client.POST("/api/v1/ai/me/answer", {
     body: {
       query: params.query,
       maxTokens: params.maxTokens ?? 1000,
