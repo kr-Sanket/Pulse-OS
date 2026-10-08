@@ -83,6 +83,7 @@ def get_answer_generator(
         return GeminiAnswerGenerator(
             api_key=settings.gemini_api_key,
             model=settings.ai_model,
+            timeout_seconds=settings.gemini_timeout_seconds,
         )
 
     return FakeAnswerGenerator()

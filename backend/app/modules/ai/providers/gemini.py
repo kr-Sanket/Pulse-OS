@@ -18,7 +18,7 @@ from app.modules.ai.generation import (
 )
 from app.modules.ai.text import sanitize_clinical_query
 
-DEFAULT_GEMINI_TIMEOUT_SECONDS: Final[float] = 15.0
+DEFAULT_GEMINI_TIMEOUT_SECONDS: Final[float] = 30.0
 
 EMPTY_EVIDENCE_ANSWER: Final[str] = (
     "The available medical records do not contain information regarding the requested topic."

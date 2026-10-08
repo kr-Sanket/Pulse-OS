@@ -12,6 +12,7 @@ from app.modules.ai.context import AssembledContext, ContextAudience, ContextEvi
 from app.modules.ai.dependencies import get_answer_generator
 from app.modules.ai.generation import AnswerGenerator, FakeAnswerGenerator, GeneratedAnswer
 from app.modules.ai.providers.gemini import (
+    DEFAULT_GEMINI_TIMEOUT_SECONDS,
     EMPTY_EVIDENCE_ANSWER,
     GeminiAnswerGenerator,
     GeminiAnswerPayload,
@@ -404,9 +405,34 @@ def test_dependencies_provider_wiring():
     gemini_gen = get_answer_generator(gemini_settings)
     assert isinstance(gemini_gen, GeminiAnswerGenerator)
     assert gemini_gen.model == "gemini-3.8-flash"
+    assert gemini_gen._timeout_seconds == 30.0
+
+    # Overridden timeout in Settings propagates through dependency provider
+    custom_timeout_settings = Settings(
+        ai_provider="gemini",
+        ai_model="gemini-3.8-flash",
+        gemini_api_key="valid-test-key",
+        gemini_timeout_seconds=45.0,
+    )
+    custom_gen = get_answer_generator(custom_timeout_settings)
+    assert isinstance(custom_gen, GeminiAnswerGenerator)
+    assert custom_gen._timeout_seconds == 45.0
 
 
-def test_gemini_timeout_raises_gemini_timeout_error():
+def test_gemini_default_timeout_is_thirty_seconds() -> None:
+    assert DEFAULT_GEMINI_TIMEOUT_SECONDS == 30.0
+    client = MockGeminiClient()
+    generator = GeminiAnswerGenerator(client=client)
+    assert generator._timeout_seconds == 30.0
+
+
+def test_gemini_timeout_can_be_overridden_in_constructor() -> None:
+    client = MockGeminiClient()
+    generator = GeminiAnswerGenerator(client=client, timeout_seconds=60.0)
+    assert generator._timeout_seconds == 60.0
+
+
+def test_gemini_timeout_raises_gemini_timeout_error() -> None:
     item = make_evidence_item(citation_index=1)
     context = make_assembled_context(items=(item,))
 

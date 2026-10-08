@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     ai_provider: Literal["fake", "gemini"] = "fake"
     ai_model: str = "gemini-3.8-flash"
     gemini_api_key: str | None = None
+    gemini_timeout_seconds: float = 30.0
 
 
 @lru_cache

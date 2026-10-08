@@ -18,7 +18,7 @@ from app.modules.ai.schemas import (
     AIChunkSearchListResponse,
     AIChunkSearchResponse,
 )
-from app.modules.auth.dependencies import RequireDoctor, RequirePatient
+from app.modules.auth.dependencies import RequireDoctor, RequirePatient, rate_limited
 from app.modules.auth.domain import AuthenticatedUser
 from app.modules.consent.dependencies import CategoryVocabularyDep
 from app.modules.patients.dependencies import PatientServiceDep
@@ -67,6 +67,7 @@ async def search_patient_records(
 async def generate_patient_answer(
     patient_id: UUID,
     user: DoctorUser,
+    _limit: Annotated[AuthenticatedUser, Depends(rate_limited("ai_generate"))],
     body: AIAnswerRequest,
     service: AIQueryServiceDep,
     generator: AnswerGeneratorDep,
@@ -106,6 +107,7 @@ async def generate_patient_answer(
 @router.post("/me/answer", response_model=AIAnswerResponse)
 async def generate_patient_self_answer(
     user: PatientUser,
+    _limit: Annotated[AuthenticatedUser, Depends(rate_limited("ai_generate"))],
     body: AIAnswerRequest,
     service: AIQueryServiceDep,
     patient_service: PatientServiceDep,

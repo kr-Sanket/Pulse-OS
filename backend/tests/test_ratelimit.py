@@ -24,7 +24,13 @@ from app.core.ratelimit import (
     window_index,
 )
 
-BUCKETS = ("patient_lookup", "record_existence", "granted_records", "access_request_create")
+BUCKETS = (
+    "patient_lookup",
+    "record_existence",
+    "granted_records",
+    "access_request_create",
+    "ai_generate",
+)
 
 
 # -- the approved policy ----------------------------------------------------------------
@@ -35,6 +41,7 @@ def test_the_four_protected_buckets_carry_their_approved_limits() -> None:
     assert DEFAULT_LIMITS["record_existence"] == RateLimit(limit=30, window_seconds=60)
     assert DEFAULT_LIMITS["granted_records"] == RateLimit(limit=30, window_seconds=60)
     assert DEFAULT_LIMITS["access_request_create"] == RateLimit(limit=10, window_seconds=60)
+    assert DEFAULT_LIMITS["ai_generate"] == RateLimit(limit=10, window_seconds=60)
     assert set(DEFAULT_LIMITS) == set(BUCKETS)
 
 
@@ -112,8 +119,8 @@ def test_buckets_do_not_share_quota() -> None:
         first = [(await limiter.check(bucket, "u:a")).allowed for bucket in BUCKETS]
         second = [(await limiter.check(bucket, "u:a")).allowed for bucket in BUCKETS]
 
-        assert first == [True] * 4
-        assert second == [False] * 4
+        assert first == [True] * len(BUCKETS)
+        assert second == [False] * len(BUCKETS)
 
     asyncio.run(scenario())
 

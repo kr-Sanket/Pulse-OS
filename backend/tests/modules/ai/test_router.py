@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core.ratelimit import InMemoryRateLimiter
 from app.modules.ai.context import AssembledContext
 from app.modules.ai.dependencies import get_ai_query_service, get_answer_generator
 from app.modules.ai.generation import FakeAnswerGenerator, GeneratedAnswer
@@ -1260,5 +1261,219 @@ def test_patient_scope_includes_all_categories_without_doctor_consent(
         app.dependency_overrides.pop(get_ai_query_service, None)
         app.dependency_overrides.pop(get_answer_generator, None)
         app.dependency_overrides.pop(get_patient_service, None)
+
+
+# ==============================================================================
+# AI Rate Limiting (ADR-024 ai_generate bucket)
+# ==============================================================================
+
+
+def test_doctor_ai_generate_rate_limiting_under_limit_and_exceeded(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    doctor_id = uuid4()
+    patient_id = uuid4()
+    token = "doctor-rate-limit-token"
+    fake_auth.register_user(
+        token,
+        user_id=doctor_id,
+        firebase_uid="fb-doc-rl-1",
+        role=Role.DOCTOR,
+    )
+
+    fake_retrieval = FakeRetrieval([])
+    fake_consent = FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID}))
+    real_service = AIQueryService(
+        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        consent=fake_consent,
+        auditor=FakeSummaryAuditor(),
+    )
+
+    app.dependency_overrides[get_ai_query_service] = lambda: real_service
+    app.dependency_overrides[get_answer_generator] = lambda: FakeAnswerGenerator()
+    try:
+        assert rate_limiter.limit_for("ai_generate").limit == 10
+        assert rate_limiter.limit_for("ai_generate").window_seconds == 60
+
+        for _ in range(10):
+            response = client.post(
+                f"/api/v1/ai/patients/{patient_id}/answer",
+                json={"query": "Test query for quota"},
+                headers=_bearer(token),
+            )
+            assert response.status_code == 200
+
+        # 11th request exceeds limit -> 429
+        refused = client.post(
+            f"/api/v1/ai/patients/{patient_id}/answer",
+            json={"query": "Test query for quota"},
+            headers=_bearer(token),
+        )
+        assert refused.status_code == 429
+        assert "Retry-After" in refused.headers
+        assert refused.headers["Retry-After"].isdigit()
+        assert int(refused.headers["Retry-After"]) >= 1
+        assert refused.headers["content-type"].startswith("application/problem+json")
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)
+
+
+def test_ai_generate_rate_limit_quotas_are_user_scoped(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    doc1_id = uuid4()
+    doc2_id = uuid4()
+    patient_id = uuid4()
+    token1 = "doctor1-quota-token"
+    token2 = "doctor2-quota-token"
+    fake_auth.register_user(token1, user_id=doc1_id, firebase_uid="fb-doc-rl-u1", role=Role.DOCTOR)
+    fake_auth.register_user(token2, user_id=doc2_id, firebase_uid="fb-doc-rl-u2", role=Role.DOCTOR)
+
+    fake_retrieval = FakeRetrieval([])
+    fake_consent = FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID}))
+    real_service = AIQueryService(
+        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        consent=fake_consent,
+        auditor=FakeSummaryAuditor(),
+    )
+
+    app.dependency_overrides[get_ai_query_service] = lambda: real_service
+    app.dependency_overrides[get_answer_generator] = lambda: FakeAnswerGenerator()
+    try:
+        # Exhaust user 1's quota
+        for _ in range(10):
+            assert (
+                client.post(
+                    f"/api/v1/ai/patients/{patient_id}/answer",
+                    json={"query": "User 1 query"},
+                    headers=_bearer(token1),
+                ).status_code
+                == 200
+            )
+
+        assert (
+            client.post(
+                f"/api/v1/ai/patients/{patient_id}/answer",
+                json={"query": "User 1 11th query"},
+                headers=_bearer(token1),
+            ).status_code
+            == 429
+        )
+
+        # User 2 has distinct quota and succeeds
+        resp2 = client.post(
+            f"/api/v1/ai/patients/{patient_id}/answer",
+            json={"query": "User 2 query"},
+            headers=_bearer(token2),
+        )
+        assert resp2.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)
+
+
+def test_patient_ai_generate_rate_limiting_under_limit_and_exceeded(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    from app.modules.patients.dependencies import get_patient_service
+
+    pat1_user_id = uuid4()
+    pat1_id = uuid4()
+    token1 = "pat1-quota-token"
+    fake_auth.register_user(token1, user_id=pat1_user_id, firebase_uid="fb-pat1-rl", role=Role.PATIENT)
+
+    pat2_user_id = uuid4()
+    pat2_id = uuid4()
+    token2 = "pat2-quota-token"
+    fake_auth.register_user(token2, user_id=pat2_user_id, firebase_uid="fb-pat2-rl", role=Role.PATIENT)
+
+    profiles = {
+        pat1_user_id: FakePatientProfile(pat1_id, pat1_user_id),
+        pat2_user_id: FakePatientProfile(pat2_id, pat2_user_id),
+    }
+    fake_patient_service = FakePatientService(profiles)
+    fake_retrieval = FakeRetrieval([])
+    fake_consent = FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID}))
+    real_service = AIQueryService(
+        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        consent=fake_consent,
+        auditor=FakeSummaryAuditor(),
+    )
+
+    app.dependency_overrides[get_ai_query_service] = lambda: real_service
+    app.dependency_overrides[get_answer_generator] = lambda: FakeAnswerGenerator()
+    app.dependency_overrides[get_patient_service] = lambda: fake_patient_service
+    try:
+        for _ in range(10):
+            response = client.post(
+                "/api/v1/ai/me/answer",
+                json={"query": "Patient self query"},
+                headers=_bearer(token1),
+            )
+            assert response.status_code == 200
+
+        # 11th request for pat1 returns 429
+        refused = client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "Patient self query 11"},
+            headers=_bearer(token1),
+        )
+        assert refused.status_code == 429
+        assert "Retry-After" in refused.headers
+        assert int(refused.headers["Retry-After"]) >= 1
+
+        # pat2 has separate quota
+        response2 = client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "Patient 2 self query"},
+            headers=_bearer(token2),
+        )
+        assert response2.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)
+        app.dependency_overrides.pop(get_patient_service, None)
+
+
+def test_ai_generate_rate_limiting_preserves_role_authorization(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    patient_id = uuid4()
+    patient_user_id = uuid4()
+    patient_token = "patient-for-auth-check"
+    fake_auth.register_user(patient_token, user_id=patient_user_id, firebase_uid="fb-pat-auth", role=Role.PATIENT)
+
+    doctor_user_id = uuid4()
+    doctor_token = "doctor-for-auth-check"
+    fake_auth.register_user(doctor_token, user_id=doctor_user_id, firebase_uid="fb-doc-auth", role=Role.DOCTOR)
+
+    # Doctor endpoint rejects unauthenticated (401) and non-doctor (403)
+    assert client.post(f"/api/v1/ai/patients/{patient_id}/answer", json={"query": "q"}).status_code == 401
+    assert client.post(
+        f"/api/v1/ai/patients/{patient_id}/answer",
+        json={"query": "q"},
+        headers=_bearer(patient_token),
+    ).status_code == 403
+
+    # Patient self endpoint rejects unauthenticated (401) and non-patient (403)
+    assert client.post("/api/v1/ai/me/answer", json={"query": "q"}).status_code == 401
+    assert client.post(
+        "/api/v1/ai/me/answer",
+        json={"query": "q"},
+        headers=_bearer(doctor_token),
+    ).status_code == 403
+
 
 
