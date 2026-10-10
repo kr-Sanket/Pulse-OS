@@ -47,7 +47,7 @@ pulse-os/
 - `docker compose up` must bring up a fully working local stack from a clean checkout — this is
   a standing acceptance criterion (see CHECKLIST.md phase gate).
 - Configuration only via env vars; `.env.example` lists every variable with a safe default or
-  `CHANGEME`. Real `.env` is gitignored. Firebase/Gemini keys are per-developer.
+  `CHANGEME`. Real `.env` is gitignored. Firebase keys are per-developer (AI uses local Ollama without external API keys).
 - Seed script (`scripts/seed.py`) creates the 3 simulated hospitals, demo doctors, and synthetic
   patients — the same data the demo uses. It must stay idempotent.
 

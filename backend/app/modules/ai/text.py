@@ -41,7 +41,6 @@ def sanitize_clinical_query(query: str) -> str:
     return sanitized
 
 
-
 def normalize_fhir_resource(resource: Mapping[str, Any]) -> str:
     """Convert a sanitized FHIR resource into deterministic readable text.
 
@@ -63,6 +62,8 @@ def normalize_fhir_resource(resource: Mapping[str, Any]) -> str:
     _append_scalar(lines, "Status", resource.get("status"))
     _append_scalar(lines, "Intent", resource.get("intent"))
     _append_scalar(lines, "Date", resource.get("date"))
+    _append_scalar(lines, "Effective Date", resource.get("effectiveDateTime"))
+    _append_scalar(lines, "Issued Date", resource.get("issued"))
     _append_scalar(lines, "Recorded Date", resource.get("recordedDate"))
     _append_scalar(lines, "Occurrence Date", resource.get("occurrenceDateTime"))
 
@@ -77,10 +78,19 @@ def normalize_fhir_resource(resource: Mapping[str, Any]) -> str:
         if isinstance(results, list):
             for index, result in enumerate(results, start=1):
                 if isinstance(result, Mapping):
-                    lines.append(
-                        f"Result Reference {index}: "
-                        f"{result.get('reference', result.get('display', ''))}"
-                    )
+                    obs_summary = _format_observation_value(result)
+                    if obs_summary:
+                        lines.append(f"Result: {obs_summary}")
+                    else:
+                        lines.append(
+                            f"Result Reference {index}: "
+                            f"{result.get('reference', result.get('display', ''))}"
+                        )
+
+    if resource_type == "Observation":
+        obs_summary = _format_observation_value(resource)
+        if obs_summary:
+            lines.append(f"Result: {obs_summary}")
 
     if resource_type == "Condition":
         _append_codeable_concept(lines, "Clinical Status", resource.get("clinicalStatus"))
@@ -100,6 +110,56 @@ def normalize_fhir_resource(resource: Mapping[str, Any]) -> str:
         _append_codeable_concept(lines, "Verification Status", resource.get("verificationStatus"))
 
     return "\n".join(line for line in lines if line.strip())
+
+
+def _extract_concept_name(concept: Any) -> str:
+    """Extract display name or text from a CodeableConcept-like mapping."""
+    if not isinstance(concept, Mapping):
+        return ""
+    text = concept.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    codings = concept.get("coding")
+    if isinstance(codings, list):
+        for coding in codings:
+            if isinstance(coding, Mapping):
+                display = coding.get("display")
+                if isinstance(display, str) and display.strip():
+                    return display.strip()
+                code_val = coding.get("code")
+                if isinstance(code_val, str) and code_val.strip():
+                    return code_val.strip()
+    return ""
+
+
+def _format_observation_value(observation: Mapping[str, Any]) -> str:
+    """Extract formatted analyte name and value from an Observation mapping."""
+    name = _extract_concept_name(observation.get("code"))
+
+    quantity = observation.get("valueQuantity")
+    if isinstance(quantity, Mapping) and quantity.get("value") is not None:
+        val = quantity["value"]
+        rendered = f"{val:.1f}".rstrip("0").rstrip(".") if isinstance(val, float) else str(val)
+        unit = quantity.get("unit") or ""
+        value_str = f"{rendered} {unit}".strip()
+        return f"{name} {value_str}".strip() if name else value_str
+
+    for key in ("valueString", "valueBoolean", "valueInteger"):
+        if observation.get(key) is not None:
+            val_str = str(observation[key])
+            return f"{name} {val_str}".strip() if name else val_str
+
+    concept_val = _extract_concept_name(observation.get("valueCodeableConcept"))
+    if concept_val:
+        return f"{name} {concept_val}".strip() if name else concept_val
+
+    if observation.get("resourceType") == "Observation":
+        return name
+
+    if "reference" in observation:
+        return ""
+
+    return name
 
 
 def _append_scalar(

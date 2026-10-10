@@ -1,8 +1,12 @@
 import asyncio
-from uuid import uuid4
+from collections.abc import Collection
+from datetime import date
+from typing import Any
+from uuid import UUID, uuid4
 
-from app.modules.ai.models import AIDocument, AIChunk
+from app.modules.ai.models import AIChunk, AIDocument
 from app.modules.ai.service import AIIngestionService, AIRetrievalService
+
 
 class FakeAIRepository:
     def __init__(self) -> None:
@@ -13,6 +17,8 @@ class FakeAIRepository:
         return self.documents.get(record_id)
 
     async def add_document(self, document: AIDocument):
+        if getattr(document, "id", None) is None:
+            document.id = uuid4()
         self.documents[document.record_id] = document
         return document
 
@@ -181,3 +187,122 @@ def test_retrieval_service_returns_ranked_consent_scoped_chunks():
         first_document.record_id,
         second_document.record_id,
     }
+
+
+class FakeDateLookup:
+    def __init__(self, dates: dict[UUID, date]) -> None:
+        self.dates = dates
+        self.call_count = 0
+        self.requested_batches: list[Collection[UUID]] = []
+
+    async def dates_by_record_ids(self, record_ids: Collection[UUID]) -> dict[UUID, date]:
+        self.call_count += 1
+        self.requested_batches.append(record_ids)
+        return {rid: self.dates[rid] for rid in record_ids if rid in self.dates}
+
+
+def test_t5_batched_date_lookup_single_query_and_correct_mapping() -> None:
+    repository: Any = FakeAIRepository()
+    ingestion = AIIngestionService(repository)
+
+    patient_id = uuid4()
+    cat_id = uuid4()
+    record_id_1 = uuid4()
+    record_id_2 = uuid4()
+
+    asyncio.run(
+        ingestion.index_record(
+            record_id=record_id_1,
+            patient_id=patient_id,
+            category_id=cat_id,
+            normalized_text="diagnosticreport lab result",
+            max_tokens=20,
+        )
+    )
+    asyncio.run(
+        ingestion.index_record(
+            record_id=record_id_2,
+            patient_id=patient_id,
+            category_id=cat_id,
+            normalized_text="diagnosticreport lab result",
+            max_tokens=20,
+        )
+    )
+
+    date_lookup = FakeDateLookup({
+        record_id_1: date(2018, 10, 1),
+        # record_id_2 intentionally missing from lookup to test missing ID resilience
+    })
+
+    service = AIRetrievalService(repository, date_lookup=date_lookup)
+
+    results = asyncio.run(
+        service.search(
+            patient_id=patient_id,
+            category_ids=frozenset({cat_id}),
+            query="lab result",
+            limit=10,
+        )
+    )
+
+    # Batched lookup called exactly once for all retrieved records (no N+1)
+    assert date_lookup.call_count == 1
+    assert set(date_lookup.requested_batches[0]) == {record_id_1, record_id_2}
+
+    # Correct date mappings on results
+    r1 = next(r for r in results if r.record_id == record_id_1)
+    assert r1.date_of_service == date(2018, 10, 1)
+
+    r2 = next(r for r in results if r.record_id == record_id_2)
+    assert r2.date_of_service is None
+
+
+def test_t1_retrieval_service_temporal_query_prioritizes_newer_record() -> None:
+    repository: Any = FakeAIRepository()
+    ingestion = AIIngestionService(repository)
+
+    patient_id = uuid4()
+    cat_id = uuid4()
+    rec_old = uuid4()
+    rec_new = uuid4()
+
+    asyncio.run(
+        ingestion.index_record(
+            record_id=rec_old,
+            patient_id=patient_id,
+            category_id=cat_id,
+            normalized_text="diagnosticreport panel laboratory result",
+            max_tokens=20,
+        )
+    )
+    asyncio.run(
+        ingestion.index_record(
+            record_id=rec_new,
+            patient_id=patient_id,
+            category_id=cat_id,
+            normalized_text="diagnosticreport panel laboratory result",
+            max_tokens=20,
+        )
+    )
+
+    date_lookup = FakeDateLookup({
+        rec_old: date(2017, 9, 24),
+        rec_new: date(2018, 10, 1),
+    })
+
+    service = AIRetrievalService(repository, date_lookup=date_lookup)
+
+    results = asyncio.run(
+        service.search(
+            patient_id=patient_id,
+            category_ids=frozenset({cat_id}),
+            query="What are the patient's latest laboratory results?",
+            limit=10,
+        )
+    )
+
+    assert len(results) == 2
+    assert results[0].record_id == rec_new
+    assert results[0].date_of_service == date(2018, 10, 1)
+    assert results[1].record_id == rec_old
+    assert results[1].date_of_service == date(2017, 9, 24)

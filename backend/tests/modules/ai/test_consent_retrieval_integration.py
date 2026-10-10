@@ -244,6 +244,76 @@ def test_consent_scoped_ai_retrieval_lifecycle():
             assert any("glucose" in chunk.content for chunk in phase2_results)
 
             # -------------------------------------------------------------
+            # TEMPORAL QUERY UNDER CONSENT SCOPE (T6: Consent Invariance)
+            # Even if rx_record is NEWER (2026-03-02 vs 2026-03-01), the unconsented
+            # PRESCRIPTION category must remain strictly excluded.
+            # -------------------------------------------------------------
+            temporal_results = await query_service.search(
+                doctor_auth,
+                patient_id=patient.id,
+                query="What are the patient's latest diabetes findings?",
+            )
+            assert len(temporal_results) > 0
+            assert all(chunk.category_id == cat_lab.id for chunk in temporal_results)
+            assert all(chunk.record_id == lab_record.id for chunk in temporal_results)
+            assert all(chunk.category_id != cat_rx.id for chunk in temporal_results)
+            assert temporal_results[0].date_of_service == date(2026, 3, 1)
+
+            # -------------------------------------------------------------
+            # PATIENT ISOLATION UNDER TEMPORAL QUERY (T7: Patient Isolation)
+            # Querying patient 1 must never return records from another patient,
+            # even if that other patient has a newer record matching the query.
+            # -------------------------------------------------------------
+            other_patient_user = User(
+                firebase_uid=f"fb-patient-other-{uuid4()}",
+                role=Role.PATIENT,
+            )
+            session.add(other_patient_user)
+            await session.flush()
+
+            other_patient = Patient(
+                user_id=other_patient_user.id,
+                health_id=f"PHI-IND-2026-{str(uuid4())[:7].upper()}",
+                full_name="Other Test Patient",
+            )
+            session.add(other_patient)
+            await session.flush()
+
+            other_lab_record = MedicalRecord(
+                id=uuid4(),
+                patient_id=other_patient.id,
+                category_id=cat_lab.id,
+                origin=RecordOrigin.HOSPITAL_UPLOAD,
+                uploaded_by_hospital_id=hospital.id,
+                uploaded_by_doctor_id=doctor.id,
+                date_of_service=date(2026, 3, 15),  # Newer than patient 1
+                description="Newer lab report for other patient",
+                original_filename="other_lab.json",
+                content_type="application/fhir+json",
+                size_bytes=100,
+                s3_key=f"records/{other_patient.id}/lab-newer",
+            )
+            session.add(other_lab_record)
+            await session.flush()
+
+            await ingestion_service.index_record(
+                record_id=other_lab_record.id,
+                patient_id=other_patient.id,
+                category_id=cat_lab.id,
+                normalized_text="glucose test diabetes fasting report",
+                max_tokens=20,
+            )
+
+            # Query for patient 1: must never return other_patient's record
+            p1_results = await query_service.search(
+                doctor_auth,
+                patient_id=patient.id,
+                query="latest diabetes findings",
+            )
+            assert all(chunk.patient_id == patient.id for chunk in p1_results)
+            assert all(chunk.record_id != other_lab_record.id for chunk in p1_results)
+
+            # -------------------------------------------------------------
             # PHASE 3 — REVOCATION
             # Patient revokes the grant; retrieval must immediately close.
             # -------------------------------------------------------------

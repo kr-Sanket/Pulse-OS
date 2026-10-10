@@ -63,6 +63,6 @@ scan audited and notified to the patient, expiry + patient kill-switch. Not in M
 
 ## Secrets Inventory (maintained as they're added)
 
-Firebase service account · Gemini API key · S3/MinIO credentials · Postgres/Redis URLs ·
+Firebase service account · S3/MinIO credentials · Postgres/Redis URLs ·
 anchoring wallet private key (testnet-only funds) · Sentry DSN. All env-injected; rotation is a
 config change.

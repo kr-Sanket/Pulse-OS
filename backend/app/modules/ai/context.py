@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from uuid import UUID
 
@@ -28,6 +29,30 @@ class ContextEvidenceItem:
     content: str
     token_count: int
     citation_index: int
+
+    def __init__(
+        self,
+        chunk_id: UUID,
+        record_id: UUID,
+        category_code: str,
+        chunk_index: int,
+        content: str,
+        token_count: int,
+        citation_index: int,
+        date_of_service: date | None = None,
+    ) -> None:
+        object.__setattr__(self, "chunk_id", chunk_id)
+        object.__setattr__(self, "record_id", record_id)
+        object.__setattr__(self, "category_code", category_code)
+        object.__setattr__(self, "chunk_index", chunk_index)
+        object.__setattr__(self, "content", content)
+        object.__setattr__(self, "token_count", token_count)
+        object.__setattr__(self, "citation_index", citation_index)
+        object.__setattr__(self, "_date_of_service", date_of_service)
+
+    @property
+    def date_of_service(self) -> date | None:
+        return getattr(self, "_date_of_service", None)
 
 
 @dataclass(frozen=True)
@@ -79,6 +104,7 @@ def assemble_context(
                     content=chunk.content,
                     token_count=chunk.token_count,
                     citation_index=len(items) + 1,
+                    date_of_service=chunk.date_of_service,
                 )
             )
             total_tokens += chunk.token_count

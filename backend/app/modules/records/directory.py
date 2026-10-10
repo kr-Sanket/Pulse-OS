@@ -14,11 +14,13 @@ file, a different concern, and no import cycle between them.
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from datetime import date
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.records.models import Doctor, DoctorStatus, Hospital
+from app.modules.records.models import Doctor, DoctorStatus, Hospital, MedicalRecord
 from app.modules.records.repository import (
     DoctorRepository,
     HospitalAdminRepository,
@@ -235,3 +237,29 @@ def staff_directory(session: AsyncSession) -> StaffDirectoryService:
     return StaffDirectoryService(
         DoctorRepository(session), HospitalAdminRepository(session), HospitalRepository(session)
     )
+
+
+class RecordDateDirectoryService:
+    """How other modules look up clinical dates of service by record id.
+
+    Exposes only the date_of_service projection for requested record ids.
+    No content, no filename, no medical details.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def dates_by_record_ids(self, record_ids: Collection[UUID]) -> dict[UUID, date]:
+        """Return a mapping of record_id to date_of_service in a single batched query."""
+        if not record_ids:
+            return {}
+        stmt = (
+            select(MedicalRecord.id, MedicalRecord.date_of_service)
+            .where(MedicalRecord.id.in_(record_ids))
+        )
+        result = await self._session.execute(stmt)
+        return {rec_id: dos for rec_id, dos in result.tuples().all() if dos is not None}
+
+
+def record_date_directory(session: AsyncSession) -> RecordDateDirectoryService:
+    return RecordDateDirectoryService(session)

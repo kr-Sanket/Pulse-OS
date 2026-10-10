@@ -89,6 +89,6 @@ for the current-state handoff, [`.claude/TODO.md`](.claude/TODO.md) for remainin
 ## Stack (summary)
 
 FastAPI modular monolith · PostgreSQL + pgvector · Redis workers · S3/MinIO · Firebase Auth ·
-React + TypeScript monorepo (3 portals) · Flutter (patient app) · LangChain + Gemini ·
+React + TypeScript monorepo (3 portals) · Flutter (patient app) · LangChain + Ollama ·
 Solidity on Polygon Amoy (hash-only consent anchoring) · Docker · GitHub Actions.
 Details and rationale: [`docs/TECH_STACK.md`](docs/TECH_STACK.md).

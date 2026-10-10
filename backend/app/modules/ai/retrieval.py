@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 from typing import Final
 from uuid import UUID
 
@@ -47,6 +49,23 @@ CLINICAL_SYNONYMS: Final[dict[str, tuple[str, ...]]] = {
 
 _NON_PLURAL_S_WORDS: Final[frozenset[str]] = frozenset({"diabetes", "status", "sepsis"})
 
+TEMPORAL_INTENT_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\b(latest|newest|most\s+recent|recent|last|current)\b",
+    re.IGNORECASE,
+)
+
+
+def has_temporal_intent(query: str) -> bool:
+    """Return True if the query explicitly indicates temporal/recency intent.
+
+    Matches whole words: 'latest', 'newest', 'most recent', 'recent', 'last',
+    or 'current'. Uses word boundaries to avoid false matches (e.g. 'blast',
+    'elastic', 'currency', 'crescent').
+    """
+    if not query:
+        return False
+    return bool(TEMPORAL_INTENT_PATTERN.search(query))
+
 
 @dataclass(frozen=True)
 class RetrievedChunk:
@@ -62,6 +81,7 @@ class RetrievedChunk:
     content_hash: str
     token_count: int
     score: int
+    date_of_service: date | None = None
 
 
 def normalize_query(query: str) -> tuple[str, ...]:
@@ -101,25 +121,94 @@ def lexical_score(content: str, query_terms: tuple[str, ...]) -> int:
     normalized_content = content.lower()
     return sum(term in normalized_content for term in query_terms)
 
+
+def rank_retrieved_chunks(
+    chunks: list[RetrievedChunk],
+    query: str,
+    *,
+    limit: int = 10,
+) -> list[RetrievedChunk]:
+    """Rank candidate RetrievedChunk objects deterministically.
+
+    Ranking policy:
+    1. If the query expresses explicit temporal intent (e.g. 'latest', 'recent'):
+       - Candidates with strong lexical relevance (Tier 1) are prioritized by
+         recency descending (date_of_service), with lexical score as a secondary criterion.
+       - Candidates with weak lexical relevance (Tier 0) cannot outrank Tier 1,
+         preventing unrelated recent records from displacing relevant clinical evidence.
+    2. For non-temporal queries:
+       - Higher lexical score strictly outranks lower lexical score.
+       - Recency breaks equal-score ties.
+    3. Undated/missing-date records sort deterministically after dated records when
+       recency ordering applies.
+    4. Stable tie-breaking by (document_id, chunk_index, chunk_id) is preserved.
+    """
+    if limit <= 0 or not chunks:
+        return []
+
+    is_temporal = has_temporal_intent(query)
+    max_score = max((chunk.score for chunk in chunks), default=0)
+
+    if is_temporal and max_score > 0:
+        # Require strong lexical relevance to enter the recency-prioritized tier.
+        # This prevents weak matches (e.g. matching only "patient") from outranking
+        # core clinical evidence like lab panels or conditions.
+        threshold = max(2, int(max_score * 0.6)) if max_score >= 3 else max_score
+
+        def temporal_sort_key(item: RetrievedChunk) -> tuple[int, int, int, str, int, str]:
+            date_ord = item.date_of_service.toordinal() if item.date_of_service else -1
+            is_tier_1 = 1 if item.score >= threshold else 0
+            return (
+                -is_tier_1,
+                -date_ord,
+                -item.score,
+                str(item.document_id),
+                item.chunk_index,
+                str(item.chunk_id),
+            )
+
+        return sorted(chunks, key=temporal_sort_key)[:limit]
+
+    def standard_sort_key(item: RetrievedChunk) -> tuple[int, int, str, int, str]:
+        date_ord = item.date_of_service.toordinal() if item.date_of_service else -1
+        return (
+            -item.score,
+            -date_ord,
+            str(item.document_id),
+            item.chunk_index,
+            str(item.chunk_id),
+        )
+
+    return sorted(chunks, key=standard_sort_key)[:limit]
+
+
 def rank_chunks(
     chunks: list[AIChunk],
     query: str,
     *,
     limit: int = 10,
+    dates_by_document_id: Mapping[UUID, date] | None = None,
 ) -> list[RetrievedChunk]:
-    """Rank candidate chunks deterministically using lexical matching."""
+    """Rank candidate chunks deterministically using lexical matching and recency."""
     if limit <= 0:
         return []
 
     query_terms = normalize_query(query)
+    if not query_terms:
+        return []
 
     ranked: list[RetrievedChunk] = []
 
     for chunk in chunks:
         score = lexical_score(chunk.content, query_terms)
-
         if score == 0:
             continue
+
+        date_val = (
+            dates_by_document_id.get(chunk.document_id)
+            if dates_by_document_id is not None
+            else None
+        )
 
         ranked.append(
             RetrievedChunk(
@@ -133,16 +222,8 @@ def rank_chunks(
                 content_hash=chunk.content_hash,
                 token_count=chunk.token_count,
                 score=score,
+                date_of_service=date_val,
             )
         )
 
-    ranked.sort(
-        key=lambda item: (
-            -item.score,
-            str(item.document_id),
-            item.chunk_index,
-            str(item.chunk_id),
-        )
-    )
-
-    return ranked[:limit]
+    return rank_retrieved_chunks(ranked, query, limit=limit)

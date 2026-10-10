@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.ai.models import AIDocument, AIChunk
+from app.modules.ai.models import AIChunk, AIDocument
 
 
 class AIRepository:
@@ -81,7 +81,13 @@ class AIRepository:
         self,
         document_id: UUID,
     ) -> AIDocument | None:
-        result = await self._session.execute(
-            select(AIDocument).where(AIDocument.id == document_id)
-        )
+        result = await self._session.execute(select(AIDocument).where(AIDocument.id == document_id))
         return result.scalar_one_or_none()
+
+    async def delete_chunks_by_document_id(
+        self,
+        document_id: UUID,
+    ) -> None:
+        """Delete all chunks for a document."""
+        await self._session.execute(delete(AIChunk).where(AIChunk.document_id == document_id))
+        await self._session.flush()

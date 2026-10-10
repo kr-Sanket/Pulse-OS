@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Final, Protocol
 from uuid import UUID
 
@@ -54,7 +54,7 @@ class AIQueryService:
         category_ids = await self._consent.granted_category_ids(
             requester,
             patient_id=patient_id,
-            at=datetime.now(timezone.utc),
+            at=datetime.now(UTC),
         )
 
         return await self._retrieval.search(
@@ -97,12 +97,20 @@ class AIQueryService:
         generator: AnswerGenerator,
         request_context: str | None = None,
     ) -> GeneratedAnswer:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Empty-context check: do NOT call generator, do NOT write audit
         if not context.items:
-            provider = getattr(generator, "provider", "fake" if "Fake" in type(generator).__name__ else "gemini")
-            model = getattr(generator, "model", "fake-v1" if "Fake" in type(generator).__name__ else "gemini-3.8-flash")
+            provider = getattr(
+                generator,
+                "provider",
+                "fake" if "Fake" in type(generator).__name__ else "ollama",
+            )
+            model = getattr(
+                generator,
+                "model",
+                "fake-v1" if "Fake" in type(generator).__name__ else "qwen3:8b",
+            )
             return GeneratedAnswer(
                 answer=DEFAULT_EMPTY_EVIDENCE_ANSWER,
                 citations=(),
@@ -142,7 +150,7 @@ class AIQueryService:
         1. Resolves consent-authorized categories and retrieves matching chunks.
         2. Deterministically assembles context adhering to token budget.
         3. If context contains no evidence:
-           - Bypasses AnswerGenerator (neither Gemini nor Fake is called).
+           - Bypasses AnswerGenerator (neither Ollama nor Fake is called).
            - Bypasses audit recording (no summary was synthesized).
            - Returns deterministic empty-evidence GeneratedAnswer immediately.
         4. If context contains evidence:

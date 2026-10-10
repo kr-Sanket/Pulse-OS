@@ -61,10 +61,10 @@ class Settings(BaseSettings):
     rate_limits: dict[str, str] = {}
 
     # AI Provider configuration (ADR-007)
-    ai_provider: Literal["fake", "gemini"] = "fake"
-    ai_model: str = "gemini-3.8-flash"
-    gemini_api_key: str | None = None
-    gemini_timeout_seconds: float = 30.0
+    ai_provider: Literal["fake", "ollama"] = "ollama"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen3:8b"
+    ollama_timeout_seconds: float = 60.0
 
 
 @lru_cache

@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read and validate objects without writing AI rows",
     )
+    parser.add_argument(
+        "--reindex",
+        action="store_true",
+        help="re-index records whose normalized content changed",
+    )
     return parser
 
 
@@ -51,9 +56,9 @@ async def run(args: argparse.Namespace) -> int:
 
     # Register all ORM models on Base.metadata before AI models reference
     # cross-module foreign keys.
-    from app.modules.patients import models as _patient_models
-    from app.modules.records import models as _record_models
-    from app.modules.ai import models as _ai_models
+    from app.modules.patients import models as _patient_models  # noqa: F401
+    from app.modules.records import models as _record_models  # noqa: F401
+    from app.modules.ai import models as _ai_models  # noqa: F401
 
     from app.modules.ai.ingestion import AIRecordIngestion
     from app.modules.ai.repository import AIRepository
@@ -68,6 +73,7 @@ async def run(args: argparse.Namespace) -> int:
     storage = S3ObjectStorage(settings)
 
     indexed = 0
+    reindexed = 0
     already_indexed = 0
     empty = 0
     failures = 0
@@ -93,11 +99,9 @@ async def run(args: argparse.Namespace) -> int:
                 async with factory() as session, session.begin():
                     ai_repository = AIRepository(session)
 
-                    existing = await ai_repository.get_document_by_record_id(
-                        record.id
-                    )
+                    existing = await ai_repository.get_document_by_record_id(record.id)
 
-                    if existing is not None:
+                    if existing is not None and not args.reindex:
                         already_indexed += 1
                         print(f"[skip] {record.id} already indexed")
                         continue
@@ -106,10 +110,7 @@ async def run(args: argparse.Namespace) -> int:
                     resource = json.loads(raw)
 
                     if args.dry_run:
-                        print(
-                            f"[dry-run] {record.id} "
-                            f"{record.original_filename}"
-                        )
+                        print(f"[dry-run] {record.id} {record.original_filename}")
                         continue
 
                     ai_service = AIIngestionService(ai_repository)
@@ -120,17 +121,23 @@ async def run(args: argparse.Namespace) -> int:
                         patient_id=record.patient_id,
                         category_id=record.category_id,
                         resource=resource,
+                        reindex=args.reindex,
                     )
 
                     if document is None:
-                        empty += 1
-                        print(f"[empty] {record.id}")
+                        if existing is not None:
+                            already_indexed += 1
+                            print(f"[unchanged] {record.id}")
+                        else:
+                            empty += 1
+                            print(f"[empty] {record.id}")
                     else:
-                        indexed += 1
-                        print(
-                            f"[indexed] {record.id} "
-                            f"{record.original_filename}"
-                        )
+                        if existing is not None:
+                            reindexed += 1
+                            print(f"[reindexed] {record.id} {record.original_filename}")
+                        else:
+                            indexed += 1
+                            print(f"[indexed] {record.id} {record.original_filename}")
 
             except (StorageUnavailableError, json.JSONDecodeError, OSError) as exc:
                 failures += 1
@@ -142,6 +149,7 @@ async def run(args: argparse.Namespace) -> int:
         print()
         print(f"FHIR records inspected : {len(records)}")
         print(f"Indexed                : {indexed}")
+        print(f"Reindexed              : {reindexed}")
         print(f"Already indexed        : {already_indexed}")
         print(f"Empty                  : {empty}")
         print(f"Failures               : {failures}")

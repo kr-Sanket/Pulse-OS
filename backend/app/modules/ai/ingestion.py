@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -22,12 +24,18 @@ class AIRecordIngestion:
         record_id: UUID,
         patient_id: UUID,
         category_id: UUID,
-        resource: dict[str, Any],
+        resource: Mapping[str, Any] | bytes | str,
         source_version: int = 1,
         max_tokens: int = 120,
+        reindex: bool = False,
     ) -> AIDocument | None:
         """Normalize and index one sanitized FHIR resource."""
-        normalized_text = normalize_fhir_resource(resource)
+        if isinstance(resource, (bytes, bytearray, str)):
+            resource_dict: Mapping[str, Any] = json.loads(resource)
+        else:
+            resource_dict = resource
+
+        normalized_text = normalize_fhir_resource(resource_dict)
 
         if not normalized_text:
             return None
@@ -39,4 +47,5 @@ class AIRecordIngestion:
             normalized_text=normalized_text,
             source_version=source_version,
             max_tokens=max_tokens,
+            reindex=reindex,
         )

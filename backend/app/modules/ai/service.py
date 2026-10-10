@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
+from datetime import date
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.ai.chunking import build_document_payload
-from app.modules.ai.models import AIDocument, AIChunk
+from app.modules.ai.models import AIChunk, AIDocument
 from app.modules.ai.repository import AIRepository
-from .retrieval import RetrievedChunk, lexical_score, normalize_query
 
-from typing import Protocol
+from .retrieval import (
+    RetrievedChunk,
+    lexical_score,
+    normalize_query,
+    rank_retrieved_chunks,
+)
+
 
 class AIIngestionService:
     """Build and persist deterministic AI representations of medical records."""
@@ -26,17 +34,18 @@ class AIIngestionService:
         normalized_text: str,
         source_version: int = 1,
         max_tokens: int = 120,
+        reindex: bool = False,
     ) -> AIDocument | None:
         """Index one medical record if it has not already been indexed.
 
-        Returns the newly created document, or None when the record was
-        already indexed.
+        Returns the created or updated document, or None when the record was
+        already indexed (or unchanged under reindex).
 
         The caller owns the transaction and commit boundary.
         """
         existing = await self._repository.get_document_by_record_id(record_id)
 
-        if existing is not None:
+        if existing is not None and not reindex:
             return None
 
         payload = build_document_payload(
@@ -44,6 +53,31 @@ class AIIngestionService:
             source_version=source_version,
             max_tokens=max_tokens,
         )
+
+        if existing is not None:
+            if existing.content_hash == payload.content_hash:
+                return None
+
+            existing.content_hash = payload.content_hash
+            existing.source_version = payload.source_version
+            await self._repository.delete_chunks_by_document_id(existing.id)
+
+            chunks = [
+                AIChunk(
+                    document_id=existing.id,
+                    patient_id=patient_id,
+                    category_id=category_id,
+                    chunk_index=chunk.chunk_index,
+                    content=chunk.content,
+                    content_hash=chunk.content_hash,
+                    token_count=chunk.token_count,
+                )
+                for chunk in payload.chunks
+            ]
+
+            await self._repository.add_chunks(chunks)
+
+            return existing
 
         document = AIDocument(
             record_id=record_id,
@@ -72,23 +106,44 @@ class AIIngestionService:
 
         return document
 
+
 class RetrievalScope(Protocol):
     """Provides the caller's currently authorized category scope."""
 
     async def granted_category_ids(
         self,
-        requester,
+        requester: Any,
         *,
         patient_id: UUID,
-        at,
-    ) -> frozenset[UUID]:
-        ...
+        at: Any,
+    ) -> frozenset[UUID]: ...
+
+
+class RecordDateLookup(Protocol):
+    """Provides clinical dates of service for medical records."""
+
+    async def dates_by_record_ids(
+        self,
+        record_ids: Collection[UUID],
+    ) -> Mapping[UUID, date]: ...
+
 
 class AIRetrievalService:
     """Deterministic retrieval over consent-scoped AI chunks."""
 
-    def __init__(self, repository: AIRepository) -> None:
+    def __init__(
+        self,
+        repository: AIRepository,
+        date_lookup: RecordDateLookup | None = None,
+    ) -> None:
         self._repository = repository
+        self._date_lookup = date_lookup
+        if self._date_lookup is None and hasattr(repository, "_session"):
+            session = repository._session
+            if session is not None:
+                from app.modules.records.directory import record_date_directory
+
+                self._date_lookup = record_date_directory(session)
 
     async def search(
         self,
@@ -123,6 +178,12 @@ class AIRetrievalService:
             if document is not None:
                 documents[document_id] = document
 
+        # Collect unique record IDs to query dates in a single batched lookup
+        record_ids = {doc.record_id for doc in documents.values() if doc is not None}
+        dates: Mapping[UUID, date] = {}
+        if self._date_lookup is not None and record_ids:
+            dates = await self._date_lookup.dates_by_record_ids(record_ids)
+
         ranked: list[RetrievedChunk] = []
 
         for chunk in chunks:
@@ -136,6 +197,8 @@ class AIRetrievalService:
             if document is None:
                 continue
 
+            date_val = dates.get(document.record_id)
+
             ranked.append(
                 RetrievedChunk(
                     chunk_id=chunk.id,
@@ -148,16 +211,8 @@ class AIRetrievalService:
                     content_hash=chunk.content_hash,
                     token_count=chunk.token_count,
                     score=score,
+                    date_of_service=date_val,
                 )
             )
 
-        ranked.sort(
-            key=lambda item: (
-                -item.score,
-                str(item.document_id),
-                item.chunk_index,
-                str(item.chunk_id),
-            )
-        )
-
-        return ranked[:limit]
+        return rank_retrieved_chunks(ranked, query, limit=limit)

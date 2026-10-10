@@ -22,7 +22,7 @@
 |---|---|---|
 | EasyOCR (Tesseract fallback) | Text extraction from PDFs/scans | Spike at M1 to confirm accuracy |
 | LangChain | RAG pipeline orchestration | Retriever = pgvector, not FAISS |
-| Gemini API (primary) | Summaries, explainer, copilot, timeline extraction, embeddings | Was "Gemini / OpenAI" → **ADR-007**: one primary behind `LLMProvider` interface |
+| Ollama (local Qwen3:8B) | Summaries, explainer, copilot, timeline extraction | Sole provider behind AnswerGenerator interface (ADR-007) |
 | Internal redaction layer | Strip identifiers before any external LLM call | New — **ADR-007** / SECURITY.md |
 
 ## Blockchain

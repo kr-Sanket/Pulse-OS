@@ -38,7 +38,7 @@ detail (consent-scoped retrieval) and a hard security rule.
 
 ## LLM Provider Layer (ADR-007)
 
-- Single `LLMProvider` interface: `complete()`, `embed()`; implementations: Gemini (primary),
+- Single `AnswerGenerator` interface: `generate_answer()`; implementations: Ollama (sole generation provider via local Qwen3:8B),
   fake (tests/local). Model names, temperature, and prompts are versioned code, not scattered strings.
 - **Redaction before every external call:** direct identifiers (name, phone, Health ID, address,
   emergency contacts) are stripped/tokenized from prompt content; the LLM works over clinical

@@ -1,25 +1,20 @@
 """HTTP router tests for AI search and answer endpoints."""
 
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from app.core.ratelimit import InMemoryRateLimiter
 from app.modules.ai.context import AssembledContext
 from app.modules.ai.dependencies import get_ai_query_service, get_answer_generator
 from app.modules.ai.generation import FakeAnswerGenerator, GeneratedAnswer
-from app.modules.ai.providers.gemini import (
-    GeminiProviderError,
-    GeminiRateLimitError,
-    GeminiResponseError,
-    GeminiSafetyError,
-    GeminiTimeoutError,
-    GeminiUnavailableError,
+from app.modules.ai.providers.ollama import (
+    OllamaProviderError,
+    OllamaResponseError,
+    OllamaTimeoutError,
+    OllamaUnavailableError,
 )
 from app.modules.ai.query import AIQueryService
 from app.modules.ai.retrieval import RetrievedChunk
@@ -30,8 +25,9 @@ from app.modules.consent.dependencies import (
     get_category_vocabulary,
     get_category_vocabulary_source,
 )
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from tests.support import FakeCategoryVocabularySource
-
 
 DEFAULT_CATEGORY_ID = UUID("11111111-1111-1111-1111-111111111111")
 DEFAULT_CATEGORY_CODE = "LAB_REPORT"
@@ -685,12 +681,10 @@ def test_citation_provenance_preserves_multiple_records(
 @pytest.mark.parametrize(
     "error_exc,expected_status",
     [
-        (GeminiRateLimitError("Rate limit exceeded"), 429),
-        (GeminiTimeoutError("Request deadline exceeded"), 504),
-        (GeminiUnavailableError("Service unavailable"), 503),
-        (GeminiSafetyError("Safety violation"), 422),
-        (GeminiResponseError("Invalid JSON structure"), 502),
-        (GeminiProviderError("General provider failure"), 502),
+        (OllamaTimeoutError("Request deadline exceeded"), 504),
+        (OllamaUnavailableError("Service unavailable"), 503),
+        (OllamaResponseError("Invalid JSON structure"), 502),
+        (OllamaProviderError("General provider failure"), 502),
     ],
 )
 def test_failed_generation_error_mappings(
@@ -863,7 +857,7 @@ def test_request_validation_for_answer_endpoint(
         app.dependency_overrides.pop(get_answer_generator, None)
 
 
-def test_unconfigured_gemini_provider_returns_503(
+def test_unconfigured_ai_provider_returns_503(
     client: TestClient,
     app: FastAPI,
     fake_auth: FakeAuthProvider,

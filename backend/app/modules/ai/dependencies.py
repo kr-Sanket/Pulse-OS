@@ -6,13 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.db import get_db_session
 from app.modules.ai.generation import AnswerGenerator, FakeAnswerGenerator
-from app.modules.ai.providers.gemini import (
-    GeminiProviderError,
-    GeminiRateLimitError,
-    GeminiResponseError,
-    GeminiSafetyError,
-    GeminiTimeoutError,
-    GeminiUnavailableError,
+from app.modules.ai.providers.ollama import (
+    OllamaProviderError,
+    OllamaResponseError,
+    OllamaTimeoutError,
+    OllamaUnavailableError,
 )
 from app.modules.ai.query import AIQueryService
 from app.modules.ai.repository import AIRepository
@@ -55,7 +53,7 @@ class AIConfigurationError(HTTPException, RuntimeError):
 
     def __init__(
         self,
-        msg: str = "PULSEOS_GEMINI_API_KEY must be set when PULSEOS_AI_PROVIDER is 'gemini'",
+        msg: str = "AI answer generation service is unconfigured.",
     ) -> None:
         self.msg = msg
         HTTPException.__init__(
@@ -73,20 +71,16 @@ def get_answer_generator(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AnswerGenerator:
     """Dependency provider for AnswerGenerator based on configuration."""
-    if settings.ai_provider == "gemini":
-        if not settings.gemini_api_key:
-            raise AIConfigurationError(
-                "PULSEOS_GEMINI_API_KEY must be set when PULSEOS_AI_PROVIDER is 'gemini'"
-            )
-        from app.modules.ai.providers.gemini import GeminiAnswerGenerator
+    if settings.ai_provider == "fake":
+        return FakeAnswerGenerator()
 
-        return GeminiAnswerGenerator(
-            api_key=settings.gemini_api_key,
-            model=settings.ai_model,
-            timeout_seconds=settings.gemini_timeout_seconds,
-        )
+    from app.modules.ai.providers.ollama import OllamaAnswerGenerator
 
-    return FakeAnswerGenerator()
+    return OllamaAnswerGenerator(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_model,
+        timeout_seconds=settings.ollama_timeout_seconds,
+    )
 
 
 AnswerGeneratorDep = Annotated[
@@ -99,40 +93,25 @@ def to_http_error(exc: Exception) -> HTTPException:
     """Map provider and generation exceptions to RFC 7807 problem HTTPExceptions."""
     if isinstance(exc, HTTPException):
         return exc
-    if isinstance(exc, GeminiRateLimitError):
-        return HTTPException(
-            status_code=429,
-            detail="AI service rate limit exceeded. Please retry later.",
-        )
-    if isinstance(exc, GeminiTimeoutError):
+    if isinstance(exc, OllamaTimeoutError):
         return HTTPException(
             status_code=504,
-            detail="AI answer generation timed out.",
+            detail="Local AI answer generation timed out.",
         )
-    if isinstance(exc, GeminiUnavailableError):
+    if isinstance(exc, OllamaUnavailableError):
         return HTTPException(
             status_code=503,
-            detail="AI service is temporarily unavailable. Please retry later.",
+            detail="Local AI service (Ollama) is unavailable. Please ensure Ollama is running.",
         )
-    if isinstance(exc, GeminiSafetyError):
-        return HTTPException(
-            status_code=422,
-            detail="AI answer generation was blocked by safety filters.",
-        )
-    if isinstance(exc, GeminiResponseError):
+    if isinstance(exc, OllamaResponseError):
         return HTTPException(
             status_code=502,
-            detail="AI service returned an invalid response.",
+            detail="Local AI service returned an invalid response.",
         )
-    if isinstance(exc, RuntimeError) and "PULSEOS_GEMINI_API_KEY" in str(exc):
-        return HTTPException(
-            status_code=503,
-            detail="AI answer generation service is unconfigured.",
-        )
-    if isinstance(exc, GeminiProviderError):
+    if isinstance(exc, OllamaProviderError):
         return HTTPException(
             status_code=502,
-            detail="AI answer generation failed.",
+            detail="Local AI operation failed.",
         )
     return HTTPException(
         status_code=500,
