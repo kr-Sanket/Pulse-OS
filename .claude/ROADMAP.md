@@ -126,8 +126,9 @@ Deferred backend findings are in TODO.md.
   timing (ADR-010 is still a placeholder); `mobile/` is a README.*
 
 **Gate:** all three web portals demo the full interoperability story end-to-end with seed data,
-including the M3 consent journey. *Status: the portals and the journey exist and are covered by
-653 backend / 463 web tests; the gate's live demo run is the same PO ops task as M0.3 and M2.*
+including the M3 consent journey. *Status (as of 2026-09-08, `ea2ebd5`): the portals and the
+journey exist and were covered by 653 backend / 463 web tests at that date; the gate's live demo
+run is the same PO ops task as M0.3 and M2.*
 
 ## M5 — AI Layer (Month 5)
 
@@ -138,6 +139,19 @@ external LLM calls. See AI_ARCHITECTURE.md.
 
 **Gate:** upload 10 synthetic reports → timeline renders; copilot answers "when was my last blood
 test?" correctly; doctor summary generates in <15s warm / cached afterwards; redaction verified.
+
+*Status (2026-10-11) — partially built, on a different design than planned; gate **not met**.*
+Built (commits `a7df8b4`…`c95494a`, 2026-10-04 to 2026-10-10): FHIR-resource ingestion into
+`ai_documents`/`ai_chunks` (migration `aedb0169a4eb`) via the Synthea import and
+`scripts/backfill_ai.py`; deterministic, consent-scoped lexical retrieval (ADR-029); context
+assembly; answer generation through the `AnswerGenerator` protocol with **local Ollama (Qwen3:8B)
+as the only provider** (ADR-028, Gemini removed); three endpoints (clinician search, clinician
+answer, patient copilot answer) with the `ai_generate` rate limit and `SUMMARY_GENERATED`
+auditing; the doctor `AIAssistantPanel` and patient `HealthCopilotPanel`. **Not built:** OCR of
+uploads and the worker pipeline, embeddings/pgvector, cached patient summary, timeline, report
+explainer, redaction layer. Known gap: AI retrieval does not honour hidden records
+(SECURITY.md). The gate as written (timeline, summary, redaction, uploaded reports) needs either
+the missing features or a PO-approved restatement; no evaluation results exist (RC-3).
 
 ## M6 — Blockchain Anchoring (Month 6)
 
@@ -158,9 +172,10 @@ commitment per batch on-chain (amends ADR-004 decision 2; no per-event on-chain 
   deterministic sealing (max 256 leaves, 300 s interval, 900 s backlog threshold — all
   configurable); commitment computation with pinned vectors; database-only reconciliation; v3
   events refused by the old per-event workflow; migration and concurrency/idempotency tests. No
-  chain, scheduler, API or CLI. Reported validation (2026-10-11, historical results): full backend
-  run 1045 passed, 2 skipped; the 2 opt-in PostgreSQL tests and a manual migration validation
-  reported passing against a disposable scratch PostgreSQL.
+  chain, scheduler, API or CLI. Validation (2026-10-11): full backend run 1088 passed, 18 skipped;
+  the 18 opt-in PostgreSQL tests (batch sealing/classification and migration 0007) passed against
+  a disposable scratch PostgreSQL 16, and CI job `backend-postgres` runs them (not yet run on
+  GitHub).
 - **M6.4 — not authorized.**
 - **Later (deferred by ADR-027):** receipts and retry-safe submission; Solidity commitment registry
   and `PolygonAuditAnchor` on Amoy; scheduler; reconciliation CLI with chain-side checks; integrity

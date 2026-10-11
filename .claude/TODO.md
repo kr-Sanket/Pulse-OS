@@ -5,10 +5,11 @@
 > Owner codes: FE (frontend lead), BE (backend lead), AI (AI+blockchain lead), PO (product owner), ANY (whoever/Claude).
 
 **Milestones:** M0 ✅ · M2 ✅ · M3 ✅ (gate criteria met in code) · **M4 substantially
-done — `notifications`, QR and SYSTEM_ADMIN provisioning remain** · M5 (AI), M6
-(blockchain) and M7 (hardening/deploy/paper) **not started**.
+done — `notifications`, QR and SYSTEM_ADMIN provisioning remain** · **M5 (AI) partially built**
+· **M6.1–M6.3 ✅** (M6.4+ **not authorized**) · M7 (hardening/deploy/paper) **not started**.
 
-State as of commit `ea2ebd5`, 2026-09-08. Full picture: [SESSION.md](SESSION.md) §Session 016.
+State as of `155cbf1` plus uncommitted prerequisite and documentation changes, 2026-10-11.
+Full picture: [SESSION.md](SESSION.md) §Session 017. Milestone status is owned by ROADMAP.md.
 
 ---
 
@@ -134,12 +135,10 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
 - [ ] PO: **ADR-009** deployment target (Render vs AWS) — still a placeholder, and M7 has no
       api/worker Dockerfile without it.
 - [ ] PO: **ADR-010** Flutter timing — still a placeholder; `mobile/` is a README.
-- [ ] PO: Confirm the LLM provider and obtain an API key (Gemini per ADR-007) — needed by M5,
-      earlier for experiments.
+- [ ] PO: **Accept or amend proposed ADR-030** (Synthea FHIR import as built; open questions in
+      the ADR).
 - [ ] PO: Resolve the Review-1 deck conflict — Spring Boot + Synthea (slide 20) vs ADR-001
       FastAPI + the 3-simulated-hospital plan. Amend the ADRs or fix the slide.
-- [ ] ANY: Amend DOMAIN_MODEL.md §1 — its audit vocabulary is a strict subset of the
-      implemented one (`ACCESS_DENIED` missing, ADR-018).
 
 ## 4. Testing debt
 
@@ -159,8 +158,26 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
       summarization; notes into `docs/`.
 - [ ] FE: Figma — the 3 core journeys (CONTEXT.md). *Note: all three portals were built without
       it, so this is now documentation of what exists as much as design of what will.*
-- [ ] AI: Spike — Gemini free-tier limits vs expected summary/copilot volume.
 - [ ] AI: Spike — EasyOCR vs Tesseract accuracy on 5 synthetic Indian lab-report PDFs.
+
+## 5b. M5 / M6 follow-ups (recorded 2026-10-11; each needs authorization before code changes)
+
+- [ ] BE: **AI retrieval ignores hidden records** — a hidden record of a granted category can
+      still feed a clinician's AI answer (SECURITY.md, AI_ARCHITECTURE.md). Needs a code fix plus
+      tests; not yet authorized.
+- [ ] PO: M5 gate restatement or missing features — OCR, summary, timeline, explainer and the
+      redaction requirement are not built (ROADMAP §M5); no RC-3 evaluation exists.
+- [ ] PO: Define and authorize M6.4 (or not) — receipts/submission, scheduler, CLI, contract and
+      toolchain, Amoy access are all open (ROADMAP §M6, roadmap review proposals).
+- [ ] BE: Stale source docstrings (`app/workers/__init__.py`, `workers/tasks.py`,
+      `records/models.py` processing status) and the `scripts/anchor_audit_events.py` reference in
+      `consent/router.py` → regenerate the OpenAPI/client after fixing. Code + generated
+      artefacts; not done by the documentation task.
+- [ ] ANY: Repo-wide ruff (39), ruff format (20 files) and mypy (158 lines) findings that appeared
+      after Session 016 — the `backend` CI job cannot go green until they are fixed.
+- [ ] PO: Database-level append-only enforcement for audit/consent/batch tables (M7 hardening).
+- [ ] ANY: First GitHub Actions run of the new `backend-postgres` job after pushing; verify it
+      actually runs and does not skip.
 
 ## 6. Ops / demo readiness
 

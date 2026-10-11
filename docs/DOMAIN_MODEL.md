@@ -17,7 +17,8 @@ domain profile. Users never own medical data directly — profiles do.
 The data owner. Internal UUID primary identity; **Health ID** (`PHI-IND-…`, ADR-012) as the
 human/business identifier; an **identifiers list** (FHIR-style `system` + `value` pairs) so
 external IDs — ABHA later — attach without remodeling. Carries the health profile (blood group,
-allergies, chronic conditions, current medications, emergency contacts) and QR payload.
+allergies, chronic conditions, current medications, emergency contacts) and, by design, a QR
+payload (QR identity is **not implemented yet** — see §4).
 Owns records, consent decisions, and their audit trail.
 
 ### Hospital (FHIR: Organization)
@@ -36,14 +37,17 @@ controlled `RecordCategory` vocabulary), origin (`HOSPITAL_UPLOAD` with uploadin
 Doctor, or `PATIENT_LOCKER` for self-uploads), date of service, S3 object key (file itself never
 in DB, ADR-005), processing status (`UPLOADED → PROCESSING → INDEXED | FAILED`, ADR-008), and
 patient-controlled visibility (a patient may hide **any record they own**, whatever its origin;
-hiding withdraws it from what consent can share, and revokes nothing). Derived artifacts (OCR text
-chunks, embeddings, timeline entries) hang off the record and die with it.
+hiding withdraws it from what consent can share, and revokes nothing). Derived artifacts hang off
+the record: today these are AI documents and text chunks built from FHIR resources
+(AI_ARCHITECTURE.md); OCR text, embeddings and timeline entries are not implemented. **Known gap:**
+AI retrieval does not yet honour hiding (SECURITY.md).
 
 ### RecordCategory (controlled vocabulary)
-The consent granularity unit (FHIR `DocumentReference.type`-style codes):
-`CBC · LAB_REPORT · MRI · XRAY · CT_SCAN · ULTRASOUND · PRESCRIPTION · DISCHARGE_SUMMARY ·
-VACCINATION · OTHER`. A seedable table, not an enum baked into code — adding a category must
-not require a migration of logic.
+The consent granularity unit (FHIR `DocumentReference.type`-style codes). Seeded vocabulary
+(`records/seed.py`, 13 codes): `CBC · LAB_REPORT · MRI · XRAY · CT_SCAN · ULTRASOUND · PRESCRIPTION ·
+DISCHARGE_SUMMARY · VACCINATION · CONDITION · PROCEDURE · ALLERGY · OTHER` — `CONDITION`,
+`PROCEDURE` and `ALLERGY` were added for the Synthea import. A seedable table, not an enum baked
+into code — adding a category must not require a migration of logic.
 
 ### AccessRequest
 A Doctor's petition to see a Patient's records: requester (Doctor, with Hospital context),
@@ -62,9 +66,12 @@ Two concepts, deliberately separate:
   expiry (design default: 90 days, patient-adjustable at approval — open decision OD-2).
 
 ### AuditEvent (FHIR: AuditEvent)
-Append-only, patient-visible, blockchain-anchored (ADR-004). Fields: actor (User + role),
-action, subject Patient, target (record / category / request), timestamp, request context,
-canonical-JSON hash, and an optional AnchorReceipt (chain tx) added asynchronously.
+Append-only, patient-visible, tamper-evident (ADR-004, ADR-027). Fields: actor (User + role),
+action, subject Patient, target (record / category / request), timestamp, request context, the
+actor's hospital at the time (ADR-023), and a versioned canonical-JSON digest (`hash_version` 1/2
+SHA-256 historical, 3 Keccak-256 current). Integrity evidence is held **outside** the event:
+historical per-event anchors (v1/v2) or membership of a sealed Merkle batch (v3). Nothing is
+published on-chain yet (BLOCKCHAIN_ARCHITECTURE.md).
 Action vocabulary: `RECORD_UPLOADED · ACCESS_REQUESTED · CONSENT_APPROVED · CONSENT_REJECTED ·
 CONSENT_REVOKED · RECORD_VIEWED · RECORD_DOWNLOADED · SUMMARY_GENERATED · EMERGENCY_ACCESS
 (Phase 2)`, plus two the implementation added with their own ADRs: `ACCESS_DENIED` (ADR-018 — a
@@ -101,7 +108,7 @@ never nullable, carries it (ADR-020).
         │            ▲ checked by consent.enforce() on EVERY read
         │
         └──────◀ AuditEvent (append-only; every action above emits one)
-                     └─ AnchorReceipt (async, hash-only on Polygon — ADR-004)
+                     └─ batch membership (v3) / historical anchor (v1/v2) — ADR-027
 ```
 
 Cardinal rules encoded here:
@@ -136,13 +143,14 @@ Legend: ✅ always (within role) · ⭕ conditional (condition noted) · ❌ nev
 | Manage doctors (add/remove/credentials) | ❌ | ❌ | ✅ own hospital | ❌ |
 | Register / verify hospitals | ❌ | ❌ | ⭕ register own | ✅ verify |
 | Suspend users / support operations | ❌ | ❌ | ❌ | ✅ |
-| AI: copilot, explainer, timeline (own data) | ✅ | ❌ | ❌ | ❌ |
-| AI: patient summary, timeline (granted data) | ❌ | ⭕ grant-scoped | ❌ | ❌ |
+| AI: copilot (own data) — *explainer, timeline: not implemented* | ✅ | ❌ | ❌ | ❌ |
+| AI: clinical assistant answers and search (granted data) — *summary, timeline: not implemented* | ❌ | ⭕ grant-scoped | ❌ | ❌ |
 | Send reminders / follow-ups | ❌ | ❌ | ⭕ to their hospital's patients | ❌ |
 
 **Hiding is scoped to what consent governs, and no further.** A hidden record disappears from
 every grantee surface — the existence projection, the grant-scoped listing, the single-record
-read and the download — but the row, the file and the grant are all untouched, and the uploading
+read and the download (exception: AI retrieval does not yet exclude hidden records — an open
+gap, see [SECURITY.md](SECURITY.md)) — but the row, the file and the grant are all untouched, and the uploading
 hospital keeps its layer-2 access to its own upload. A patient-facing screen offering the control
 has to say so rather than imply that hiding conceals a record from everyone.
 
@@ -173,7 +181,7 @@ enumerable — an attacker could walk the ID space probing which patients exist,
 disclosed to competitors/reviewers. Random draws from 1.07B kill enumeration at negligible cost.
 The display format stays exactly as demo-friendly.
 
-**QR integration:** the identity QR encodes a versioned URI — `pulseos://p/v1/PHI-IND-2026-7K3M99X`
+**QR integration (design — not implemented yet):** the identity QR encodes a versioned URI — `pulseos://p/v1/PHI-IND-2026-7K3M99X`
 — containing **only** the Health ID (which the check char makes offline-validatable). No name,
 no PHI, no signature needed: the QR is a pointer, the server is the authority, and scanning is
 useful only to an authenticated Doctor/Hospital Admin whose search permission is rate-limited
@@ -196,3 +204,18 @@ RC-4 makes in the paper.
 - **OD-3** Does an active grant for *any* category also expose the health profile (allergies,
   medications) to the doctor? Clinically important; recommendation: **yes**, and the summary
   includes it — but it must be an explicit line in the consent screen.
+
+## 6. Synthetic clinical data (FHIR R4 / Synthea)
+
+Behaviour as implemented, recorded in proposed ADR-030 (`records/fhir_mapping.py`,
+`records/fhir_import.py`, `scripts/import_synthea.py`):
+
+- Pinned Synthea FHIR R4 bundles become ordinary `patients` and `medical_records` rows. Mapped
+  resources: `AllergyIntolerance`, `Condition`, `DiagnosticReport` (with the `Observation`s it
+  claims folded in), `Immunization`, `MedicationRequest`, `Procedure`. `Encounter` is not a record.
+- Sanitized resource JSON is stored in object storage like any record file.
+- **Idempotent and non-destructive:** deterministic keys backed by UNIQUE constraints; existing
+  rows are never updated.
+- **Consent-neutral:** the import writes no grants, requests or audit events; imported records
+  are `PATIENT_LOCKER` origin and pass through `consent.enforce` like any other record.
+- The import (or `scripts/backfill_ai.py`) indexes each resource into the AI tables.

@@ -1,6 +1,6 @@
 # Development Guide
 
-## Repository Layout (target — created at M0)
+## Repository Layout
 
 ```
 pulse-os/
@@ -16,11 +16,11 @@ pulse-os/
 │   │   │   ├── records/
 │   │   │   ├── consent/
 │   │   │   ├── ai/
-│   │   │   └── notifications/
-│   │   ├── workers/          # queue consumers (OCR, embed, anchor, notify)
+│   │   │   └── notifications/   # empty package (not implemented)
+│   │   ├── workers/          # arq worker; only a logging record_uploaded task today
 │   │   └── main.py
 │   ├── alembic/
-│   ├── tests/                # mirrors app/ structure; conftest with fakes
+│   ├── tests/                # SQLite harness + fakes; opt-in *_postgres.py integration tests
 │   └── pyproject.toml        # ruff, mypy(strict), pytest config
 ├── web/
 │   ├── apps/
@@ -33,23 +33,39 @@ pulse-os/
 │   │   └── config/           # shared tsconfig/eslint
 │   └── pnpm-workspace.yaml
 ├── mobile/                   # Flutter app (starts per ADR-010)
-├── contracts/                # Solidity + Hardhat (M6)
+├── contracts/                # placeholder; contract toolchain undecided, nothing built
 ├── infra/
-│   ├── docker-compose.yml    # pg+pgvector, redis, minio, api, worker
-│   └── deploy/               # Render/AWS config
-├── scripts/                  # seed data, OpenAPI client generation, chain reconciliation
+│   └── docker-compose.yml    # postgres (pgvector image), redis, minio, minio-init — infra only
+├── scripts/                  # seed, Synthea import, AI backfill, OpenAPI client generation
 └── .github/workflows/        # ci.yml
 ```
 
 ## Local Environment
 
 - Prereqs: Docker, Python ≥3.12 (plain venv + pip; see backend/pyproject.toml), Node ≥20 + pnpm via corepack (CI uses Node 22), (Flutter SDK when relevant).
-- `docker compose up` must bring up a fully working local stack from a clean checkout — this is
-  a standing acceptance criterion (see CHECKLIST.md phase gate).
+- **Compose runs infrastructure only:** `make up` starts PostgreSQL, Redis and MinIO (plus a
+  bucket-bootstrap container). The API runs on the host with `make dev-api`, the portals with
+  `make dev-patient` / `dev-doctor` / `dev-hospital`. The phase-gate wording "`docker compose up`
+  brings up a working stack" (CHECKLIST.md) has not been verified as a full-stack start.
+- **Database setup:** there is no Makefile target for migrations or seeding. Run
+  `cd backend && .venv/bin/alembic upgrade head`, then `backend/.venv/bin/python scripts/seed.py`
+  (see scripts/README.md for the Synthea import and AI backfill).
+- **Two `.env` files:** the root `.env` (created by `make env` from `.env.example`) is read by
+  Docker Compose; the API reads `.env` relative to its working directory, i.e. `backend/.env`
+  under `make dev-api` (there is no `backend/.env.example` yet — see TODO.md).
+- **PostgreSQL port:** Compose publishes `${POSTGRES_PORT:-5432}:5432`, and `.env.example` sets
+  `POSTGRES_PORT=5432` with a matching `PULSEOS_DATABASE_URL`. If 5432 is taken locally, set a
+  different `POSTGRES_PORT` in the root `.env` **and** point `PULSEOS_DATABASE_URL` at that port
+  in the environment the API reads (some developers keep a local, uncommitted Compose default of
+  5433 for this reason).
+- **AI:** the AI endpoints need a reachable Ollama with the configured model
+  (`PULSEOS_OLLAMA_BASE_URL`, `PULSEOS_OLLAMA_MODEL`, default `qwen3:8b`). Set
+  `PULSEOS_AI_PROVIDER=fake` to run without a model.
 - Configuration only via env vars; `.env.example` lists every variable with a safe default or
   `CHANGEME`. Real `.env` is gitignored. Firebase keys are per-developer (AI uses local Ollama without external API keys).
-- Seed script (`scripts/seed.py`) creates the 3 simulated hospitals, demo doctors, and synthetic
-  patients — the same data the demo uses. It must stay idempotent.
+- Seed script (`scripts/seed.py`) creates the 3 simulated hospitals, the 13-code category
+  vocabulary, one demo admin and one demo doctor per hospital, and 3 synthetic patients. It must
+  stay idempotent.
 
 ## Workflow
 
@@ -63,11 +79,19 @@ pulse-os/
 
 | Layer | Tool | What |
 |---|---|---|
-| Unit | pytest | Service-layer domain logic with fake repositories/providers; consent rules exhaustively |
-| Integration | pytest + testcontainers (or compose services) | Router→DB paths; migrations apply cleanly; presigned URL issuance |
-| Contract | generated client + schemathesis (later) | OpenAPI spec ↔ implementation |
-| Web | vitest + testing-library | Shared UI components; consent inbox logic |
-| E2E (M7) | Playwright | The 3 core journeys from CONTEXT.md |
+| Unit + integration | pytest on an in-memory SQLite harness (`tests/support.py`) | Domain logic, routers→DB, migrations up/down (`test_alembic.py`) |
+| PostgreSQL integration (opt-in) | pytest, `test_audit_batches_postgres.py`, `test_alembic_postgres.py` | Concurrent sealing, UUID ordering, integrity-error classification, migration 0007 on real PostgreSQL |
+| Web | vitest (logic tests; no component/DOM tests yet) | Portal view logic |
+| Contract (not built) | generated client + schemathesis | OpenAPI spec ↔ implementation |
+| E2E (not built; planned M7) | Playwright | The 3 core journeys from CONTEXT.md |
+
+**Opt-in PostgreSQL tests** are skipped unless `PULSEOS_TEST_POSTGRES_URL` names a
+`postgresql+asyncpg://` URL for a **disposable** server. They create and drop their own schemas or
+databases; never point the variable at a development or real database.
+
+**Recorded results (not a guarantee of the current tree):** 2026-10-11, local — backend **1088
+passed, 18 skipped** without the URL; the 18 PostgreSQL tests passed against a disposable
+PostgreSQL 16.15 container. Web: 463 tests recorded 2026-09-08 (Session 016), not re-run since.
 
 Rules: consent enforcement gets *negative* tests (wrong role, revoked grant, wrong patient) for
 every endpoint that touches records. External services (LLM, chain, S3, FCM) are faked in tests —
@@ -75,11 +99,21 @@ never live calls in CI. Coverage target ≥80% on `consent` and `records`; pragm
 
 ## CI (GitHub Actions)
 
-On every PR and push to `main`:
-backend → ruff, mypy (strict), pytest · web → eslint, `tsc --noEmit`, vitest ·
-docs-only changes skip heavy jobs. Deployment job added at M7 (or earlier if Render auto-deploy).
+On every PR and push to `main` (`.github/workflows/ci.yml`), with **no path filters** (docs-only
+changes run everything):
+
+- `backend` — `ruff format --check`, `ruff check`, `mypy`, `pytest`. Repo-wide ruff/format/mypy
+  findings that predate M6 currently fail the early steps, so this job is not green.
+- `backend-postgres` — a disposable PostgreSQL 16 service plus the opt-in PostgreSQL tests; fails if
+  any of them is skipped. **Configured locally, not yet run on GitHub** (unpushed as of 2026-10-11).
+- `web` — prettier, eslint, `tsc`, vitest.
+
+`make ci` runs the lint, typecheck and test targets locally; it does not run the opt-in PostgreSQL
+tests. The API client is regenerated manually (`make api-client`), not in CI. No deployment job
+exists (ADR-009 pending).
 
 ## Documentation Duties
 
-Code changes that alter behavior/architecture update the matching doc (table in
-`.claude/CLAUDE.md`). Non-obvious decisions → ADR. Session end → SESSION.md + TODO.md.
+Code changes that alter behavior/architecture update the **canonical** doc for that fact
+(owners listed in `.claude/CLAUDE.md`); other docs link rather than repeat. Non-obvious decisions →
+ADR. Session end → SESSION.md + TODO.md.

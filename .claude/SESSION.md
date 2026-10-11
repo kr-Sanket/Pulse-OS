@@ -5,7 +5,79 @@
 
 ---
 
-## Session 016 — 2026-09-08 · ← CURRENT STATE
+## Session 017 — 2026-10-11 · ← CURRENT STATE
+
+**Read this entry alone to know where the project stands.** Everything below it is history.
+
+**Branch:** `main` at **`155cbf1`**, **38 commits ahead of `origin/main`, none pushed** (pushing is
+a Product Owner action). **The working tree is not clean** — uncommitted, awaiting PO review:
+
+- *Prerequisite (CI + tests):* `.github/workflows/ci.yml` (new `backend-postgres` job) and
+  `backend/tests/test_alembic_postgres.py` (6 opt-in PostgreSQL migration tests).
+- *Documentation alignment (this session):* README, `docs/` (AI, security, tech stack, system
+  architecture, domain model, database design, blockchain, development guide, API guidelines,
+  contributing, project overview), `scripts/README.md`, `contracts/README.md`, and `.claude/`
+  (CLAUDE, CONTEXT, ROADMAP, TODO, CHECKLIST, DECISIONS, this file), CHANGELOG, and two
+  `project-management/` files.
+- *Local only, never to be committed:* `infra/docker-compose.yml` (PostgreSQL published on
+  `${POSTGRES_PORT:-5433}:5432` to avoid a local port clash, plus editor whitespace changes).
+
+**Phase:** M4 substantially done (unchanged since Session 016); **M5 AI partially built**;
+**M6.1–M6.3 complete and accepted with deferred items**; **M6.4 not authorized**; M7 not started.
+
+### What happened since Session 016 (from git history and code — no session entries were written)
+
+No SESSION.md entries exist for 2026-10-04…10-11; this summary is reconstructed from commits and
+verified against the code, not from session notes.
+
+- **Audit anchoring foundation** — `b17c2f0` (2026-10-04): `AuditAnchor` port,
+  `LocalChainAuditAnchor`, migration 0006, patient-facing per-event verification. The ADR it cites
+  as ADR-026 was never written (placeholder in DECISIONS.md).
+- **AI layer** — `a7df8b4`…`c95494a` (2026-10-04 to 2026-10-10): FHIR ingestion (migration
+  `aedb0169a4eb`), consent-scoped lexical retrieval, context assembly, `AnswerGenerator`
+  protocol, clinical assistant (doctor), Health Copilot (patient), rate limits; Gemini was added
+  and then removed — **local Ollama (Qwen3:8B) is the only provider** (`c95494a`).
+- **M6.1–M6.3** — `e3c0fe1` (implementation: v3 Keccak-256 digests, Merkle batches, commitments,
+  sealing, database-only reconciliation, conflict classification), `1ce4c14` (opt-in PostgreSQL
+  tests), `155cbf1` (ADR-019 resolution, ADR-027, ADR-004/023 amendments, status) — all
+  2026-10-11.
+
+### Decisions recorded
+
+ADR-027 accepted (Merkle-batched anchoring); ADR-019 resolved; ADR-028 and ADR-029 accepted from
+the PO's direction of 2026-10-11 (Ollama sole provider and redaction revisited; lexical retrieval,
+pgvector deferred); **ADR-030 proposed** (Synthea/FHIR import, documents existing behaviour —
+needs PO acceptance). ADR-009, ADR-010 and ADR-026 remain placeholders.
+
+### Quality gates (measured 2026-10-11)
+
+| Gate | Result |
+|---|---|
+| `pytest` (backend, local, no PostgreSQL URL) | **1088 passed, 18 skipped** (the 18 opt-in PostgreSQL tests) |
+| Opt-in PostgreSQL tests (disposable PostgreSQL 16.15 container) | **18 passed** |
+| `ruff check` / `ruff format --check` / `mypy` (repo-wide) | **39 / 20 files / 158 lines** — findings that appeared after Session 016's clean state, mostly in AI tests; none introduced by M6 |
+| Web (`pnpm` checks and tests) | **not re-run** since Session 016 (463 tests then) |
+| GitHub Actions | **not run** on any commit since `ea2ebd5` (unpushed) |
+
+### Known gaps found this session
+
+- **AI retrieval ignores hidden records:** a record a patient has hidden can still feed a
+  clinician's AI answer if its category is granted. Documented in SECURITY.md; fixing it is an
+  application-code change that has not been authorized.
+- Stale source docstrings and a reference to the non-existent `scripts/anchor_audit_events.py`
+  in `consent/router.py` (and therefore the generated OpenAPI/client) — application or generated
+  artefacts, deliberately not edited by the documentation task.
+
+### Exact next step
+
+PO reviews the uncommitted prerequisite and documentation changes and decides whether to commit
+them (excluding `infra/docker-compose.yml`). Then: decide on ADR-030, decide whether to authorize
+the AI hidden-record fix, and define/authorize M6.4 (see the roadmap review proposals) — or return
+to the open M4 items (notifications, QR, SYSTEM_ADMIN provisioning).
+
+---
+
+## Session 016 — 2026-09-08
 
 **Read this entry alone to know where the project stands.** Everything below it is history.
 

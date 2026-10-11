@@ -25,7 +25,8 @@
 - [ ] File access only via short-lived presigned URL issued *after* consent check.
 - [ ] Audit log entry written for every record read/download (append-only, in the same transaction as authorization where applicable).
 - [ ] Input validated at the boundary (Pydantic/zod); IDs never trusted from the client for ownership.
-- [ ] Nothing sent to an external LLM without passing the redaction layer.
+- [ ] No external LLM provider added or called: generation is local Ollama only, and no redaction
+      layer exists — adding an external provider requires a redaction decision ADR first (ADR-028).
 - [ ] No new secrets in code — env vars only, `.env.example` updated.
 
 ## Phase-Gate Checklist (before declaring a milestone done)

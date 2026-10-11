@@ -25,8 +25,10 @@ docstrings on public services explaining domain intent, not mechanics.
 components in `packages/ui` when used by ≥2 apps; API access only through the generated
 `api-client` (never hand-written fetch calls); zod at runtime boundaries the client owns.
 
-**Solidity (contracts):** minimal surface, NatSpec comments, Hardhat tests for every function,
-no business logic beyond anchoring (BLOCKCHAIN_ARCHITECTURE.md).
+**Solidity (contracts, when authorized):** no contract exists yet and the toolchain (Hardhat or
+Foundry) is undecided. When built: minimal surface, NatSpec comments, a test for every function,
+the pinned commitment vectors reproduced byte for byte, no business logic beyond anchoring
+(BLOCKCHAIN_ARCHITECTURE.md, ADR-027).
 
 **General:** comments explain *why* (constraints, domain rules), not *what*; match surrounding
 style; delete dead code instead of commenting it out.

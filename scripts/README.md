@@ -42,12 +42,22 @@ Operational scripts (owned here, run from repo root):
   *second* hospital-admin row for the same hospital (`hospital_admins.hospital_id` is not
   unique). There is deliberately no unlink command yet — restoring the original subject is
   a destructive edit to a row a real account is signing in with, and needs its own slice.
-- **`seed.py`** — idempotent reference-data seed: the 3 simulated hospitals
-  (HID-0001..0003) + the record-category vocabulary. Safe to run any number of times;
+- **`seed.py`** — idempotent development/demo seed: the 3 simulated hospitals
+  (HID-0001..0003), the 13-code record-category vocabulary, one demo admin and one demo doctor
+  per hospital, and 3 synthetic patients with pinned Health IDs. Safe to run any number of times;
   never duplicates or mutates existing rows. Requires a migrated DB
-  (`alembic upgrade head`); run with `backend/.venv/bin/python scripts/seed.py`.
-  Synthetic patients/doctors join it at M2.
-- chain reconciliation job (M6, planned): verify DB audit log against on-chain anchors
+  (`cd backend && .venv/bin/alembic upgrade head`); run with
+  `backend/.venv/bin/python scripts/seed.py`.
+- **`import_synthea.py`** — imports pinned Synthea FHIR R4 patients as ordinary patients and
+  records (proposed ADR-030; docs/DOMAIN_MODEL.md §6). Idempotent and non-destructive; writes no
+  consent or audit rows; can index the imported resources into the AI tables. Logic lives in
+  `records/fhir_mapping.py` and `records/fhir_import.py`; the script wires engine, session and
+  one transaction per bundle. Reads bundles from `FHIR_Dataset/fhir/` by default (git-ignored —
+  obtain the Synthea corpus locally).
+- **`backfill_ai.py`** — indexes records already in object storage into the AI tables through
+  the same ingestion path as the import. Non-destructive; FHIR records only (no OCR).
+- **Audit reconciliation** is a library today (`AuditBatchService.reconcile`, ADR-027) with no
+  CLI. The chain-side reconciliation job is planned and not authorized (M6.4+).
 
 `review1_deck/` is presentation tooling (regenerates `PulseOS_Review1.pptx` via
 `python3 build.py`), not part of the product.

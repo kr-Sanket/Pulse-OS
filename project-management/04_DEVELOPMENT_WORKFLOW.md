@@ -148,7 +148,7 @@ Nothing is committed, pushed, or PR'd while a local gate is red. The gates are t
 | Tests | `pnpm test` (vitest) | all passed |
 | Build | `pnpm build` | all three portals build |
 
-**Everything at once:** `make ci` runs the exact suite GitHub Actions runs. Green `make ci` locally means green CI remotely — CI exists to *confirm*, not to *discover*.
+**Everything at once:** `make ci` runs the same lint, typecheck and test targets as the `backend` and `web` CI jobs — CI exists to *confirm*, not to *discover*. It does **not** run the opt-in PostgreSQL tests of the `backend-postgres` job; run those against a disposable database (docs/DEVELOPMENT_GUIDE.md) when touching batch sealing or migrations.
 
 > ⚠️ **Never push failing code.** Not "to save progress" (push a draft branch without opening the PR instead), and never into an open PR — every push to a PR consumes reviewer attention. Red gates are your signal to keep working, not to hand off.
 
@@ -285,7 +285,7 @@ Condensed from 02/03 — the habits that keep the loop fast:
 - **Avoid long-lived branches** — a branch older than a week is a problem to split or escalate (03 §13).
 - **Document important decisions** — non-obvious choices become ADR proposals to the Lead; everything else goes in the PR description, not in tribal memory.
 - **Keep generated files synchronized** — endpoint changes and the regenerated `api-client` land in the same PR; portal owners rebase to consume new types. Never hand-edit `web/packages/api-client/src/generated/` or `openapi.json`.
-- **Run `make ci` before every push** — it is the same suite as GitHub Actions; local green means remote green.
+- **Run `make ci` before every push** — it covers the `backend` and `web` CI jobs; the opt-in PostgreSQL tests need a disposable database (docs/DEVELOPMENT_GUIDE.md).
 - **Write the PR description for a stranger** — six weeks from now, that stranger is you.
 
 ---

@@ -19,10 +19,11 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase:** **M4 — Core Features Complete**, substantially done on `main` (2026-09-08, session
-  016). Last feature commit `ea2ebd5`; working tree clean; **20 commits ahead of `origin/main` at
-  that commit (21 with the docs commit that follows it), none pushed** — pushing is a Product
-  Owner action.
+- **Phase (2026-10-11, Session 017):** M4 substantially done; M5 AI **partially built**;
+  **M6.1–M6.3 complete** (local audit integrity; no public chain); M6.4 **not authorized**. `main`
+  at `155cbf1`, **38 commits ahead of `origin/main`, none pushed** — pushing is a Product Owner
+  action. The working tree also holds uncommitted prerequisite and documentation changes; see
+  [SESSION.md](SESSION.md) §Session 017 for the exact state.
 - **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (PR #1);
   M2 backend (onboarding per ADR-015, upload → S3 port, presigned downloads, arq worker per
   ADR-014, seed); **M3** (request → per-category decision → grant → revoke, `consent.enforce()`
@@ -48,25 +49,31 @@ health timelines, a report explainer, and a Health Copilot chat.
   describe as working:** on-chain batch submission, receipts, chain-side verification,
   contract, chain adapter, scheduler, reconciliation CLI; M7 hardening/deploy. **M6.4 is not
   authorized.**
-- **Health (reported results, 2026-10-11 — not re-run by this documentation update):** most
-  recent full backend run **1045 passed, 2 skipped** (the 2 skips are the opt-in PostgreSQL
-  tests); those 2 PostgreSQL tests and a manual migration validation were reported passing
-  against a disposable scratch PostgreSQL. Repo-wide `ruff check` (39), `ruff format --check`
+- **Health (2026-10-11):** most recent full backend run **1088 passed, 18 skipped** (the 18 skips
+  are the opt-in PostgreSQL tests, run only when `PULSEOS_TEST_POSTGRES_URL` is set); those 18
+  — batch sealing/classification and migration 0007 — passed against a disposable scratch
+  PostgreSQL 16. CI job `backend-postgres` runs them; configured but not yet run on GitHub
+  (unpushed). Repo-wide `ruff check` (39), `ruff format --check`
   (20 files) and `mypy` (158 lines, mostly AI tests) report pre-existing findings, so those CI
   steps are not green. Web figures last recorded at session 016 and not re-run since: 463 web
   tests, tsc + eslint + prettier clean, 3/3 builds.
-- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 016 — read this second, update it before ending every session.
+- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 017 — read this second, update it before ending every session.
+- **Status is owned by [ROADMAP.md](ROADMAP.md)** (milestones, dated validation) and the handoff by
+  SESSION.md; the summary above must not grow into a second copy of either.
 
 ## Architecture in One Paragraph
 
 A **modular monolith** FastAPI backend (NOT six microservices — see ADR-001) with six internal
 modules matching the original service boundaries: `auth`, `patients`, `records`, `consent`, `ai`,
-`notifications`. PostgreSQL (+ **pgvector** for embeddings, ADR-002), Redis (queue/cache),
-S3-compatible object storage (MinIO locally, ADR-005), async workers for OCR/embedding.
-Blockchain is a **pluggable audit-anchor** behind an interface; hashes only go on-chain (ADR-004).
-Frontends: one pnpm/React monorepo with three apps (patient, doctor, hospital) sharing a UI kit
-and a typed API client (ADR-003), plus a Flutter patient app. Record metadata is **FHIR-aligned**
-(ADR-006). Full picture: [docs/SYSTEM_ARCHITECTURE.md](../docs/SYSTEM_ARCHITECTURE.md).
+`notifications` (the last is an empty package). PostgreSQL (no pgvector use — retrieval is
+lexical, ADR-029), Redis (rate limits + arq queue; the worker only logs today), S3-compatible
+object storage (MinIO locally, ADR-005), and a **local Ollama** model for AI generation
+(ADR-028). Audit integrity: versioned digests and Merkle batches with an opaque commitment behind
+a pluggable anchor port; only hashes would ever go on-chain, and **nothing is submitted yet**
+(ADR-004, ADR-027). Frontends: one pnpm/React monorepo with three apps (patient, doctor,
+hospital) sharing a UI kit and a typed API client (ADR-003); the Flutter patient app has not
+started (ADR-010). Record metadata is **FHIR-aligned** (ADR-006), with Synthea FHIR R4 import
+(proposed ADR-030). Full picture: [docs/SYSTEM_ARCHITECTURE.md](../docs/SYSTEM_ARCHITECTURE.md).
 
 ## Where Everything Lives
 
@@ -84,10 +91,10 @@ and a typed API client (ADR-003), plus a Flutter patient app. Record metadata is
 | Repo layout, environments, testing, CI | [docs/DEVELOPMENT_GUIDE.md](../docs/DEVELOPMENT_GUIDE.md) |
 | Domain model, RBAC matrix, Health ID design | [docs/DOMAIN_MODEL.md](../docs/DOMAIN_MODEL.md) |
 | REST conventions, versioning, errors | [docs/API_GUIDELINES.md](../docs/API_GUIDELINES.md) |
-| Data modeling principles (conceptual) | [docs/DATABASE_DESIGN.md](../docs/DATABASE_DESIGN.md) |
-| OCR/RAG/LLM pipeline design | [docs/AI_ARCHITECTURE.md](../docs/AI_ARCHITECTURE.md) |
-| Consent anchoring & smart-contract design | [docs/BLOCKCHAIN_ARCHITECTURE.md](../docs/BLOCKCHAIN_ARCHITECTURE.md) |
-| Threat model, authz, data protection | [docs/SECURITY.md](../docs/SECURITY.md) |
+| Data modeling principles + physical table index (migrations/models are authoritative) | [docs/DATABASE_DESIGN.md](../docs/DATABASE_DESIGN.md) |
+| AI behaviour as built, and the unbuilt plan | [docs/AI_ARCHITECTURE.md](../docs/AI_ARCHITECTURE.md) |
+| Audit integrity, batches, anchoring design | [docs/BLOCKCHAIN_ARCHITECTURE.md](../docs/BLOCKCHAIN_ARCHITECTURE.md) |
+| Security controls with implemented/planned status | [docs/SECURITY.md](../docs/SECURITY.md) |
 | Git workflow, code style, review rules | [docs/CONTRIBUTING.md](../docs/CONTRIBUTING.md) |
 
 ## Engineering Principles (non-negotiable)

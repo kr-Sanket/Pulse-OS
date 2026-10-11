@@ -76,7 +76,7 @@ Design, implement, and protect the entire PulseOS platform: architecture, backen
 - ADRs, roadmap updates, session/handoff notes, release notes
 
 #### Technologies Responsible For
-Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, PostgreSQL + pgvector, Redis, arq, boto3/MinIO, Firebase Admin SDK, LangChain, Gemini API, EasyOCR, Solidity/Hardhat, web3.py, Docker, GitHub Actions, OpenAPI toolchain (openapi-typescript, openapi-fetch).
+Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, PostgreSQL, Redis, arq, boto3/MinIO, Firebase Admin SDK, Ollama (local, Qwen3:8B — ADR-028), pycryptodome (Keccak-256), Docker, *planned/undecided:* OCR, pgvector, contract toolchain and chain client (see docs/TECH_STACK.md), GitHub Actions, OpenAPI toolchain (openapi-typescript, openapi-fetch).
 
 #### Testing Responsibility
 All backend testing: unit, integration, migration, contract (OpenAPI), and security/negative-authorization tests. Every consent- or records-touching endpoint ships with negative tests (wrong role, wrong patient, revoked grant).

@@ -17,9 +17,9 @@ publication goal.
 | `backend/` | FastAPI modular monolith (Python 3.12+) |
 | `web/` | pnpm monorepo: patient / doctor / hospital portals + shared packages |
 | `mobile/` | Flutter patient app (starts later — ADR-010) |
-| `contracts/` | Solidity consent-anchor contract (starts M6) |
-| `infra/` | docker-compose for local infrastructure |
-| `scripts/` | Seed, codegen, reconciliation scripts |
+| `contracts/` | Placeholder for a future commitment-registry contract (toolchain undecided; nothing built) |
+| `infra/` | docker-compose for local infrastructure (PostgreSQL, Redis, MinIO) |
+| `scripts/` | Seed, Synthea import, AI backfill, OpenAPI client codegen |
 | `docs/` | Architecture & process documentation — start with [`PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md) |
 | `.claude/` | AI session memory — entry point [`CLAUDE.md`](.claude/CLAUDE.md) |
 
@@ -35,7 +35,7 @@ git clone <repo-url> pulse-os && cd pulse-os
 # 2. Create your .env (safe local defaults; no edits needed for local dev)
 make env
 
-# 3. Start infrastructure: PostgreSQL+pgvector, Redis, MinIO (+ bucket bootstrap)
+# 3. Start infrastructure: PostgreSQL (pgvector image; extension unused), Redis, MinIO (+ bucket bootstrap)
 make up
 
 # 4. Install dependencies (backend venv + web workspace)
@@ -56,6 +56,10 @@ in named volumes).
 
 **MinIO console:** http://localhost:9001 (credentials in your `.env`).
 
+**Database and AI:** apply migrations and seed before first use, and run a local Ollama for the
+AI endpoints (or set `PULSEOS_AI_PROVIDER=fake`) — see
+[`docs/DEVELOPMENT_GUIDE.md`](docs/DEVELOPMENT_GUIDE.md).
+
 ## Contributing
 
 Workflow, branch naming, and review rules: [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
@@ -64,31 +68,31 @@ gates: [`.claude/ROADMAP.md`](.claude/ROADMAP.md).
 
 ## Status
 
-**M0, M2 and M3 backends complete. M4 in progress: the patient portal is fully integrated and
-the doctor portal's first slice is live.**
+Detailed, dated status and validation evidence live in [`.claude/ROADMAP.md`](.claude/ROADMAP.md);
+this is a summary as of 2026-10-11.
 
-The backend exposes 25 operations under `/api/v1`: Firebase-backed auth with PulseOS role claims,
-patient registration and Health ID issuance (ADR-012), hospital/doctor onboarding (ADR-015),
-record upload → S3/MinIO with FHIR-aligned metadata and presigned downloads, and the consent
-domain — access request → per-category approve/reject → grant → revoke, with a single
-enforcement choke point in front of every non-owner record read and an append-only, hashed audit
-log behind it (ADR-016…019). M4 added the patient-facing read side: `GET /consent-grants`,
-`GET /audit-logs`, a batched staff identity projection so patients see names rather than UUIDs,
-and `GET /records/existence` — the clinician discovery step, which returns record *categories*
-and nothing else.
+- **Complete:** M0 foundation, M2 backend core, M3 consent domain (gate criteria met in code),
+  and audit-integrity stages **M6.1–M6.3** — versioned Keccak-256 audit hashing, Merkle batch
+  sealing with commitments, and database-only reconciliation.
+- **Substantially done (M4):** patient, doctor and hospital portals on real APIs, including the
+  full consent journey. Still open: notifications, QR identity, SYSTEM_ADMIN provisioning,
+  hospital bulk upload.
+- **Partially built (M5 AI):** FHIR-based ingestion, consent-scoped lexical retrieval, a
+  clinician AI assistant and a patient Health Copilot using a local Ollama model. OCR, summaries,
+  timeline and report explainer are not built.
+- **Not built:** any public-chain submission (no contract, adapter, wallet or receipts) — **M6.4
+  is not authorized** — and M7 hardening/deployment.
 
-The **patient portal** (7 pages) runs entirely on real APIs. The **doctor portal** covers login →
-dashboard → patient search by Health ID → available categories; the request-access flow is next
-and is the last thing standing between the repository and an end-to-end consent demo. The
-**hospital portal** is still a scaffold, and the AI and blockchain layers have not started.
-
-320 backend tests at 97% coverage; 131 web tests. See [`.claude/SESSION.md`](.claude/SESSION.md)
-for the current-state handoff, [`.claude/TODO.md`](.claude/TODO.md) for remaining work, and
-[`.claude/ROADMAP.md`](.claude/ROADMAP.md) for the milestone plan.
+The backend exposes 34 operations under `/api/v1` plus `/health` and `/ready` (the generated
+OpenAPI is authoritative). Latest local backend run (2026-10-11): **1088 passed, 18 skipped**; the
+18 opt-in PostgreSQL tests passed separately against a disposable PostgreSQL 16 database. GitHub
+Actions has not run on these commits yet (not pushed). See [`.claude/SESSION.md`](.claude/SESSION.md)
+for the current handoff and [`.claude/TODO.md`](.claude/TODO.md) for remaining work.
 
 ## Stack (summary)
 
-FastAPI modular monolith · PostgreSQL + pgvector · Redis workers · S3/MinIO · Firebase Auth ·
-React + TypeScript monorepo (3 portals) · Flutter (patient app) · LangChain + Ollama ·
-Solidity on Polygon Amoy (hash-only consent anchoring) · Docker · GitHub Actions.
+FastAPI modular monolith · PostgreSQL · Redis (rate limits, arq) · S3/MinIO · Firebase Auth ·
+React 19 + TypeScript monorepo (3 portals) · local Ollama (Qwen3:8B) with lexical retrieval ·
+Keccak-256 / Merkle audit batches (public-chain anchoring planned, not built) · Docker Compose ·
+GitHub Actions. Flutter patient app not started.
 Details and rationale: [`docs/TECH_STACK.md`](docs/TECH_STACK.md).

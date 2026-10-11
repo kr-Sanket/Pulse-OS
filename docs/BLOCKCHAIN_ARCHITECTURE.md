@@ -48,9 +48,10 @@ but are never batched or anchored on-chain. Only verified v3 events (`V3Batch`: 
 Status as of 2026-10-11: **built** — the port, the local adapter, migration 0006, v3 hashing,
 `merkle.py`. **M6.3, committed in `e3c0fe1` (PostgreSQL integration tests in `1ce4c14`);
 M6.1–M6.3 accepted with deferred items** — batch persistence (migration 0007), sealing,
-commitments, database-only reconciliation; reported validation: full backend run 1045 passed,
-2 skipped, with the 2 opt-in PostgreSQL tests and a manual migration check reported passing
-against a disposable scratch database (historical results). **Deferred** — everything
+commitments, database-only reconciliation; validation (2026-10-11): full backend run 1088
+passed, 18 skipped, the 18 opt-in PostgreSQL tests (including migration 0007) passing against a
+disposable scratch database; CI job `backend-postgres` is configured to run them but has not
+yet run on GitHub (unpushed). **Deferred** — everything
 chain-facing: on-chain batch submission, receipts, chain-side verification. The M6 gate is not
 complete; M6.4 is not authorized.
 
@@ -72,7 +73,8 @@ complete; M6.4 is not authorized.
   UNIQUE `batch_number` and UNIQUE per-event membership make concurrent sealing safe.
 - **Receipts and submission** (deferred): append-only receipt per batch and network (tx hash,
   block, time). Submission is retry-safe: check whether `C` is already on-chain before resending.
-- **Smart contract** (Solidity, deferred): a minimal write-restricted registry of commitments that
+- **Smart contract** (Solidity; toolchain undecided — no contract exists; deferred): a minimal
+  write-restricted registry of commitments that
   emits one event carrying `C`. No business logic on-chain (consent *decisions* live in Postgres —
   putting decision logic on-chain would make revocation and privacy unmanageable). Must use
   `abi.encodePacked` exactly as above; must **not** use OpenZeppelin `MerkleProof` /

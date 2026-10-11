@@ -4,8 +4,10 @@
 
 Final-year project (2026, team of 3) building a patient-centric healthcare interoperability
 platform for India, with production-grade engineering standards and a research publication goal.
-Source master plan: `PulseOS_Project_Plan.docx` (root). This doc is its maintained distillation;
-where they conflict, the `.claude/DECISIONS.md` ADRs win.
+Source master plan: `PulseOS_Project_Plan.pdf` (repository root, git-ignored — not part of the
+tracked repo). This doc is its maintained distillation of the *vision*; where they conflict, the
+`.claude/DECISIONS.md` ADRs win. **Implementation status lives in `.claude/ROADMAP.md`** — items
+below are goals unless marked otherwise.
 
 ## Problem
 
@@ -22,13 +24,17 @@ time-costly for doctors.
 2. **Patient-controlled granular consent** — doctors request record *categories*; the patient
    approves/rejects each individually and can revoke anytime; every access is logged and visible
    to the patient forever.
-3. **Tamper-evident audit** — consent and access events anchored (hash-only) to Polygon Amoy.
-4. **AI intelligence layer** — OCR + consent-scoped RAG powering: one-page doctor summaries,
-   auto-generated health timeline, plain-English report explainer, Health Copilot chat.
+3. **Tamper-evident audit** — every consent and access event is hashed; verified events are
+   sealed into Merkle batches whose opaque commitments are designed to be published (hash-only)
+   to Polygon Amoy (ADR-027). *Built: hashing, batching, database-only reconciliation. Not built:
+   any public-chain submission.*
+4. **AI intelligence layer** — consent-scoped retrieval over the patient's records powering a
+   clinician assistant and a patient Health Copilot (local model, ADR-028/029). *Planned, not
+   built: OCR of uploads, one-page summaries, health timeline, report explainer.*
 5. **Simulated ecosystem** — 3 hospitals (TMH Jamshedpur HID-0001, CMC Vellore HID-0002,
    Apollo HID-0003) with synthetic data; no real integrations.
 
-## Feature Inventory by Portal
+## Feature Inventory by Portal (goal list — see ROADMAP.md for what is built)
 
 **Patient (Flutter app + web):** Health ID, QR identity, health profile (blood group, allergies,
 conditions, medications, emergency contacts), medical locker (encrypted uploads), AI timeline,
@@ -75,7 +81,7 @@ technology journals; IRJET/IJERT nationally.
 |---|---|
 | Member 1 — Frontend Lead | React monorepo (3 portals), Flutter app, Figma, QR, notifications UI |
 | Member 2 — Backend Lead | FastAPI monolith, PostgreSQL, auth, S3, notifications, Docker, deploy |
-| Member 3 — AI + Blockchain Lead | OCR pipeline, RAG (pgvector), summaries/timeline/copilot, Solidity contract, anchoring |
+| Member 3 — AI + Blockchain Lead | AI layer (retrieval, assistant, copilot; OCR/summaries/timeline planned), audit anchoring, future contract |
 | ChatGPT | Chief Software Architect |
 | Claude | Senior Software Engineer |
 | Human | Product Owner / Integrator |

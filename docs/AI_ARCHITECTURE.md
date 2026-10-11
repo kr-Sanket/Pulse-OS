@@ -1,61 +1,105 @@
 # AI Architecture
 
-> Design for the `ai` module + worker pipeline. Provider abstraction and redaction: ADR-007.
-> Vector store: pgvector (ADR-002). All processing is asynchronous (ADR-008).
+> **Canonical source for AI behaviour.** Describes the `ai` module **as built** (verified
+> against `backend/app/modules/ai/` on 2026-10-11) and, separately, the original plan that is
+> **not** implemented. Decisions: ADR-028 (Ollama as the sole generation provider; supersedes
+> ADR-007's provider and redaction parts) and ADR-029 (deterministic lexical retrieval; pgvector
+> deferred; amends ADR-002). Milestone status: `.claude/ROADMAP.md` §M5.
 
-## Ingestion Pipeline (per uploaded record)
+## What is implemented
+
+### Ingestion — FHIR resources only
 
 ```
-upload (records module) ──enqueue──▶ WORKER:
-  1. fetch file from S3
-  2. OCR            EasyOCR (Tesseract fallback) → raw text; skip for born-digital PDFs w/ text layer
-  3. clean/segment  strip boilerplate, detect report type, extract key values + dates
-  4. chunk          semantic chunks w/ metadata (record id, category, hospital, date)
-  5. embed          LLMProvider.embed() → pgvector rows
-  6. status         DocumentReference.processingStatus = indexed | failed (+ reason)
+Synthea import (scripts/import_synthea.py)  ─┐
+                                             ├─▶ AIRecordIngestion.index_fhir_resource()
+Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.py: sanitized FHIR JSON → stable readable text
+                                                    2. chunk       ai/chunking.py: deterministic chunks + SHA-256 content hash
+                                                    3. persist     ai_documents / ai_chunks (patient, record, category)
 ```
 
-Failures are visible (status + reason in UI), retried with backoff, and never lose the original
-file — OCR quality issues must degrade to "file stored, not searchable," not data loss.
+- **Source data is sanitized FHIR R4 JSON** written by the Synthea import (see
+  [DOMAIN_MODEL.md](DOMAIN_MODEL.md) §Synthetic data). Ingestion runs inside the import, or later
+  from `scripts/backfill_ai.py` over records already in object storage.
+- **Uploaded files (PDFs, images) are not indexed.** There is no OCR and no document extraction;
+  `app/workers/tasks.py::record_uploaded` only logs, and records stay `UPLOADED`.
+- **No embeddings are computed or stored.** `ai_documents` and `ai_chunks` (migration
+  `aedb0169a4eb`) hold text, ordering and content hashes — no vector column.
+- Re-indexing is content-hash based: an unchanged resource is not rewritten.
 
-## Retrieval (consent-scoped RAG — the security-critical part)
+### Retrieval — deterministic lexical scoring, consent-scoped
 
-Retrieval is **one SQL query** combining vector similarity with a consent predicate:
-*chunks belonging to records of patient P that requester R currently holds an active grant for*
-(patient querying their own records: scope = all their records). There is no code path that
-searches "all vectors then filters" — scoping happens in the query. This design is a research
-detail (consent-scoped retrieval) and a hard security rule.
+- `ai/retrieval.py` scores chunks by **token overlap** with the normalized query, expanded by a
+  fixed **clinical-synonym** table, with deterministic ranking. No vector similarity, no
+  LangChain, no external search service.
+- **Scope is decided before retrieval, in SQL** (`ai/repository.py`): only chunks with
+  `patient_id = P` **and** `category_id IN (allowed categories)`.
+  - **Clinician:** allowed categories come from `ConsentService.granted_category_ids` — the same
+    grant predicate enforcement uses (active, unrevoked, unexpired grants for that doctor).
+  - **Patient (own records):** every category in the vocabulary.
+- **Known gap — hidden records.** AI retrieval does **not** consult `medical_records.is_hidden`,
+  and hiding a record does not touch AI rows. A record a patient has hidden can therefore still
+  contribute evidence to a **clinician's** AI answer when its category is granted, although it is
+  withheld from every other grantee surface. Recorded in [SECURITY.md](SECURITY.md); fixing it is
+  an application-code change, not yet authorized.
 
-## Features Built on the Pipeline
+### Context assembly and generation
 
-| Feature | Consumer | Mechanism | Notes |
+- `ai/context.py` assembles an ordered, token-bounded evidence package (audience `CLINICIAN` or
+  `PATIENT`) with chunk/record/category references.
+- `ai/generation.py` defines the **`AnswerGenerator`** protocol (`generate_answer(context)` →
+  answer + citations) and a deterministic fake used by tests.
+- **Ollama is the only real provider** (`ai/providers/ollama.py`, ADR-028): local HTTP to
+  `PULSEOS_OLLAMA_BASE_URL` (default `http://localhost:11434`), model `PULSEOS_OLLAMA_MODEL`
+  (default `qwen3:8b`), timeout `PULSEOS_OLLAMA_TIMEOUT_SECONDS` (default 60), structured JSON
+  output with citations. `PULSEOS_AI_PROVIDER` is `ollama` (default) or `fake`. No Gemini or other
+  external provider exists in code.
+- **Empty evidence** returns a fixed "the available records do not contain…" answer without
+  calling the model.
+- Provider failures map to HTTP: timeout → 504, unavailable → 503, malformed response → 502.
+
+### Endpoints and UI (from the generated OpenAPI)
+
+| Endpoint | Role | Rate limit | Notes |
 |---|---|---|---|
-| **AI Patient Summary** | Doctor | Retrieve granted records → structured prompt → 1-page summary (Conditions, Medications, Allergies, Recent Labs, Surgeries) | Cached per (patient, grant-scope, records-version); invalidated on new indexed record; regenerating is explicit |
-| **Medical Timeline** | Patient + Doctor | Extracted (date, event, category) tuples from step 3, LLM-normalized | Stored, incrementally updated — not regenerated per view |
-| **Report Explainer** | Patient | Single report's extracted values → plain-English per-value explanation | Hard rule in prompt + UI: understanding, **never diagnosis or medical advice**; fixed disclaimer |
-| **Health Copilot (chat)** | Patient | RAG over own records; conversational | Answers cite source records ("from your CBC report, 12 Mar 2025"); refuses medical advice; conversation history stored per patient |
-| **Voice assistant** | Patient (Phase 2) | STT → copilot → TTS | Backend reuses copilot; not MVP |
+| `GET /api/v1/ai/patients/{patient_id}/search` | DOCTOR | none | Returns ranked chunks within granted categories |
+| `POST /api/v1/ai/patients/{patient_id}/answer` | DOCTOR | `ai_generate` (10 / 60 s) | Clinical assistant answer with citations |
+| `POST /api/v1/ai/me/answer` | PATIENT | `ai_generate` (10 / 60 s) | Patient Health Copilot over own records |
 
-## LLM Provider Layer (ADR-007)
+- UI: doctor portal `AIAssistantPanel` (patient records page); patient portal `HealthCopilotPanel`.
+- **Audit:** a successful generated answer writes a `SUMMARY_GENERATED` audit event for the
+  patient (search does not).
+- **Query sanitization:** `sanitize_clinical_query` replaces Health IDs and phone numbers in the
+  question with placeholders. This is **not** a redaction layer: evidence text sent to the model
+  is not redacted (see Privacy below).
 
-- Single `AnswerGenerator` interface: `generate_answer()`; implementations: Ollama (sole generation provider via local Qwen3:8B),
-  fake (tests/local). Model names, temperature, and prompts are versioned code, not scattered strings.
-- **Redaction before every external call:** direct identifiers (name, phone, Health ID, address,
-  emergency contacts) are stripped/tokenized from prompt content; the LLM works over clinical
-  content only. Redaction has its own unit tests and is part of the security review checklist.
-- Rate limiting + retry with backoff around provider calls; per-user quotas on copilot to protect
-  the free tier. All prompts/responses logged **redacted** for debugging and evaluation.
+### Privacy boundary (as built)
 
-## Cost & Latency Posture
+- Generation is **local** (Ollama on the configured host). If `PULSEOS_OLLAMA_BASE_URL` points at
+  another machine, clinical evidence travels there — the boundary is the Ollama host, not the API
+  process.
+- Local inference does not remove privacy risk: prompts carry clinical evidence, model output can
+  be wrong, and logs/monitoring on the Ollama host are outside PulseOS's control.
+- **No external LLM provider may be added** without first deciding a redaction and data-sharing
+  policy (ADR-028).
 
-Summaries and timelines are cached/materialized — LLM calls happen on ingestion and on
-cache-miss, not per page view. Copilot is the only interactive LLM surface. Target: warm summary
-<1s (cache), cold <15s; copilot first token <5s.
+## Not implemented — original plan (kept for reference, not a commitment)
 
-## Evaluation Plan (feeds RC-3 of the paper)
+The design below is from the original plan (ADR-002, ADR-007, ADR-008). None of it exists in
+code; nothing here is scheduled unless ROADMAP.md says so.
 
-- Build a synthetic patient corpus (generator script, M5) with known ground truth.
-- Summary quality: fact-recall/precision against ground truth + ROUGE/BERTScore; hallucination
-  count per summary as a headline metric.
-- Copilot: question set with known answers; report exact-answer accuracy + citation correctness.
-- Compare RAG vs stuff-everything-in-context baseline for the paper's ablation.
+- OCR of uploaded files (EasyOCR / Tesseract) and a worker pipeline advancing records
+  `UPLOADED → PROCESSING → INDEXED | FAILED`.
+- Embeddings and vector similarity in pgvector; LangChain orchestration (pgvector deferred,
+  ADR-029).
+- AI Patient Summary with caching and invalidation; Medical Timeline extraction; Report
+  Explainer; stored copilot conversation history; voice assistant (Phase 2).
+- A redaction layer before external LLM calls (only relevant if an external provider is ever
+  adopted — ADR-028).
+- Per-user AI quotas beyond the `ai_generate` rate limit; prompt/response logging.
+
+## Evaluation (research, RC-3)
+
+The original evaluation plan (synthetic corpus with ground truth; fact recall/precision,
+hallucination counts, citation correctness; RAG vs full-context baseline) still applies as a
+research intent. **No evaluation harness or results exist yet.**

@@ -40,6 +40,54 @@ jobs:
       - name: Tests
         run: pytest
 
+  backend-postgres:
+    # Opt-in PostgreSQL integration tests (ADR-027): concurrent sealing, UUID ordering,
+    # integrity-error classification, and migration 0007 upgrade/parity/downgrade. A separate
+    # job so these run even while the backend job's lint/type steps fail on pre-existing
+    # findings. The service is a throwaway container that exists only for this job; its
+    # credentials are fixed test values, not secrets.
+    name: Backend PostgreSQL integration (opt-in tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: pulseos_ci
+          POSTGRES_PASSWORD: pulseos_ci
+          POSTGRES_DB: pulseos_ci_scratch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pulseos_ci -d pulseos_ci_scratch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PULSEOS_TEST_POSTGRES_URL: postgresql+asyncpg://pulseos_ci:pulseos_ci@localhost:5432/pulseos_ci_scratch
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: PostgreSQL integration tests (must run, not skip)
+        shell: bash
+        run: |
+          pytest -rs tests/test_audit_batches_postgres.py tests/test_alembic_postgres.py | tee pytest-postgres.log
+          if grep -qE "[0-9]+ skipped" pytest-postgres.log; then
+            echo "::error::PostgreSQL tests were skipped; PULSEOS_TEST_POSTGRES_URL is not reaching them"
+            exit 1
+          fi
+
   web:
     name: Web (prettier · eslint · tsc · vitest)
     runs-on: ubuntu-latest

@@ -1,7 +1,9 @@
 # API Guidelines
 
-> Conventions for the PulseOS REST API. No concrete endpoints are defined here (design happens
-> per milestone); every endpoint added must follow these rules.
+> Conventions for the PulseOS REST API. **The generated OpenAPI schema is authoritative** for
+> routes, roles and shapes (`web/packages/api-client/openapi.json`, regenerated with
+> `make api-client`). Rules marked *(not implemented)* are agreed conventions that no code
+> enforces yet — do not rely on them as guarantees.
 
 ## Shape
 
@@ -38,20 +40,44 @@
   the consent-enforcement dependency (SYSTEM_ARCHITECTURE.md §Isolation rule 3).
 - Rate limiting per user at the **dependency** layer (Redis), declared per route beside the
   role gates — middleware runs before authentication, so per-user keying is impossible there
-  (ADR-024). Stricter buckets on the Health-ID/discovery surfaces, and on AI endpoints when
-  they land. Rate-limited operations declare `429` in the spec.
+  (ADR-024). Buckets exist for the Health-ID/discovery surfaces, access-request creation and the
+  two AI answer endpoints (`ai_generate`). Rate-limited operations declare `429` in the spec.
+  Unauthenticated routes are not rate-limited, and the limiter fails open if Redis is down.
 
 ## Consistency & Safety
 
-- Mutations that clients may retry (uploads, request creation) accept an `Idempotency-Key` header.
+- Mutations that clients may retry (uploads, request creation) accept an `Idempotency-Key`
+  header. *(Not implemented — no endpoint reads this header today.)*
 - State-changing endpoints are transactional: consent grant + audit event commit atomically.
 - File uploads: client → API (validate, authorize) → S3; downloads only via short-lived presigned
   URLs from a dedicated endpoint that runs the consent check and writes the audit event first.
 - Long-running work (OCR, summaries) returns `202 Accepted` + a status resource to poll
   (`processingStatus: uploaded|processing|indexed|failed`); never block a request thread on it.
+  *(Not implemented — no `202` endpoints exist; AI answers are synchronous and bounded by the
+  Ollama timeout.)*
 
 ## Documentation
 
 - OpenAPI is generated from code and is the single source of truth; the web `api-client` package
-  is regenerated from it in CI. If the spec diff is unintentional, the PR is wrong.
+  is regenerated from it with `make api-client` (manually — **not** in CI). If the spec diff is
+  unintentional, the PR is wrong.
 - Every endpoint has a docstring: purpose, roles allowed, consent requirement, failure modes.
+
+## Current surface (from the generated OpenAPI, 2026-10-11)
+
+34 operations under `/api/v1`, plus `GET /health` and `GET /ready`. Roles and consent requirements
+are in each operation's OpenAPI description.
+
+| Area | Operations |
+|---|---|
+| auth | `GET /auth/me` |
+| patients | `POST /patients/register` · `GET`/`PATCH /patients/me` · `GET /patients/lookup` |
+| hospitals / doctors | `POST /hospitals/register` · `GET /hospitals/me` · `GET /hospitals/me/doctors` · `POST /hospitals/me/doctors/{doctor_id}/activate` · `POST /hospitals/me/doctors/{doctor_id}/deactivate` · `POST /hospitals/{hid}/verify` · `POST /doctors/register` · `GET /doctors/me` |
+| records | `GET /record-categories` · `POST`/`GET /records` · `GET /records/existence` · `GET /records/{record_id}` · `POST /records/{record_id}/download-url` · `PATCH /records/{record_id}/visibility` · `GET /granted-records` |
+| consent | `POST /access-requests` · `GET /access-requests/inbox` · `GET /access-requests/sent` · `POST /access-requests/{request_id}/approve` · `POST /access-requests/{request_id}/reject` · `GET /consent-grants` · `POST /consent-grants/{grant_id}/revoke` |
+| audit | `GET /audit-logs` · `GET /audit-logs/{audit_log_id}/verification` · `GET /hospitals/me/audit-logs` |
+| ai | `GET /ai/patients/{patient_id}/search` · `POST /ai/patients/{patient_id}/answer` · `POST /ai/me/answer` |
+
+There are no notification, QR, summary/timeline, batch or receipt endpoints. The audit
+`verification` endpoint reports **per-event** anchors only; batch membership is not exposed yet.
+

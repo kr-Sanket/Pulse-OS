@@ -32,7 +32,9 @@ API image slim.
 ---
 
 ## ADR-002 — pgvector instead of FAISS
-**Date:** 2026-07-20 · **Status:** Accepted
+**Date:** 2026-07-20 · **Status:** Accepted — **amended by ADR-029 (2026-10-11):** pgvector and
+LangChain are not used by the current implementation; retrieval is deterministic and lexical, and
+pgvector is deferred. The decision text below is preserved as recorded.
 
 **Context:** Plan specifies FAISS for RAG vector search. FAISS is an in-process index with no
 persistence story, no metadata filtering, and no multi-tenancy — every worker restart means
@@ -130,7 +132,10 @@ honest (ABDM is FHIR-based).
 ---
 
 ## ADR-007 — LLM provider abstraction; Gemini primary; PHI redaction before external calls
-**Date:** 2026-07-20 · **Status:** Accepted (provider choice pending PO confirmation)
+**Date:** 2026-07-20 · **Status:** Accepted (provider choice pending PO confirmation) —
+**superseded in part by ADR-028 (2026-10-11):** the provider choice (Gemini) and the redaction
+requirement are replaced; the provider-abstraction principle stands, implemented as the
+`AnswerGenerator` protocol. The decision text below is preserved as recorded.
 
 **Context:** Plan says "Gemini API / OpenAI" interchangeably. Medical text is sent to a third
 party; providers differ in cost and API shape.
@@ -146,7 +151,9 @@ paper-worthy implementation detail.
 ---
 
 ## ADR-008 — Redis-backed async job queue for OCR, embeddings, notifications, anchoring
-**Date:** 2026-07-20 · **Status:** Accepted
+**Date:** 2026-07-20 · **Status:** Accepted — library chosen by ADR-014 (arq). **Note
+(2026-10-11):** only the queue and a logging `record_uploaded` task exist; OCR, embedding,
+notification and anchoring jobs are not implemented (see ADR-027, ADR-029).
 
 **Context:** OCR of a scanned PDF takes seconds-to-minutes; embeddings and LLM calls are slow;
 the plan has no async story, which would mean request-thread OCR (timeouts, terrible UX).
@@ -1053,6 +1060,85 @@ enforcement; writing ADR-026.
 commitments plus unavoidable sender and timing metadata; every v3 event is verifiable end to end
 against persisted, authoritative metadata; completeness is a reconciliation result, never a proof
 property; the ADR-004 anchor port is unchanged.
+
+---
+
+## ADR-028 — Local Ollama is the sole AI generation provider; redaction revisited
+**Date:** 2026-10-11 · **Status:** Accepted — recorded from the Product Owner's direction of
+2026-10-11 (documentation-alignment task), reflecting commit `c95494a` · **Supersedes in part:**
+ADR-007 (provider choice and redaction requirement)
+
+**Context:** ADR-007 chose Gemini (external) and required a redaction layer before every external
+LLM call. The implementation moved to a local model: commit `c95494a` (2026-10-10) removed the
+Gemini provider. ADR-007 was never amended, so the decision record and the code disagreed.
+
+**Decision:**
+1. Generation goes through the `AnswerGenerator` protocol (`ai/generation.py`). **Ollama with
+   Qwen3:8B is the only supported real provider** (`ai/providers/ollama.py`); a deterministic fake
+   exists for tests. Configuration: `PULSEOS_AI_PROVIDER` (`ollama` | `fake`),
+   `PULSEOS_OLLAMA_BASE_URL`, `PULSEOS_OLLAMA_MODEL`, `PULSEOS_OLLAMA_TIMEOUT_SECONDS`.
+2. **No separate redaction layer is implemented.** The only transformation is
+   `sanitize_clinical_query`, which replaces Health IDs and phone numbers in the *question*;
+   evidence text sent to the model is not redacted.
+3. **Before any external inference provider is added**, a redaction and data-sharing decision
+   must be made and recorded as a new ADR. The ADR-007 redaction requirement is not discarded —
+   it is deferred to that decision.
+
+**Consequences:** the privacy boundary is the Ollama host, not "no third party": if
+`PULSEOS_OLLAMA_BASE_URL` points to another machine, clinical evidence travels there, and logs on
+that host are outside PulseOS's control. Local inference reduces third-party exposure; it does not
+remove privacy risk. SECURITY.md and AI_ARCHITECTURE.md describe the boundary as built.
+
+---
+
+## ADR-029 — Deterministic lexical retrieval; pgvector deferred
+**Date:** 2026-10-11 · **Status:** Accepted — recorded from the Product Owner's direction of
+2026-10-11 (documentation-alignment task), reflecting the implemented `ai` module · **Amends:**
+ADR-002
+
+**Context:** ADR-002 chose pgvector (with LangChain) for consent-scoped vector retrieval. The AI
+layer that was built (commits `a7df8b4`…`ff5b3fe`, 2026-10-04 to 2026-10-08) ingests sanitized FHIR
+resources and retrieves with deterministic token scoring; no embeddings are computed and no vector
+column exists (migration `aedb0169a4eb`).
+
+**Decision:**
+1. Current retrieval is **deterministic lexical scoring** — token overlap with a fixed
+   clinical-synonym table (`ai/retrieval.py`) — over `ai_chunks`.
+2. **Consent scoping stays in the query**, as ADR-002 intended: `patient_id = P AND category_id
+   IN (allowed categories)`, where a clinician's categories come from active grants and a patient's
+   are all categories.
+3. **pgvector and LangChain are deferred**, not rejected and not scheduled. No implementation date
+   is promised. The `pgvector/pgvector:pg16` image is used by infrastructure, but the extension is
+   not used by the application.
+
+**Consequences:** retrieval is reproducible and testable without a model, but recall depends on
+vocabulary overlap. Adopting embeddings later requires a migration, an embedding provider decision
+(subject to ADR-028's rule for external providers) and a re-index.
+
+---
+
+## ADR-030 — Synthea FHIR R4 import and FHIR-based AI ingestion (proposed record of existing behaviour)
+**Date:** 2026-10-11 · **Status:** **Proposed — needs Product Owner acceptance.** It records
+behaviour that already exists in code; it is not a new design.
+
+**Context:** synthetic clinical data comes from Synthea FHIR R4 bundles, and the AI layer ingests
+FHIR resources. Neither has an ADR; the design lives in module docstrings
+(`records/fhir_mapping.py`, `records/fhir_import.py`, `ai/ingestion.py`).
+
+**Behaviour as implemented (verified 2026-10-11):**
+1. `scripts/import_synthea.py` imports pinned Synthea patients. Mapped resource types:
+   `AllergyIntolerance`, `Condition`, `DiagnosticReport` (claimed `Observation`s folded into it),
+   `Immunization`, `MedicationRequest`, `Procedure`. `Encounter` is not a record. Three categories
+   (`CONDITION`, `PROCEDURE`, `ALLERGY`) were added to the vocabulary for this mapping.
+2. Idempotent and non-destructive: deterministic keys backed by UNIQUE constraints; insert-if-absent
+   only.
+3. Consent-neutral: writes records and sanitized FHIR objects, never grants, requests or audit
+   events; records are `PATIENT_LOCKER` origin and pass through `consent.enforce` like any other.
+4. The import can index each resource into the AI tables; `scripts/backfill_ai.py` indexes
+   records already in storage.
+
+**Open questions for acceptance:** whether `PATIENT_LOCKER` is the intended origin for imported
+records long term; whether Phase B of the import (deferred, TODO.md) changes any of the above.
 
 ---
 

@@ -5,6 +5,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+### Changed
+- **Documentation aligned with the implementation (2026-10-11; lands with this change set).**
+  AI, security, tech-stack, architecture, domain, database, development, API and status documents
+  now describe what is built separately from what is planned. New ADR-028 (local Ollama as the
+  sole provider; redaction revisited) and ADR-029 (lexical retrieval; pgvector deferred) record the
+  Product Owner's direction; ADR-030 (Synthea FHIR import) is **proposed**. ADR-002, ADR-007 and
+  ADR-008 carry status amendments; no historical decision text was rewritten. The documentation
+  also records a found gap: AI retrieval does not honour hidden records (not yet fixed).
+
+### Added
+- **Opt-in PostgreSQL CI job and migration tests (2026-10-11; lands with this change set).** A
+  `backend-postgres` GitHub Actions job runs the opt-in PostgreSQL tests against a disposable
+  PostgreSQL 16 service and fails if any is skipped; `tests/test_alembic_postgres.py` covers
+  migration 0007 upgrade, model parity, CHECK enforcement and downgrade on a fresh database per
+  test. The job has **not yet run on GitHub**.
+- **Audit integrity M6.1–M6.3 (`e3c0fe1`, `1ce4c14`, `155cbf1`, 2026-10-11).** v3 audit digests
+  use Ethereum Keccak-256 (v1/v2 SHA-256 rows still verify); deterministic Merkle trees and
+  membership proofs; batch commitments; migration 0007 (`audit_batches`, `audit_batch_members`);
+  transactional batch sealing with conflict classification; database-only reconciliation including
+  unbatched-event integrity checks; v3 events refused by per-event anchoring; opt-in PostgreSQL
+  integration tests. ADR-027 accepted; ADR-019 resolved. **Nothing is submitted to any chain**;
+  M6.4 is not authorized.
+- **AI layer (`a7df8b4`…`ff5b3fe`, 2026-10-04 to 2026-10-08).** Deterministic FHIR ingestion into
+  `ai_documents`/`ai_chunks` (migration `aedb0169a4eb`); consent-scoped lexical retrieval;
+  context assembly; the `AnswerGenerator` protocol; a clinician AI assistant
+  (`/ai/patients/{patient_id}/search`, `/answer`) and patient Health Copilot (`/ai/me/answer`)
+  with the `ai_generate` rate limit and `SUMMARY_GENERATED` audit events; doctor and patient
+  portal panels.
+- **Audit anchoring foundation (`b17c2f0`, 2026-10-04).** `AuditAnchor` port,
+  `LocalChainAuditAnchor` (network-free simulation), migration 0006 (`audit_anchors`), and
+  `GET /audit-logs/{audit_log_id}/verification`.
+
+### Removed
+- **Gemini provider (`c95494a`, 2026-10-10).** Local Ollama (Qwen3:8B) is the only supported
+  generation provider (ADR-028).
+
 ### Added
 - **Patients can hide and unhide their own records** — `PATCH /api/v1/records/{record_id}/visibility`.
   The `is_hidden` column has existed since migration 0003 and every read layer has enforced it
