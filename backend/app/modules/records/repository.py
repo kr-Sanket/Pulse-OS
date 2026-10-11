@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Final
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, and_, or_, select
+from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
@@ -215,7 +215,7 @@ class DoctorRepository:
     ) -> list[Doctor]:
         """One page of a hospital's doctors, newest first. Fetches ``limit`` rows; the
         service asks for one extra to detect whether a next page exists."""
-        query: Select[tuple[Doctor]] = (
+        query = (
             select(Doctor)
             .where(Doctor.hospital_id == hospital_id)
             .order_by(Doctor.created_at.desc(), Doctor.id.desc())
@@ -303,11 +303,8 @@ class MedicalRecordRepository:
         return list(result.scalars())
 
     async def get_with_context(self, record_id: UUID) -> RecordRow | None:
-        result = await self._session.execute(
-            self._context_query().where(MedicalRecord.id == record_id)
-        )
-        row = result.first()
-        return (row[0], row[1], row[2]) if row is not None else None
+        rows = await self._context_rows(MedicalRecord.id == record_id)
+        return rows[0] if rows else None
 
     async def list_page(
         self,
@@ -331,19 +328,18 @@ class MedicalRecordRepository:
         """
         if (patient_id is None) == (uploaded_by_hospital_id is None):
             raise ValueError("exactly one of patient_id/uploaded_by_hospital_id is required")
-        query = self._context_query(sort).limit(limit)
+        criteria: list[ColumnElement[bool]] = []
         if patient_id is not None:
-            query = query.where(MedicalRecord.patient_id == patient_id)
+            criteria.append(MedicalRecord.patient_id == patient_id)
         if uploaded_by_hospital_id is not None:
-            query = query.where(MedicalRecord.uploaded_by_hospital_id == uploaded_by_hospital_id)
+            criteria.append(MedicalRecord.uploaded_by_hospital_id == uploaded_by_hospital_id)
         if category_id is not None:
-            query = query.where(MedicalRecord.category_id == category_id)
+            criteria.append(MedicalRecord.category_id == category_id)
         if search:
-            query = query.where(_search_filter(search))
+            criteria.append(_search_filter(search))
         if after is not None:
-            query = query.where(_date_keyset_filter(after))
-        result = await self._session.execute(query)
-        return [(row[0], row[1], row[2]) for row in result.all()]
+            criteria.append(_date_keyset_filter(after))
+        return await self._context_rows(*criteria, sort=sort, limit=limit)
 
     async def list_page_for_grantee(
         self,
@@ -356,7 +352,7 @@ class MedicalRecordRepository:
         """One page of the records a consented clinician may read, newest first (ADR-020).
 
         Ordering moved to ``date_of_service`` with the patient listing, for the same reason
-        (see ``_context_query``) — the clinician's page had the identical collapse. It takes
+        (see ``_context_rows``) — the clinician's page had the identical collapse. It takes
         **no** ``search``, and that omission is a security property rather than an
         oversight: ``GrantedRecordResponse`` deliberately withholds ``original_filename`` and
         ``description``, and a search over exactly those two withheld columns would turn this
@@ -380,24 +376,22 @@ class MedicalRecordRepository:
         """
         if not category_ids:
             raise ValueError("category_ids must be non-empty: a listing is always grant-scoped")
-        query = (
-            self._context_query()
-            .where(
-                MedicalRecord.patient_id == patient_id,
-                MedicalRecord.category_id.in_(category_ids),
-                MedicalRecord.is_hidden.is_(False),
-            )
-            .limit(limit)
-        )
+        criteria: list[ColumnElement[bool]] = [
+            MedicalRecord.patient_id == patient_id,
+            MedicalRecord.category_id.in_(category_ids),
+            MedicalRecord.is_hidden.is_(False),
+        ]
         if after is not None:
-            query = query.where(_date_keyset_filter(after))
-        result = await self._session.execute(query)
-        return [(row[0], row[1], row[2]) for row in result.all()]
+            criteria.append(_date_keyset_filter(after))
+        return await self._context_rows(*criteria, limit=limit)
 
-    def _context_query(
-        self, sort: SortDirection = SortDirection.NEWEST_FIRST
-    ) -> Select[tuple[MedicalRecord, RecordCategory, Hospital]]:
-        """The joined listing query, ordered by *clinical* date.
+    async def _context_rows(
+        self,
+        *criteria: ColumnElement[bool],
+        sort: SortDirection = SortDirection.NEWEST_FIRST,
+        limit: int | None = None,
+    ) -> list[RecordRow]:
+        """Run the joined listing query, ordered by *clinical* date, and return its rows.
 
         Ordering by ``date_of_service`` rather than ``created_at`` is a correctness fix, not
         a preference. ``created_at`` defaults to the transaction clock, so every record
@@ -408,6 +402,10 @@ class MedicalRecordRepository:
 
         ``id`` remains the tie-breaker, in the same direction as the date, so the order is
         total and a keyset can address every row unambiguously.
+
+        Built, executed and unpacked in one place so the statement's type is only ever
+        inferred: SQLAlchemy 2.0 spells it ``Select[tuple[...]]`` and 2.1 ``Select[...]``, and
+        no single annotation is valid under both.
         """
         # The Hospital column is NULL for locker uploads (outer join) — SQLAlchemy's
         # Select typing cannot express that, so RecordRow carries the honest type.
@@ -418,9 +416,14 @@ class MedicalRecordRepository:
             if sort is SortDirection.OLDEST_FIRST
             else (date_col.desc(), id_col.desc())
         )
-        return (
+        query = (
             select(MedicalRecord, RecordCategory, Hospital)
             .join(RecordCategory, MedicalRecord.category_id == RecordCategory.id)
             .outerjoin(Hospital, MedicalRecord.uploaded_by_hospital_id == Hospital.id)
+            .where(*criteria)
             .order_by(*ordering)
         )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await self._session.execute(query)
+        return [(row[0], row[1], row[2]) for row in result.all()]

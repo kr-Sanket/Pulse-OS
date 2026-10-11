@@ -33,7 +33,7 @@ from datetime import datetime
 from typing import Final
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, and_, func, or_, select, text
+from sqlalchemy import ColumnElement, and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
@@ -119,7 +119,7 @@ class ConsentRequestRepository:
     async def _page(
         self, scope: ColumnElement[bool], *, after: CursorKey | None, limit: int
     ) -> list[ConsentRequest]:
-        query: Select[tuple[ConsentRequest]] = (
+        query = (
             select(ConsentRequest)
             .where(scope)
             .order_by(ConsentRequest.created_at.desc(), ConsentRequest.id.desc())
@@ -274,7 +274,7 @@ class ConsentGrantRepository:
         """One page of every grant ever derived for this patient, newest first — revoked
         and expired rows included, because this is the patient's history, not the
         enforcement view."""
-        query: Select[tuple[ConsentGrant]] = (
+        query = (
             select(ConsentGrant)
             .where(ConsentGrant.patient_id == patient_id)
             .order_by(ConsentGrant.created_at.desc(), ConsentGrant.id.desc())
@@ -320,7 +320,7 @@ class AuditLogRepository:
         rather than on the row's storage timestamp, matching
         ``ix_audit_logs_patient_id_occurred_at_id``.
         """
-        query: Select[tuple[AuditLog]] = (
+        query = (
             select(AuditLog)
             .where(AuditLog.patient_id == patient_id)
             .order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc())
@@ -345,7 +345,7 @@ class AuditLogRepository:
         migration 0005, which is unattributed and stays that way. Same order and keyset as
         the patient listing, matching ``ix_audit_logs_actor_hospital_id_occurred_at_id``.
         """
-        query: Select[tuple[AuditLog]] = (
+        query = (
             select(AuditLog)
             .where(AuditLog.actor_hospital_id == hospital_id)
             .order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc())
@@ -418,7 +418,7 @@ class AuditAnchorRepository:
         a scheme out of the queue entirely — v3, which is batch-anchored (ADR-027).
         """
         anchored = select(AuditAnchorEntry.audit_log_id)
-        query: Select[tuple[AuditLog]] = (
+        query = (
             select(AuditLog)
             .where(AuditLog.id.not_in(anchored))
             .order_by(AuditLog.occurred_at.asc(), AuditLog.id.asc())
@@ -566,7 +566,7 @@ class AuditBatchRepository:
         in, so the selected prefix is the one the batch would choose anyway.
         """
         batched = select(AuditBatchMember.audit_log_id)
-        query: Select[tuple[AuditLog]] = (
+        query = (
             select(AuditLog)
             .where(AuditLog.hash_version == hash_version, AuditLog.id.not_in(batched))
             .order_by(AuditLog.occurred_at.asc(), AuditLog.id.asc())
@@ -583,7 +583,7 @@ class AuditBatchRepository:
         v3 event relabelled to v2 before sealing is found (ADR-027 decision 13).
         """
         batched = select(AuditBatchMember.audit_log_id)
-        query: Select[tuple[AuditLog]] = (
+        query = (
             select(AuditLog)
             .where(AuditLog.id.not_in(batched))
             .order_by(AuditLog.occurred_at.asc(), AuditLog.id.asc())

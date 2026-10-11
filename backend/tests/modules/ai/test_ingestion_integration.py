@@ -114,7 +114,7 @@ def test_fhir_ingestion_persists_document_and_chunks() -> None:
                 .where(AIChunk.document_id == document.id)
                 .order_by(AIChunk.chunk_index)
             )
-            chunks = list(chunks_result.scalars())
+            chunks: list[AIChunk] = list(chunks_result.scalars())
 
             assert chunks
             combined_content = " ".join(chunk.content for chunk in chunks)
@@ -228,7 +228,7 @@ def test_diagnostic_report_ingestion_and_reindex_integration() -> None:
                 .where(AIChunk.document_id == document.id)
                 .order_by(AIChunk.chunk_index)
             )
-            chunks = list(chunks_result.scalars())
+            chunks: list[AIChunk] = list(chunks_result.scalars())
             combined = " ".join(c.content for c in chunks)
             assert "Effective Date: 2026-04-01T08:30:00Z" in combined
             assert "Result: Glucose 69.5 mg/dL" in combined
@@ -279,7 +279,7 @@ def test_diagnostic_report_ingestion_and_reindex_integration() -> None:
                 .where(AIChunk.document_id == document.id)
                 .order_by(AIChunk.chunk_index)
             )
-            updated_chunks = list(updated_chunks_result.scalars())
+            updated_chunks: list[AIChunk] = list(updated_chunks_result.scalars())
             updated_combined = " ".join(c.content for c in updated_chunks)
             assert "Result: Glucose 75 mg/dL" in updated_combined
             assert "Glucose 69.5 mg/dL" not in updated_combined
