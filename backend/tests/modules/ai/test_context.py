@@ -4,7 +4,6 @@ from dataclasses import FrozenInstanceError, fields
 from uuid import UUID, uuid4
 
 import pytest
-
 from app.modules.ai.context import (
     AssembledContext,
     ContextAudience,
@@ -41,7 +40,7 @@ def make_retrieved_chunk(
     )
 
 
-def test_basic_assembly_with_multiple_chunks():
+def test_basic_assembly_with_multiple_chunks() -> None:
     patient_id = uuid4()
     cat_id_1 = uuid4()
     cat_id_2 = uuid4()
@@ -96,7 +95,7 @@ def test_basic_assembly_with_multiple_chunks():
     assert item2.citation_index == 2
 
 
-def test_input_order_preservation():
+def test_input_order_preservation() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     category_codes = {cat_id: "CONSULTATION_NOTE"}
@@ -126,7 +125,7 @@ def test_input_order_preservation():
         assert context.items[i].citation_index == i + 1
 
 
-def test_token_budget_allows_only_fitting_chunks():
+def test_token_budget_allows_only_fitting_chunks() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     category_codes = {cat_id: "DISCHARGE_SUMMARY"}
@@ -153,14 +152,16 @@ def test_token_budget_allows_only_fitting_chunks():
     assert context.dropped_chunk_count == 1
 
 
-def test_truncation_stops_further_processing_and_excludes_subsequent_chunks():
+def test_truncation_stops_further_processing_and_excludes_subsequent_chunks() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     category_codes = {cat_id: "LAB_REPORT"}
 
     chunk1 = make_retrieved_chunk(category_id=cat_id, token_count=50)
     chunk2 = make_retrieved_chunk(category_id=cat_id, token_count=60)  # Exceeds 100
-    chunk3 = make_retrieved_chunk(category_id=cat_id, token_count=10)  # Even though 10 fits 50+10, it must be excluded
+    chunk3 = make_retrieved_chunk(
+        category_id=cat_id, token_count=10
+    )  # Even though 10 fits 50+10, it must be excluded
     chunk4 = make_retrieved_chunk(category_id=cat_id, token_count=10)
 
     context = assemble_context(
@@ -178,7 +179,7 @@ def test_truncation_stops_further_processing_and_excludes_subsequent_chunks():
     assert context.dropped_chunk_count == 3
 
 
-def test_exact_fit_boundary():
+def test_exact_fit_boundary() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     category_codes = {cat_id: "IMAGING"}
@@ -201,7 +202,7 @@ def test_exact_fit_boundary():
     assert context.dropped_chunk_count == 0
 
 
-def test_single_oversized_chunk():
+def test_single_oversized_chunk() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     category_codes = {cat_id: "LAB_REPORT"}
@@ -223,7 +224,7 @@ def test_single_oversized_chunk():
     assert context.dropped_chunk_count == 1
 
 
-def test_empty_chunks_returns_empty_context():
+def test_empty_chunks_returns_empty_context() -> None:
     patient_id = uuid4()
 
     context = assemble_context(
@@ -244,7 +245,7 @@ def test_empty_chunks_returns_empty_context():
 
 
 @pytest.mark.parametrize("invalid_budget", [0, -1, -500])
-def test_invalid_budget_raises_value_error(invalid_budget: int):
+def test_invalid_budget_raises_value_error(invalid_budget: int) -> None:
     patient_id = uuid4()
 
     with pytest.raises(ValueError, match="max_tokens must be greater than zero"):
@@ -257,7 +258,7 @@ def test_invalid_budget_raises_value_error(invalid_budget: int):
         )
 
 
-def test_missing_category_mapping_raises_key_error():
+def test_missing_category_mapping_raises_key_error() -> None:
     patient_id = uuid4()
     missing_cat_id = uuid4()
     chunk = make_retrieved_chunk(category_id=missing_cat_id, token_count=20)
@@ -272,7 +273,7 @@ def test_missing_category_mapping_raises_key_error():
         )
 
 
-def test_security_and_data_minimization():
+def test_security_and_data_minimization() -> None:
     field_names = {f.name for f in fields(ContextEvidenceItem)}
     expected_fields = {
         "chunk_id",
@@ -315,7 +316,7 @@ def test_security_and_data_minimization():
         assert not hasattr(item, forbidden)
 
 
-def test_query_and_patient_id_are_preserved_verbatim():
+def test_query_and_patient_id_are_preserved_verbatim() -> None:
     patient_id = uuid4()
     exact_query = "   Spaces  and UPPERCASE with ?!! punctuation   "
 
@@ -331,7 +332,7 @@ def test_query_and_patient_id_are_preserved_verbatim():
     assert context.patient_id == patient_id
 
 
-def test_dataclasses_are_frozen():
+def test_dataclasses_are_frozen() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     chunk = make_retrieved_chunk(category_id=cat_id, token_count=10)
@@ -350,7 +351,7 @@ def test_dataclasses_are_frozen():
         context.items[0].citation_index = 99  # type: ignore[misc]
 
 
-def test_assemble_context_defaults_to_clinician_audience():
+def test_assemble_context_defaults_to_clinician_audience() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     chunk = make_retrieved_chunk(category_id=cat_id, token_count=10)
@@ -363,7 +364,7 @@ def test_assemble_context_defaults_to_clinician_audience():
     assert context.audience == ContextAudience.CLINICIAN
 
 
-def test_assemble_context_preserves_explicit_patient_audience():
+def test_assemble_context_preserves_explicit_patient_audience() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     chunk = make_retrieved_chunk(category_id=cat_id, token_count=10)
@@ -377,7 +378,7 @@ def test_assemble_context_preserves_explicit_patient_audience():
     assert context.audience == ContextAudience.PATIENT
 
 
-def test_assemble_context_preserves_explicit_clinician_audience():
+def test_assemble_context_preserves_explicit_clinician_audience() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     chunk = make_retrieved_chunk(category_id=cat_id, token_count=10)
@@ -391,7 +392,7 @@ def test_assemble_context_preserves_explicit_clinician_audience():
     assert context.audience == ContextAudience.CLINICIAN
 
 
-def test_assembled_context_dataclass_default_audience():
+def test_assembled_context_dataclass_default_audience() -> None:
     context = AssembledContext(
         query="direct test",
         patient_id=uuid4(),
@@ -404,7 +405,7 @@ def test_assembled_context_dataclass_default_audience():
     assert context.audience == ContextAudience.CLINICIAN
 
 
-def test_audience_does_not_affect_token_budget_or_citations():
+def test_audience_does_not_affect_token_budget_or_citations() -> None:
     patient_id = uuid4()
     cat_id = uuid4()
     chunk1 = make_retrieved_chunk(category_id=cat_id, token_count=40, chunk_index=0)
@@ -434,4 +435,3 @@ def test_audience_does_not_affect_token_budget_or_citations():
     assert clinician_ctx.dropped_chunk_count == patient_ctx.dropped_chunk_count == 1
     assert len(clinician_ctx.items) == len(patient_ctx.items) == 1
     assert clinician_ctx.items[0].citation_index == patient_ctx.items[0].citation_index == 1
-

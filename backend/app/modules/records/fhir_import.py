@@ -198,7 +198,13 @@ class SyntheaImporter:
     across files, fail-fast within one).
     """
 
-    def __init__(self,session: AsyncSession,*,storage: ObjectStorage,ai_ingestion: AIRecordIngestion | None = None,) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        storage: ObjectStorage,
+        ai_ingestion: AIRecordIngestion | None = None,
+    ) -> None:
         self._session = session
         self._storage = storage
         self._ai_ingestion = ai_ingestion

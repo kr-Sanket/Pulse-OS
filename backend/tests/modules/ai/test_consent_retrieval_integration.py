@@ -34,7 +34,7 @@ from app.modules.records.models import (
 from tests.support import FakeClinicianDirectory, sqlite_session
 
 
-def test_consent_scoped_ai_retrieval_lifecycle():
+def test_consent_scoped_ai_retrieval_lifecycle() -> None:
     """Verify end-to-end that real ConsentService strictly gates AI retrieval."""
 
     async def scenario() -> None:
@@ -164,12 +164,10 @@ def test_consent_scoped_ai_retrieval_lifecycle():
             )
             assert len(indexed_chunks) == 2
             assert any(
-                "diabetes" in c.content and c.category_id == cat_lab.id
-                for c in indexed_chunks
+                "diabetes" in c.content and c.category_id == cat_lab.id for c in indexed_chunks
             )
             assert any(
-                "diabetes" in c.content and c.category_id == cat_rx.id
-                for c in indexed_chunks
+                "diabetes" in c.content and c.category_id == cat_rx.id for c in indexed_chunks
             )
 
             # Build real services wired together

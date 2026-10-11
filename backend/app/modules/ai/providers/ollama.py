@@ -151,9 +151,7 @@ def format_ollama_user_message(context: AssembledContext) -> str:
     evidence_blocks: list[str] = []
     for item in context.items:
         date_str = (
-            item.date_of_service.isoformat()
-            if item.date_of_service is not None
-            else "unrecorded"
+            item.date_of_service.isoformat() if item.date_of_service is not None else "unrecorded"
         )
         header = (
             f"[{item.citation_index}] Category: {item.category_code} "

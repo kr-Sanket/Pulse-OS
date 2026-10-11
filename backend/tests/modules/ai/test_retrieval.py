@@ -27,10 +27,13 @@ def test_normalize_query_ignores_whitespace() -> None:
 def test_lexical_score_counts_matching_terms() -> None:
     terms = normalize_query("diabetes active")
 
-    assert lexical_score(
-        "Condition: Diabetes\nClinical Status: active",
-        terms,
-    ) == 2
+    assert (
+        lexical_score(
+            "Condition: Diabetes\nClinical Status: active",
+            terms,
+        )
+        == 2
+    )
 
 
 def test_lexical_score_is_case_insensitive() -> None:
@@ -52,10 +55,13 @@ def test_unmatched_query_has_zero_score() -> None:
 def test_lexical_score_does_not_reward_repeated_occurrences() -> None:
     terms = normalize_query("diabetes active")
 
-    assert lexical_score(
-        "diabetes diabetes diabetes active",
-        terms,
-    ) == 2
+    assert (
+        lexical_score(
+            "diabetes diabetes diabetes active",
+            terms,
+        )
+        == 2
+    )
 
 
 def test_vaccination_matches_immunization_vaccine_content() -> None:

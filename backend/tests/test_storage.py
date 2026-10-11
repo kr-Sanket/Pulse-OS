@@ -87,6 +87,7 @@ def test_s3_put_object_sends_bucket_key_body_and_content_type() -> None:
 
     asyncio.run(scenario())
 
+
 def test_s3_get_object_reads_body() -> None:
     async def scenario() -> None:
         client = MagicMock()
@@ -106,6 +107,7 @@ def test_s3_get_object_reads_body() -> None:
         body.read.assert_called_once_with()
 
     asyncio.run(scenario())
+
 
 def test_s3_presign_includes_ttl_disposition_and_content_type() -> None:
     async def scenario() -> None:
@@ -154,6 +156,7 @@ def test_s3_client_is_created_lazily_and_reused() -> None:
         second = storage._get_client()
         assert first is second
         boto3_mock.client.assert_called_once()
+
 
 def test_fake_storage_missing_object_raises_storage_error() -> None:
     async def scenario() -> None:

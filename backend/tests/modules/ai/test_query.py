@@ -1,19 +1,23 @@
 import asyncio
+from datetime import datetime
 from uuid import UUID, uuid4
 
 import pytest
-
 from app.modules.ai.context import AssembledContext
 from app.modules.ai.query import AIQueryService
 from app.modules.ai.retrieval import RetrievedChunk
+from app.modules.ai.service import RetrievalVisibility
+from app.modules.auth.domain import AuthenticatedUser, Role
 
 
 class FakeConsentScope:
-    def __init__(self, category_ids):
+    def __init__(self, category_ids: frozenset[UUID]) -> None:
         self.category_ids = category_ids
         self.calls: list[dict[str, object]] = []
 
-    async def granted_category_ids(self, requester, *, patient_id, at):
+    async def granted_category_ids(
+        self, requester: AuthenticatedUser, *, patient_id: UUID, at: datetime
+    ) -> frozenset[UUID]:
         self.calls.append(
             {
                 "requester": requester,
@@ -24,6 +28,12 @@ class FakeConsentScope:
         return self.category_ids
 
 
+def make_doctor() -> AuthenticatedUser:
+    """A clinician identity: ``AIQueryService.search`` and ``assemble_context`` are the
+    doctor-facing paths (the patient path is ``generate_self_answer``)."""
+    return AuthenticatedUser(user_id=uuid4(), firebase_uid=f"fb-doctor-{uuid4()}", role=Role.DOCTOR)
+
+
 class FakeRetrieval:
     def __init__(self, results: list[RetrievedChunk] | None = None):
         self.calls: list[dict[str, object]] = []
@@ -32,12 +42,12 @@ class FakeRetrieval:
     async def search(
         self,
         *,
-        patient_id,
-        category_ids,
-        query,
-        visibility,
-        limit,
-    ):
+        patient_id: UUID,
+        category_ids: frozenset[UUID],
+        query: str,
+        visibility: RetrievalVisibility,
+        limit: int,
+    ) -> list[RetrievedChunk]:
         self.calls.append(
             {
                 "patient_id": patient_id,
@@ -77,7 +87,7 @@ def make_chunk(
     )
 
 
-def test_ai_query_service_passes_consent_scope_to_retrieval():
+def test_ai_query_service_passes_consent_scope_to_retrieval() -> None:
     consent = FakeConsentScope(frozenset({uuid4(), uuid4()}))
     retrieval = FakeRetrieval()
 
@@ -87,7 +97,7 @@ def test_ai_query_service_passes_consent_scope_to_retrieval():
     )
 
     patient_id = uuid4()
-    requester = object()
+    requester = make_doctor()
 
     asyncio.run(
         service.search(
@@ -107,7 +117,7 @@ def test_ai_query_service_passes_consent_scope_to_retrieval():
     assert retrieval.calls[0]["limit"] == 5
 
 
-def test_ai_query_service_returns_no_results_without_consent_scope():
+def test_ai_query_service_returns_no_results_without_consent_scope() -> None:
     consent = FakeConsentScope(frozenset())
     retrieval = FakeRetrieval()
 
@@ -117,7 +127,7 @@ def test_ai_query_service_returns_no_results_without_consent_scope():
     )
 
     patient_id = uuid4()
-    requester = object()
+    requester = make_doctor()
 
     results = asyncio.run(
         service.search(
@@ -135,7 +145,7 @@ def test_ai_query_service_returns_no_results_without_consent_scope():
     assert retrieval.calls[0]["category_ids"] == frozenset()
 
 
-def test_ai_query_service_assemble_context_success():
+def test_ai_query_service_assemble_context_success() -> None:
     cat_id_1 = uuid4()
     cat_id_2 = uuid4()
     category_codes = {cat_id_1: "LAB_REPORT", cat_id_2: "PRESCRIPTION"}
@@ -158,7 +168,7 @@ def test_ai_query_service_assemble_context_success():
 
     service = AIQueryService(retrieval=retrieval, consent=consent)
     patient_id = uuid4()
-    requester = object()
+    requester = make_doctor()
 
     context = asyncio.run(
         service.assemble_context(
@@ -193,14 +203,14 @@ def test_ai_query_service_assemble_context_success():
     assert context.items[1].citation_index == 2
 
 
-def test_ai_query_service_assemble_context_parameter_forwarding():
+def test_ai_query_service_assemble_context_parameter_forwarding() -> None:
     cat_id = uuid4()
     consent = FakeConsentScope(frozenset({cat_id}))
     retrieval = FakeRetrieval(results=[])
 
     service = AIQueryService(retrieval=retrieval, consent=consent)
     patient_id = uuid4()
-    requester = object()
+    requester = make_doctor()
 
     context = asyncio.run(
         service.assemble_context(
@@ -225,14 +235,14 @@ def test_ai_query_service_assemble_context_parameter_forwarding():
     assert context.max_tokens == 750
 
 
-def test_ai_query_service_assemble_context_empty_retrieval():
+def test_ai_query_service_assemble_context_empty_retrieval() -> None:
     cat_id = uuid4()
     consent = FakeConsentScope(frozenset({cat_id}))
     retrieval = FakeRetrieval(results=[])
 
     service = AIQueryService(retrieval=retrieval, consent=consent)
     patient_id = uuid4()
-    requester = object()
+    requester = make_doctor()
 
     context = asyncio.run(
         service.assemble_context(
@@ -250,7 +260,7 @@ def test_ai_query_service_assemble_context_empty_retrieval():
     assert context.dropped_chunk_count == 0
 
 
-def test_ai_query_service_assemble_context_truncation():
+def test_ai_query_service_assemble_context_truncation() -> None:
     cat_id = uuid4()
     chunk1 = make_chunk(category_id=cat_id, token_count=50)
     chunk2 = make_chunk(category_id=cat_id, token_count=60)  # 50 + 60 = 110 > 100
@@ -261,7 +271,7 @@ def test_ai_query_service_assemble_context_truncation():
 
     service = AIQueryService(retrieval=retrieval, consent=consent)
     patient_id = uuid4()
-    requester = object()
+    requester = make_doctor()
 
     context = asyncio.run(
         service.assemble_context(
@@ -280,7 +290,7 @@ def test_ai_query_service_assemble_context_truncation():
     assert context.dropped_chunk_count == 2
 
 
-def test_ai_query_service_assemble_context_missing_category_mapping_raises_key_error():
+def test_ai_query_service_assemble_context_missing_category_mapping_raises_key_error() -> None:
     unmapped_cat_id = uuid4()
     chunk = make_chunk(category_id=unmapped_cat_id, token_count=20)
 
@@ -289,7 +299,7 @@ def test_ai_query_service_assemble_context_missing_category_mapping_raises_key_e
 
     service = AIQueryService(retrieval=retrieval, consent=consent)
     patient_id = uuid4()
-    requester = object()
+    requester = make_doctor()
 
     with pytest.raises(KeyError):
         asyncio.run(

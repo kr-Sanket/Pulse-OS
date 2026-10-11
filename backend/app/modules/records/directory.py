@@ -253,9 +253,8 @@ class RecordDateDirectoryService:
         """Return a mapping of record_id to date_of_service in a single batched query."""
         if not record_ids:
             return {}
-        stmt = (
-            select(MedicalRecord.id, MedicalRecord.date_of_service)
-            .where(MedicalRecord.id.in_(record_ids))
+        stmt = select(MedicalRecord.id, MedicalRecord.date_of_service).where(
+            MedicalRecord.id.in_(record_ids)
         )
         result = await self._session.execute(stmt)
         return {rec_id: dos for rec_id, dos in result.tuples().all() if dos is not None}

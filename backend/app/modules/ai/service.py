@@ -10,7 +10,6 @@ from uuid import UUID
 
 from app.modules.ai.chunking import build_document_payload
 from app.modules.ai.models import AIChunk, AIDocument
-from app.modules.ai.repository import AIRepository
 
 from .retrieval import (
     RetrievedChunk,
@@ -20,10 +19,40 @@ from .retrieval import (
 )
 
 
+class IngestionRepository(Protocol):
+    """The persistence ``AIIngestionService`` uses — implemented by ``AIRepository``."""
+
+    async def get_document_by_record_id(self, record_id: UUID) -> AIDocument | None: ...
+
+    async def add_document(self, document: AIDocument) -> AIDocument: ...
+
+    async def add_chunks(self, chunks: list[AIChunk]) -> list[AIChunk]: ...
+
+    async def delete_chunks_by_document_id(self, document_id: UUID) -> None: ...
+
+
+class RetrievalRepository(Protocol):
+    """The persistence ``AIRetrievalService`` uses — implemented by ``AIRepository``.
+
+    Both chunk queries are required: the caller's ``RetrievalVisibility`` picks one, so an
+    implementation cannot offer the owner query without the grantee one.
+    """
+
+    async def search_chunks(
+        self, *, patient_id: UUID, category_ids: frozenset[UUID]
+    ) -> list[AIChunk]: ...
+
+    async def search_grantee_chunks(
+        self, *, patient_id: UUID, category_ids: frozenset[UUID]
+    ) -> list[AIChunk]: ...
+
+    async def get_document_by_id(self, document_id: UUID) -> AIDocument | None: ...
+
+
 class AIIngestionService:
     """Build and persist deterministic AI representations of medical records."""
 
-    def __init__(self, repository: AIRepository) -> None:
+    def __init__(self, repository: IngestionRepository) -> None:
         self._repository = repository
 
     async def index_record(
@@ -146,7 +175,7 @@ class AIRetrievalService:
 
     def __init__(
         self,
-        repository: AIRepository,
+        repository: RetrievalRepository,
         date_lookup: RecordDateLookup | None = None,
     ) -> None:
         self._repository = repository

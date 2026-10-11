@@ -20,10 +20,7 @@ test("CitationBadge renders index and category code", () => {
 
 test("CitationBadge renders without category code", () => {
   const html = renderToString(
-    <CitationBadge
-      citationIndex={3}
-      recordId="00000000-0000-0000-0000-000000000003"
-    />,
+    <CitationBadge citationIndex={3} recordId="00000000-0000-0000-0000-000000000003" />,
   );
 
   expect(html).toContain("[3]");

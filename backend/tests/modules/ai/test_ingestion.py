@@ -26,7 +26,7 @@ class FakeAIRepository:
         self.chunks = [c for c in self.chunks if c.document_id != document_id]
 
 
-def test_fhir_resource_is_normalized_and_indexed():
+def test_fhir_resource_is_normalized_and_indexed() -> None:
     repository = FakeAIRepository()
     service = AIIngestionService(repository)
     ingestion = AIRecordIngestion(service)
@@ -76,7 +76,7 @@ def test_fhir_resource_is_normalized_and_indexed():
     assert "Example condition" in combined
 
 
-def test_empty_fhir_resource_is_not_indexed():
+def test_empty_fhir_resource_is_not_indexed() -> None:
     repository = FakeAIRepository()
     service = AIIngestionService(repository)
     ingestion = AIRecordIngestion(service)
@@ -95,7 +95,7 @@ def test_empty_fhir_resource_is_not_indexed():
     assert repository.chunks == []
 
 
-def test_fhir_bytes_resource_is_parsed_and_indexed():
+def test_fhir_bytes_resource_is_parsed_and_indexed() -> None:
     import json
 
     repository = FakeAIRepository()
@@ -128,7 +128,7 @@ def test_fhir_bytes_resource_is_parsed_and_indexed():
     assert "Hypertension" in repository.chunks[0].content
 
 
-def test_diagnostic_report_ingestion_contains_analytes_and_dates():
+def test_diagnostic_report_ingestion_contains_analytes_and_dates() -> None:
     repository = FakeAIRepository()
     service = AIIngestionService(repository)
     ingestion = AIRecordIngestion(service)
@@ -173,7 +173,7 @@ def test_diagnostic_report_ingestion_contains_analytes_and_dates():
     assert "Result: Creatinine 1 mg/dL" in combined
 
 
-def test_reindexing_with_changed_content_replaces_chunks_and_keeps_document():
+def test_reindexing_with_changed_content_replaces_chunks_and_keeps_document() -> None:
     repository = FakeAIRepository()
     service = AIIngestionService(repository)
     ingestion = AIRecordIngestion(service)

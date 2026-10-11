@@ -370,18 +370,16 @@ def test_patient_prompt_structure() -> None:
     assert (
         "24. When asked to list or summarize medications, conditions, or findings,"
         " explicitly state each supported item and its status in the answer text,"
-        " citing the supporting evidence."
-        in system_text
+        " citing the supporting evidence." in system_text
     )
     assert (
         "25. Do not treat cited_indices alone as a substitute for answering the"
-        " question in the answer field."
-        in system_text
+        " question in the answer field." in system_text
     )
     assert "26. Do not add unsupported items to make an answer appear complete." in system_text
-    assert system_text.index(
-        "consult their doctor or clinical team"
-    ) < system_text.index("21. Provide a complete answer")
+    assert system_text.index("consult their doctor or clinical team") < system_text.index(
+        "21. Provide a complete answer"
+    )
 
     user_text = messages[1]["content"]
     assert "EVIDENCE:" in user_text
@@ -711,10 +709,12 @@ def test_t8_ollama_evidence_headers_contain_individual_verified_dates() -> None:
             json={
                 "message": {
                     "role": "assistant",
-                    "content": json.dumps({
-                        "answer": "Both panels reviewed [1], [2].",
-                        "cited_indices": [1, 2],
-                    }),
+                    "content": json.dumps(
+                        {
+                            "answer": "Both panels reviewed [1], [2].",
+                            "cited_indices": [1, 2],
+                        }
+                    ),
                 }
             },
         )
@@ -807,45 +807,32 @@ def test_t10_clinician_prompt_contains_anti_date_conflation_rules() -> None:
 
     # Explicit anti-date-conflation and independent grounding instructions
     assert (
-        "Use only the date in the evidence block associated with the cited record."
-        in system_text
+        "Use only the date in the evidence block associated with the cited record." in system_text
     )
     assert "Never copy a date from another evidence block." in system_text
     assert (
         "If the evidence has no date or is unrecorded, state that the date is unrecorded."
         in system_text
     )
-    assert (
-        "Do not infer which record is newer unless its dates support that claim."
-        in system_text
-    )
+    assert "Do not infer which record is newer unless its dates support that claim." in system_text
 
     # Completeness rules at the end
-    assert (
-        "- Provide a complete answer that thoroughly addresses the question."
-        in system_text
-    )
+    assert "- Provide a complete answer that thoroughly addresses the question." in system_text
     assert "- Do not stop at an introductory heading or sentence." in system_text
     assert (
         "- Fully enumerate all requested findings and clinical details supported"
-        " by the evidence."
-        in system_text
+        " by the evidence." in system_text
     )
     assert (
         "- When asked to list or summarize medications, conditions, or findings,"
         " explicitly state each supported item and its status in the answer text,"
-        " citing the supporting evidence."
-        in system_text
+        " citing the supporting evidence." in system_text
     )
     assert (
         "- Do not treat cited_indices alone as a substitute for answering the"
-        " question in the answer field."
-        in system_text
+        " question in the answer field." in system_text
     )
-    assert (
-        "- Do not add unsupported items to make an answer appear complete."
-        in system_text
-    )
+    assert "- Do not add unsupported items to make an answer appear complete." in system_text
     assert system_text.index(
         "Do not provide an autonomous diagnosis or medical advice."
     ) < system_text.index("- Provide a complete answer")
@@ -867,10 +854,12 @@ def test_medication_context_complete_structured_response_handling() -> None:
             json={
                 "message": {
                     "role": "assistant",
-                    "content": json.dumps({
-                        "answer": answer_text,
-                        "cited_indices": [1, 2, 3],
-                    }),
+                    "content": json.dumps(
+                        {
+                            "answer": answer_text,
+                            "cited_indices": [1, 2, 3],
+                        }
+                    ),
                 }
             },
         )

@@ -16,7 +16,7 @@ from app.modules.ai.providers.ollama import (
     OllamaTimeoutError,
     OllamaUnavailableError,
 )
-from app.modules.ai.query import AIQueryService
+from app.modules.ai.query import DEFAULT_EMPTY_EVIDENCE_ANSWER, AIQueryService
 from app.modules.ai.retrieval import RetrievedChunk
 from app.modules.ai.service import RetrievalVisibility
 from app.modules.auth.domain import AuthenticatedUser, Role
@@ -376,7 +376,7 @@ def test_doctor_with_valid_consent_returns_generated_answer(
     fake_retrieval = FakeRetrieval([chunk])
     fake_auditor = FakeSummaryAuditor()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=fake_auditor,
     )
@@ -469,7 +469,7 @@ def test_doctor_without_consent_returns_empty_evidence_answer(
     fake_retrieval = FakeRetrieval([chunk])
     fake_auditor = FakeSummaryAuditor()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=fake_auditor,
     )
@@ -486,10 +486,7 @@ def test_doctor_without_consent_returns_empty_evidence_answer(
 
         assert response.status_code == 200
         data = response.json()
-        assert (
-            data["answer"]
-            == "The available medical records do not contain information regarding the requested topic."
-        )
+        assert data["answer"] == DEFAULT_EMPTY_EVIDENCE_ANSWER
         assert data["citations"] == []
 
         # Generator must NOT have been called
@@ -522,7 +519,7 @@ def test_revoked_consent_returns_empty_evidence_answer(
     fake_retrieval = FakeRetrieval([])
     fake_auditor = FakeSummaryAuditor()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=fake_auditor,
     )
@@ -539,10 +536,7 @@ def test_revoked_consent_returns_empty_evidence_answer(
 
         assert response.status_code == 200
         data = response.json()
-        assert (
-            data["answer"]
-            == "The available medical records do not contain information regarding the requested topic."
-        )
+        assert data["answer"] == DEFAULT_EMPTY_EVIDENCE_ANSWER
         assert data["citations"] == []
         assert len(fake_generator.calls) == 0
         assert len(fake_auditor.events) == 0
@@ -571,7 +565,7 @@ def test_empty_retrieval_result_does_not_invoke_generator(
     fake_retrieval = FakeRetrieval([])
     fake_auditor = FakeSummaryAuditor()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=fake_auditor,
     )
@@ -588,10 +582,7 @@ def test_empty_retrieval_result_does_not_invoke_generator(
 
         assert response.status_code == 200
         data = response.json()
-        assert (
-            data["answer"]
-            == "The available medical records do not contain information regarding the requested topic."
-        )
+        assert data["answer"] == DEFAULT_EMPTY_EVIDENCE_ANSWER
         assert data["citations"] == []
         assert len(fake_generator.calls) == 0
         assert len(fake_auditor.events) == 0
@@ -646,7 +637,7 @@ def test_citation_provenance_preserves_multiple_records(
     fake_retrieval = FakeRetrieval([chunk1, chunk2])
     fake_auditor = FakeSummaryAuditor()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=fake_auditor,
     )
@@ -724,7 +715,7 @@ def test_failed_generation_error_mappings(
     fake_retrieval = FakeRetrieval([chunk])
     fake_auditor = FakeSummaryAuditor()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=fake_auditor,
     )
@@ -800,7 +791,7 @@ def test_request_validation_for_answer_endpoint(
     fake_consent = FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID}))
     fake_retrieval = FakeRetrieval([])
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
     )
     fake_generator = FakeAnswerGenerator()
@@ -898,8 +889,11 @@ def test_unconfigured_ai_provider_returns_503(
 # Patient Health Copilot — POST /api/v1/ai/me/answer (P1.2)
 # ==============================================================================
 
+
 class FakePatientProfile:
-    def __init__(self, patient_id: UUID, user_id: UUID, health_id: str = "PHI-IND-2026-TEST") -> None:
+    def __init__(
+        self, patient_id: UUID, user_id: UUID, health_id: str = "PHI-IND-2026-TEST"
+    ) -> None:
         self.id = patient_id
         self.user_id = user_id
         self.health_id = health_id
@@ -950,13 +944,11 @@ def test_patient_can_generate_self_answer_via_ai_me(
     fake_retrieval = FakeRetrieval([chunk])
     fake_auditor = FakeSummaryAuditor()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=fake_auditor,
     )
-    fake_generator = FakeAnswerGenerator(
-        answer_template="Patient has documented asthma [1]."
-    )
+    fake_generator = FakeAnswerGenerator(answer_template="Patient has documented asthma [1].")
 
     app.dependency_overrides[get_ai_query_service] = lambda: real_service
     app.dependency_overrides[get_answer_generator] = lambda: fake_generator
@@ -1066,14 +1058,16 @@ def test_patient_self_answer_uses_authenticated_patient_identity(
     patient_b_user_id = uuid4()
     patient_b_id = uuid4()
 
-    fake_patient_service = FakePatientService({
-        patient_a_user_id: FakePatientProfile(patient_a_id, patient_a_user_id),
-        patient_b_user_id: FakePatientProfile(patient_b_id, patient_b_user_id),
-    })
+    fake_patient_service = FakePatientService(
+        {
+            patient_a_user_id: FakePatientProfile(patient_a_id, patient_a_user_id),
+            patient_b_user_id: FakePatientProfile(patient_b_id, patient_b_user_id),
+        }
+    )
 
     fake_retrieval = FakeRetrieval([])
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=FakeConsentScope(frozenset()),
         auditor=FakeSummaryAuditor(),
     )
@@ -1182,7 +1176,7 @@ def test_patient_self_answer_empty_evidence_behavior(
     fake_auditor = FakeSummaryAuditor()
     fake_generator = FakeAnswerGenerator()
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=FakeConsentScope(frozenset()),
         auditor=fake_auditor,
     )
@@ -1199,7 +1193,7 @@ def test_patient_self_answer_empty_evidence_behavior(
         assert response.status_code == 200
         data = response.json()
 
-        assert data["answer"] == "The available medical records do not contain information regarding the requested topic."
+        assert data["answer"] == DEFAULT_EMPTY_EVIDENCE_ANSWER
         assert data["citations"] == []
 
         # Generator was NOT called
@@ -1235,7 +1229,7 @@ def test_patient_scope_includes_all_categories_without_doctor_consent(
     # Deliberately empty consent scope that would block a doctor
     fake_consent = FakeConsentScope(frozenset())
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=FakeSummaryAuditor(),
     )
@@ -1284,7 +1278,7 @@ def test_doctor_ai_generate_rate_limiting_under_limit_and_exceeded(
     fake_retrieval = FakeRetrieval([])
     fake_consent = FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID}))
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=FakeSummaryAuditor(),
     )
@@ -1336,7 +1330,7 @@ def test_ai_generate_rate_limit_quotas_are_user_scoped(
     fake_retrieval = FakeRetrieval([])
     fake_consent = FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID}))
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=FakeSummaryAuditor(),
     )
@@ -1387,12 +1381,16 @@ def test_patient_ai_generate_rate_limiting_under_limit_and_exceeded(
     pat1_user_id = uuid4()
     pat1_id = uuid4()
     token1 = "pat1-quota-token"
-    fake_auth.register_user(token1, user_id=pat1_user_id, firebase_uid="fb-pat1-rl", role=Role.PATIENT)
+    fake_auth.register_user(
+        token1, user_id=pat1_user_id, firebase_uid="fb-pat1-rl", role=Role.PATIENT
+    )
 
     pat2_user_id = uuid4()
     pat2_id = uuid4()
     token2 = "pat2-quota-token"
-    fake_auth.register_user(token2, user_id=pat2_user_id, firebase_uid="fb-pat2-rl", role=Role.PATIENT)
+    fake_auth.register_user(
+        token2, user_id=pat2_user_id, firebase_uid="fb-pat2-rl", role=Role.PATIENT
+    )
 
     profiles = {
         pat1_user_id: FakePatientProfile(pat1_id, pat1_user_id),
@@ -1402,7 +1400,7 @@ def test_patient_ai_generate_rate_limiting_under_limit_and_exceeded(
     fake_retrieval = FakeRetrieval([])
     fake_consent = FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID}))
     real_service = AIQueryService(
-        retrieval=fake_retrieval,  # type: ignore[arg-type]
+        retrieval=fake_retrieval,
         consent=fake_consent,
         auditor=FakeSummaryAuditor(),
     )
@@ -1450,27 +1448,37 @@ def test_ai_generate_rate_limiting_preserves_role_authorization(
     patient_id = uuid4()
     patient_user_id = uuid4()
     patient_token = "patient-for-auth-check"
-    fake_auth.register_user(patient_token, user_id=patient_user_id, firebase_uid="fb-pat-auth", role=Role.PATIENT)
+    fake_auth.register_user(
+        patient_token, user_id=patient_user_id, firebase_uid="fb-pat-auth", role=Role.PATIENT
+    )
 
     doctor_user_id = uuid4()
     doctor_token = "doctor-for-auth-check"
-    fake_auth.register_user(doctor_token, user_id=doctor_user_id, firebase_uid="fb-doc-auth", role=Role.DOCTOR)
+    fake_auth.register_user(
+        doctor_token, user_id=doctor_user_id, firebase_uid="fb-doc-auth", role=Role.DOCTOR
+    )
 
     # Doctor endpoint rejects unauthenticated (401) and non-doctor (403)
-    assert client.post(f"/api/v1/ai/patients/{patient_id}/answer", json={"query": "q"}).status_code == 401
-    assert client.post(
-        f"/api/v1/ai/patients/{patient_id}/answer",
-        json={"query": "q"},
-        headers=_bearer(patient_token),
-    ).status_code == 403
+    assert (
+        client.post(f"/api/v1/ai/patients/{patient_id}/answer", json={"query": "q"}).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            f"/api/v1/ai/patients/{patient_id}/answer",
+            json={"query": "q"},
+            headers=_bearer(patient_token),
+        ).status_code
+        == 403
+    )
 
     # Patient self endpoint rejects unauthenticated (401) and non-patient (403)
     assert client.post("/api/v1/ai/me/answer", json={"query": "q"}).status_code == 401
-    assert client.post(
-        "/api/v1/ai/me/answer",
-        json={"query": "q"},
-        headers=_bearer(doctor_token),
-    ).status_code == 403
-
-
-
+    assert (
+        client.post(
+            "/api/v1/ai/me/answer",
+            json={"query": "q"},
+            headers=_bearer(doctor_token),
+        ).status_code
+        == 403
+    )

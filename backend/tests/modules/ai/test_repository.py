@@ -2,15 +2,16 @@ import asyncio
 from datetime import date
 from uuid import uuid4
 
-from app.modules.ai.models import AIDocument, AIChunk
+from app.modules.ai.models import AIChunk, AIDocument
 from app.modules.ai.repository import AIRepository
-from app.modules.auth.models import Role, User
+from app.modules.auth.domain import Role
+from app.modules.auth.models import User
 from app.modules.patients.models import Patient
 from app.modules.records.models import MedicalRecord, RecordCategory, RecordOrigin
 from tests.support import sqlite_session
 
 
-def test_ai_repository_persists_document_and_chunks():
+def test_ai_repository_persists_document_and_chunks() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:
             category = RecordCategory(
@@ -104,7 +105,8 @@ def test_ai_repository_persists_document_and_chunks():
 
     asyncio.run(scenario())
 
-def test_get_document_by_id():
+
+def test_get_document_by_id() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:
             category = RecordCategory(

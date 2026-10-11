@@ -40,7 +40,13 @@ const MRI = { code: "MRI", displayName: "MRI Scan" };
 const PATIENT_ID = "00000000-0000-0000-0000-000000000001";
 
 function page(overrides: Partial<GrantedRecordPage> = {}): GrantedRecordPage {
-  return { patientId: PATIENT_ID, grantedCategories: [], items: [], nextCursor: null, ...overrides };
+  return {
+    patientId: PATIENT_ID,
+    grantedCategories: [],
+    items: [],
+    nextCursor: null,
+    ...overrides,
+  };
 }
 
 // -- view mapping -------------------------------------------------------------------------

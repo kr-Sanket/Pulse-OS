@@ -175,7 +175,11 @@ test("6. Backend citations are rendered with badges", () => {
   const html = renderToString(
     <div className="citations-list">
       {citations.map((c) => (
-        <span key={c.citationIndex} data-citation-index={c.citationIndex} data-record-id={c.recordId}>
+        <span
+          key={c.citationIndex}
+          data-citation-index={c.citationIndex}
+          data-record-id={c.recordId}
+        >
           {`[${c.citationIndex}] ${c.categoryCode}`}
         </span>
       ))}
@@ -196,7 +200,8 @@ test("7. Citation click navigates or scrolls to existing record ID", () => {
 // 8. Empty evidence response: answer displayed, zero citations, not treated as error
 test("8. Empty evidence response is treated as valid informational state", () => {
   const emptyAnswerResponse: AIAnswerResponse = {
-    answer: "The available medical records do not contain information regarding the requested topic.",
+    answer:
+      "The available medical records do not contain information regarding the requested topic.",
     citations: [],
     provider: "gemini",
     model: "gemini-3.8-flash",
@@ -343,4 +348,3 @@ test("16. Regression: PatientRecordsPage passes resolved internal UUID to assist
 
   assistantSpy.mockRestore();
 });
-

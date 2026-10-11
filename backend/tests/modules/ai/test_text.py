@@ -8,7 +8,7 @@ from app.modules.ai.text import (
 )
 
 
-def test_sanitize_health_id_direct():
+def test_sanitize_health_id_direct() -> None:
     query = "Show records for PHI-IND-2026-ABC123XYZ"
     sanitized = sanitize_clinical_query(query)
 
@@ -17,7 +17,7 @@ def test_sanitize_health_id_direct():
     assert sanitized == f"Show records for {HEALTH_ID_PLACEHOLDER}"
 
 
-def test_sanitize_health_id_valid_pulseos_format():
+def test_sanitize_health_id_valid_pulseos_format() -> None:
     query = "Patient PHI-IND-2026-7K3M99X diagnostic history"
     sanitized = sanitize_clinical_query(query)
 
@@ -25,7 +25,7 @@ def test_sanitize_health_id_valid_pulseos_format():
     assert "PHI-IND-2026-7K3M99X" not in sanitized
 
 
-def test_sanitize_health_id_case_insensitive():
+def test_sanitize_health_id_case_insensitive() -> None:
     query = "Status of phi-ind-2025-0123456"
     sanitized = sanitize_clinical_query(query)
 
@@ -33,7 +33,7 @@ def test_sanitize_health_id_case_insensitive():
     assert "phi-ind-2025-0123456" not in sanitized
 
 
-def test_sanitize_indian_phone_formats():
+def test_sanitize_indian_phone_formats() -> None:
     cases = [
         ("+919876543210", PHONE_PLACEHOLDER),
         ("919876543210", PHONE_PLACEHOLDER),
@@ -53,7 +53,7 @@ def test_sanitize_indian_phone_formats():
         assert sanitize_clinical_query(raw) == expected
 
 
-def test_sanitize_multiple_identifiers():
+def test_sanitize_multiple_identifiers() -> None:
     query = "Check records for PHI-IND-2026-ABC123XYZ or call +919876543210 or 9876543210"
     sanitized = sanitize_clinical_query(query)
 
@@ -67,7 +67,7 @@ def test_sanitize_multiple_identifiers():
     )
 
 
-def test_clinical_content_preserved():
+def test_clinical_content_preserved() -> None:
     queries = [
         "What medications were prescribed for hypertension?",
         "Fasting blood glucose 110 mg/dL and BP 120/80 mmHg",
@@ -79,11 +79,11 @@ def test_clinical_content_preserved():
         assert sanitize_clinical_query(q) == q
 
 
-def test_empty_query():
+def test_empty_query() -> None:
     assert sanitize_clinical_query("") == ""
 
 
-def test_normalize_fhir_condition():
+def test_normalize_fhir_condition() -> None:
     resource = {
         "resourceType": "Condition",
         "id": "cond-1",
@@ -109,7 +109,7 @@ def test_normalize_fhir_condition():
     assert "http://snomed.info/sct | 59621000 | Hypertension" in normalized
 
 
-def test_normalize_fhir_medication_request():
+def test_normalize_fhir_medication_request() -> None:
     resource = {
         "resourceType": "MedicationRequest",
         "id": "med-1",
@@ -127,7 +127,7 @@ def test_normalize_fhir_medication_request():
     assert "Reason: High blood pressure" in normalized
 
 
-def test_normalize_fhir_diagnostic_report_with_embedded_observations():
+def test_normalize_fhir_diagnostic_report_with_embedded_observations() -> None:
     resource = {
         "resourceType": "DiagnosticReport",
         "id": "report-001",
@@ -203,7 +203,7 @@ def test_normalize_fhir_diagnostic_report_with_embedded_observations():
     assert "Result: Urine Appearance Clear" in normalized
 
 
-def test_normalize_fhir_diagnostic_report_unresolved_reference_fallback():
+def test_normalize_fhir_diagnostic_report_unresolved_reference_fallback() -> None:
     resource = {
         "resourceType": "DiagnosticReport",
         "id": "report-002",
@@ -222,7 +222,7 @@ def test_normalize_fhir_diagnostic_report_unresolved_reference_fallback():
     assert "Result Reference 2: Observation/123" in normalized
 
 
-def test_normalize_fhir_diagnostic_report_deterministic_ordering():
+def test_normalize_fhir_diagnostic_report_deterministic_ordering() -> None:
     resource = {
         "resourceType": "DiagnosticReport",
         "id": "report-order",
@@ -244,7 +244,7 @@ def test_normalize_fhir_diagnostic_report_deterministic_ordering():
     assert a_idx < b_idx < c_idx
 
 
-def test_normalize_fhir_standalone_observation():
+def test_normalize_fhir_standalone_observation() -> None:
     resource = {
         "resourceType": "Observation",
         "id": "obs-standalone",

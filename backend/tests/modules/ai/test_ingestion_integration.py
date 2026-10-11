@@ -5,7 +5,8 @@ from app.modules.ai.ingestion import AIRecordIngestion
 from app.modules.ai.models import AIChunk, AIDocument
 from app.modules.ai.repository import AIRepository
 from app.modules.ai.service import AIIngestionService
-from app.modules.auth.models import Role, User
+from app.modules.auth.domain import Role
+from app.modules.auth.models import User
 from app.modules.patients.models import Patient
 from app.modules.records.models import (
     MedicalRecord,
@@ -15,7 +16,7 @@ from app.modules.records.models import (
 from tests.support import sqlite_session
 
 
-def test_fhir_ingestion_persists_document_and_chunks():
+def test_fhir_ingestion_persists_document_and_chunks() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:
             # Create the minimum valid clinical record graph.
@@ -131,7 +132,7 @@ def test_fhir_ingestion_persists_document_and_chunks():
     asyncio.run(scenario())
 
 
-def test_diagnostic_report_ingestion_and_reindex_integration():
+def test_diagnostic_report_ingestion_and_reindex_integration() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:
             user = User(

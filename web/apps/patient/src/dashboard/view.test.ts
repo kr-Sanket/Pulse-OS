@@ -84,6 +84,8 @@ const EVENT: AuditEvent = {
   targetRequestId: null,
   occurredAt: "2026-09-03T10:00:00Z",
   eventHash: "3f9a1c77d2b40e15a6c3f8091b2d4e6a7c8b9d0e1f2a3b4c5d6e7f8091a2b3c4",
+  // No anchor yet: the backend nulls all three anchor fields exactly when NOT_ANCHORED.
+  integrity: { status: "NOT_ANCHORED", network: null, reference: null, anchoredAt: null },
 };
 
 function source<T>(items: readonly T[], overrides: Partial<StatSource<T>> = {}): StatSource<T> {

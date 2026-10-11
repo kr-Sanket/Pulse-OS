@@ -94,7 +94,8 @@ class S3ObjectStorage(ObjectStorage):
                 Bucket=self._bucket,
                 Key=key,
             )
-            return response["Body"].read()
+            data: bytes = response["Body"].read()
+            return data
 
         try:
             return await asyncio.to_thread(_get)

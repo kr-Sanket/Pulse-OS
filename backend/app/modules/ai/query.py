@@ -8,11 +8,28 @@ from app.modules.auth.domain import AuthenticatedUser
 from .context import AssembledContext, ContextAudience, assemble_context
 from .generation import AnswerGenerator, GeneratedAnswer
 from .retrieval import RetrievedChunk
-from .service import AIRetrievalService, RetrievalScope, RetrievalVisibility
+from .service import RetrievalScope, RetrievalVisibility
 
 DEFAULT_EMPTY_EVIDENCE_ANSWER: Final[str] = (
     "The available medical records do not contain information regarding the requested topic."
 )
+
+
+class ChunkRetrieval(Protocol):
+    """The retrieval ``AIQueryService`` uses — implemented by ``AIRetrievalService``.
+
+    ``visibility`` stays required, as on the implementation: every caller chooses the policy.
+    """
+
+    async def search(
+        self,
+        *,
+        patient_id: UUID,
+        category_ids: frozenset[UUID],
+        query: str,
+        visibility: RetrievalVisibility,
+        limit: int,
+    ) -> list[RetrievedChunk]: ...
 
 
 class SummaryAuditor(Protocol):
@@ -33,14 +50,16 @@ class AIQueryService:
 
     def __init__(
         self,
-        retrieval: AIRetrievalService,
+        retrieval: ChunkRetrieval,
         consent: RetrievalScope,
         auditor: SummaryAuditor | None = None,
     ) -> None:
         self._retrieval = retrieval
         self._consent = consent
-        self._auditor = auditor if auditor is not None else (
-            consent if hasattr(consent, "record_summary_generated") else None
+        self._auditor = (
+            auditor
+            if auditor is not None
+            else (consent if hasattr(consent, "record_summary_generated") else None)
         )
 
     async def search(

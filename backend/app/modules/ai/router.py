@@ -14,9 +14,9 @@ from app.modules.ai.dependencies import (
 from app.modules.ai.schemas import (
     AIAnswerRequest,
     AIAnswerResponse,
-    AICitationResponse,
     AIChunkSearchListResponse,
     AIChunkSearchResponse,
+    AICitationResponse,
 )
 from app.modules.auth.dependencies import RequireDoctor, RequirePatient, rate_limited
 from app.modules.auth.domain import AuthenticatedUser
@@ -147,4 +147,3 @@ async def generate_patient_self_answer(
         model=result.model,
         disclaimer=DEFAULT_CLINICAL_DISCLAIMER,
     )
-

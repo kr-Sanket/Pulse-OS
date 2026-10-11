@@ -30,8 +30,7 @@ export function PatientRecordsPage({ patientId: propPatientId }: PatientRecordsP
   const navigate = useNavigate();
   const records = useGrantedRecords(healthId.length === 0 ? null : healthId);
   const { outcome } = records;
-  const patientId =
-    propPatientId ?? (outcome?.kind === "loaded" ? outcome.patientId : "");
+  const patientId = propPatientId ?? (outcome?.kind === "loaded" ? outcome.patientId : "");
 
   const handleSelectCitation = (recordId: string) => {
     const el =

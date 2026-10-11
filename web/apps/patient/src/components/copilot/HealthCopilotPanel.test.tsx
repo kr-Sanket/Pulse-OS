@@ -12,8 +12,14 @@ interface StubResult {
   response: { status: number };
 }
 
+/** The slice of `client.POST` these tests drive, so recorded calls carry real argument types. */
+type PostCall = (
+  path: string,
+  options: { body: Record<string, unknown>; params?: unknown },
+) => Promise<StubResult>;
+
 function stubClient(result: StubResult | Error) {
-  const postCall = vi.fn(() =>
+  const postCall = vi.fn<PostCall>(() =>
     result instanceof Error ? Promise.reject(result) : Promise.resolve(result),
   );
   return {
@@ -81,10 +87,9 @@ test("4. API request sends only query and maxTokens with no patient/health ID se
   expect(res.answer).toBe(mockResponse.answer);
   expect(postCall).toHaveBeenCalledTimes(1);
 
-  const [endpoint, options] = postCall.mock.calls[0] as [
-    string,
-    { body: Record<string, unknown>; params?: unknown },
-  ];
+  const call = postCall.mock.calls[0];
+  if (call === undefined) throw new Error("expected exactly one POST call");
+  const [endpoint, options] = call;
 
   expect(endpoint).toBe("/api/v1/ai/me/answer");
   expect(options.params).toBeUndefined();

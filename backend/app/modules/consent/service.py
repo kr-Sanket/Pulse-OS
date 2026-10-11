@@ -954,9 +954,7 @@ class ConsentService:
             patient_id=patient_id,
             occurred_at=at,
             request_context=request_context,
-            actor_hospital_id=clinician.hospital_id
-            if clinician is not None
-            else None,
+            actor_hospital_id=clinician.hospital_id if clinician is not None else None,
         )
 
     async def _acting_clinician(self, requester: AuthenticatedUser) -> Clinician | None:

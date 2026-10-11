@@ -2,11 +2,10 @@
 
 import asyncio
 from dataclasses import FrozenInstanceError
-from datetime import timezone
-from uuid import uuid4
+from datetime import UTC
+from uuid import UUID, uuid4
 
 import pytest
-
 from app.modules.ai.context import AssembledContext, ContextEvidenceItem
 from app.modules.ai.generation import (
     AnswerGenerator,
@@ -19,7 +18,7 @@ from app.modules.ai.generation import (
 def make_evidence_item(
     *,
     citation_index: int = 1,
-    record_id=None,
+    record_id: UUID | None = None,
     category_code: str = "LAB_REPORT",
     chunk_index: int = 0,
     content: str = "Evidence text",
@@ -40,7 +39,7 @@ def make_assembled_context(
     items: tuple[ContextEvidenceItem, ...] = (),
     *,
     query: str = "patient clinical status",
-    patient_id=None,
+    patient_id: UUID | None = None,
     total_tokens: int = 0,
     max_tokens: int = 1000,
     is_truncated: bool = False,
@@ -57,7 +56,7 @@ def make_assembled_context(
     )
 
 
-def test_fake_answer_generator_returns_expected_structure():
+def test_fake_answer_generator_returns_expected_structure() -> None:
     generator = FakeAnswerGenerator(answer_template="Custom clinical response [1].")
     item = make_evidence_item(citation_index=1, category_code="LAB_REPORT")
     context = make_assembled_context(items=(item,), total_tokens=20)
@@ -69,7 +68,7 @@ def test_fake_answer_generator_returns_expected_structure():
     assert result.provider == "fake"
     assert result.model == "fake-v1"
     assert result.generated_at.tzinfo is not None
-    assert result.generated_at.tzinfo == timezone.utc
+    assert result.generated_at.tzinfo == UTC
     assert len(result.citations) == 1
     assert result.citations[0].citation_index == 1
     assert result.citations[0].record_id == item.record_id
@@ -77,7 +76,7 @@ def test_fake_answer_generator_returns_expected_structure():
     assert result.citations[0].chunk_index == item.chunk_index
 
 
-def test_citation_mapping_preserves_context_provenance():
+def test_citation_mapping_preserves_context_provenance() -> None:
     generator = FakeAnswerGenerator()
 
     rec_id_1 = uuid4()
@@ -125,7 +124,7 @@ def test_citation_mapping_preserves_context_provenance():
     assert result.citations[2].chunk_index == 4
 
 
-def test_empty_context_behavior():
+def test_empty_context_behavior() -> None:
     generator = FakeAnswerGenerator()
     empty_context = make_assembled_context(items=(), total_tokens=0)
 
@@ -138,7 +137,7 @@ def test_empty_context_behavior():
     assert result.answer == "Based on the available evidence [1]."
 
 
-def test_generation_contract_immutability():
+def test_generation_contract_immutability() -> None:
     citation = CitationReference(
         citation_index=1,
         record_id=uuid4(),
@@ -160,7 +159,7 @@ def test_generation_contract_immutability():
         answer.provider = "other"  # type: ignore[misc]
 
 
-def test_fake_generator_records_exact_context():
+def test_fake_generator_records_exact_context() -> None:
     generator = FakeAnswerGenerator()
     item = make_evidence_item(citation_index=1)
     context = make_assembled_context(items=(item,), query="test query")
@@ -176,7 +175,7 @@ def test_fake_generator_records_exact_context():
     assert generator.calls[0].items == (item,)
 
 
-def test_answer_generator_protocol_compliance():
+def test_answer_generator_protocol_compliance() -> None:
     fake = FakeAnswerGenerator()
 
     # Runtime checkable protocol

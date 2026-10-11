@@ -14,38 +14,56 @@ from app.modules.ai.service import (
 
 class FakeAIRepository:
     def __init__(self) -> None:
-        self.documents: dict = {}
+        self.documents: dict[UUID, AIDocument] = {}
         self.chunks: list[AIChunk] = []
+        # Records the patient has hidden; only the grantee query consults it.
+        self.hidden_record_ids: set[UUID] = set()
 
-    async def get_document_by_record_id(self, record_id):
+    async def get_document_by_record_id(self, record_id: UUID) -> AIDocument | None:
         return self.documents.get(record_id)
 
-    async def add_document(self, document: AIDocument):
+    async def add_document(self, document: AIDocument) -> AIDocument:
         if getattr(document, "id", None) is None:
             document.id = uuid4()
         self.documents[document.record_id] = document
         return document
 
-    async def add_chunks(self, chunks):
+    async def add_chunks(self, chunks: list[AIChunk]) -> list[AIChunk]:
         self.chunks.extend(chunks)
         return chunks
 
-    async def get_document_by_id(self, document_id):
+    async def delete_chunks_by_document_id(self, document_id: UUID) -> None:
+        self.chunks = [chunk for chunk in self.chunks if chunk.document_id != document_id]
+
+    async def get_document_by_id(self, document_id: UUID) -> AIDocument | None:
         for document in self.documents.values():
             if document.id == document_id:
                 return document
         return None
 
-    async def search_chunks(self, *, patient_id, category_ids):
+    async def search_chunks(
+        self, *, patient_id: UUID, category_ids: frozenset[UUID]
+    ) -> list[AIChunk]:
         return [
             chunk
             for chunk in self.chunks
-            if chunk.patient_id == patient_id
-            and chunk.category_id in category_ids
+            if chunk.patient_id == patient_id and chunk.category_id in category_ids
         ]
 
+    async def search_grantee_chunks(
+        self, *, patient_id: UUID, category_ids: frozenset[UUID]
+    ) -> list[AIChunk]:
+        """The owner query minus chunks of hidden records, as ``AIRepository`` filters them."""
+        hidden_document_ids = {
+            document.id
+            for document in self.documents.values()
+            if document.record_id in self.hidden_record_ids
+        }
+        owner_chunks = await self.search_chunks(patient_id=patient_id, category_ids=category_ids)
+        return [chunk for chunk in owner_chunks if chunk.document_id not in hidden_document_ids]
 
-def test_index_record_creates_document_and_chunks():
+
+def test_index_record_creates_document_and_chunks() -> None:
     repository = FakeAIRepository()
     service = AIIngestionService(repository)
 
@@ -83,13 +101,10 @@ def test_index_record_creates_document_and_chunks():
     assert repository.chunks[2].content == "five"
     assert repository.chunks[2].token_count == 1
 
-    assert all(
-        chunk.document_id == document.id
-        for chunk in repository.chunks
-    )
+    assert all(chunk.document_id == document.id for chunk in repository.chunks)
 
 
-def test_index_record_is_idempotent():
+def test_index_record_is_idempotent() -> None:
     repository = FakeAIRepository()
     service = AIIngestionService(repository)
 
@@ -126,7 +141,8 @@ def test_index_record_is_idempotent():
     assert repository.chunks[0].content == "one two"
     assert repository.chunks[1].content == "three four"
 
-def test_retrieval_service_returns_ranked_consent_scoped_chunks():
+
+def test_retrieval_service_returns_ranked_consent_scoped_chunks() -> None:
     repository = FakeAIRepository()
     ingestion = AIIngestionService(repository)
 
@@ -183,11 +199,10 @@ def test_retrieval_service_returns_ranked_consent_scoped_chunks():
     assert results[1].score == 2
 
     # Only the authorized category is searched.
-    assert all(
-        result.category_id == allowed_category_id
-        for result in results
-    )
+    assert all(result.category_id == allowed_category_id for result in results)
 
+    assert first_document is not None
+    assert second_document is not None
     assert results[0].record_id in {
         first_document.record_id,
         second_document.record_id,
@@ -234,10 +249,12 @@ def test_t5_batched_date_lookup_single_query_and_correct_mapping() -> None:
         )
     )
 
-    date_lookup = FakeDateLookup({
-        record_id_1: date(2018, 10, 1),
-        # record_id_2 intentionally missing from lookup to test missing ID resilience
-    })
+    date_lookup = FakeDateLookup(
+        {
+            record_id_1: date(2018, 10, 1),
+            # record_id_2 intentionally missing from lookup to test missing ID resilience
+        }
+    )
 
     service = AIRetrievalService(repository, date_lookup=date_lookup)
 
@@ -291,10 +308,12 @@ def test_t1_retrieval_service_temporal_query_prioritizes_newer_record() -> None:
         )
     )
 
-    date_lookup = FakeDateLookup({
-        rec_old: date(2017, 9, 24),
-        rec_new: date(2018, 10, 1),
-    })
+    date_lookup = FakeDateLookup(
+        {
+            rec_old: date(2017, 9, 24),
+            rec_new: date(2018, 10, 1),
+        }
+    )
 
     service = AIRetrievalService(repository, date_lookup=date_lookup)
 

@@ -119,8 +119,10 @@ export function AIAssistantPanel({
           )}
         </div>
         <CardDescription className="text-muted-foreground text-xs leading-relaxed">
-          Ask a clinical question about {patientHealthId ? <span className="font-mono">{patientHealthId}</span> : "this patient"}
-          's consented records. Responses cite underlying medical records and do not replace clinical judgment.
+          Ask a clinical question about{" "}
+          {patientHealthId ? <span className="font-mono">{patientHealthId}</span> : "this patient"}
+          's consented records. Responses cite underlying medical records and do not replace
+          clinical judgment.
         </CardDescription>
       </CardHeader>
 
@@ -140,7 +142,11 @@ export function AIAssistantPanel({
             />
             <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5">
               <span>Press Enter to ask, Shift+Enter for new line</span>
-              <span className={cn(query.length > MAX_QUESTION_LENGTH ? "text-destructive font-medium" : "")}>
+              <span
+                className={cn(
+                  query.length > MAX_QUESTION_LENGTH ? "text-destructive font-medium" : "",
+                )}
+              >
                 {`${query.length} / ${MAX_QUESTION_LENGTH}`}
               </span>
             </div>
@@ -183,7 +189,10 @@ export function AIAssistantPanel({
         </form>
 
         {loading && (
-          <div className="space-y-3 rounded-lg border border-border/60 bg-muted/30 p-4" data-testid="ai-loading-state">
+          <div
+            className="space-y-3 rounded-lg border border-border/60 bg-muted/30 p-4"
+            data-testid="ai-loading-state"
+          >
             <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin text-primary" aria-hidden />
               <span>Synthesizing answer from consented clinical evidence...</span>
@@ -239,7 +248,10 @@ export function AIAssistantPanel({
                 </>
               ) : (
                 <>
-                  <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+                  <CheckCircle2
+                    className="size-4 text-emerald-600 dark:text-emerald-400"
+                    aria-hidden
+                  />
                   <span className="text-xs font-semibold text-foreground tracking-tight">
                     Synthesized Clinical Answer
                   </span>
@@ -247,12 +259,18 @@ export function AIAssistantPanel({
               )}
             </div>
 
-            <p className="text-foreground text-[14px] leading-relaxed whitespace-pre-line" data-testid="ai-answer-text">
+            <p
+              className="text-foreground text-[14px] leading-relaxed whitespace-pre-line"
+              data-testid="ai-answer-text"
+            >
               {response.answer}
             </p>
 
             {response.citations.length > 0 && (
-              <div className="space-y-2 pt-1 border-t border-border/60" data-testid="ai-citations-section">
+              <div
+                className="space-y-2 pt-1 border-t border-border/60"
+                data-testid="ai-citations-section"
+              >
                 <span className="text-muted-foreground block text-xs font-medium">
                   Cited Records ({response.citations.length}):
                 </span>

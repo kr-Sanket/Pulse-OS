@@ -13,10 +13,9 @@ import asyncio
 import datetime as dt
 import hashlib
 from dataclasses import dataclass
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.models import User
 from app.modules.consent.anchor_service import (
@@ -24,10 +23,10 @@ from app.modules.consent.anchor_service import (
     IntegrityStatus,
 )
 from app.modules.consent.anchoring import (
+    LOCAL_DEV_NETWORK,
     AnchorReceipt,
     InvalidDigestError,
     LocalChainAuditAnchor,
-    LOCAL_DEV_NETWORK,
     require_digest,
 )
 from app.modules.consent.errors import (
@@ -35,7 +34,7 @@ from app.modules.consent.errors import (
     BatchAnchoredEventError,
     UnanchorableAuditEventError,
 )
-from app.modules.consent.models import AuditAnchorEntry, AuditAction, AuditLog
+from app.modules.consent.models import AuditAction, AuditAnchorEntry, AuditLog
 from app.modules.consent.repository import AuditAnchorRepository, AuditLogRepository
 from app.modules.consent.service import (
     HASH_SCHEME_V1,
@@ -46,8 +45,9 @@ from app.modules.consent.service import (
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
-from tests.support import sqlite_session
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.support import sqlite_session
 
 DIGEST = "a" * 64
 OTHER_DIGEST = "b" * 64
@@ -80,10 +80,7 @@ class RecordingAnchor:
 
     async def verify(self, digest: str, receipt: AnchorReceipt) -> bool:
         self.verified.append((digest, receipt))
-        return (
-            receipt.network == self.network
-            and receipt.reference == f"ref:{digest}"
-        )
+        return receipt.network == self.network and receipt.reference == f"ref:{digest}"
 
 
 class FailingAnchor:
@@ -109,7 +106,7 @@ class AuditFixture:
     event: AuditLog
 
 
-async def _fixture(session, scheme: int = HASH_SCHEME_V2) -> AuditFixture:
+async def _fixture(session: AsyncSession, scheme: int = HASH_SCHEME_V2) -> AuditFixture:
     patient_user = User(
         firebase_uid=f"fb-p-{uuid4()}",
         role=Role.PATIENT,
@@ -388,9 +385,7 @@ def test_anchor_service_sends_only_event_digest_to_provider() -> None:
                 audit=fixture.audit,
                 anchors=fixture.anchors,
                 anchor_provider=provider,
-                patients=PatientDirectoryService(
-                    PatientRepository(session)
-                ),
+                patients=PatientDirectoryService(PatientRepository(session)),
             )
 
             await service.anchor_event(fixture.event)
@@ -409,9 +404,7 @@ def test_anchor_pending_counts_provider_failure_and_leaves_event_unanchored() ->
                 audit=fixture.audit,
                 anchors=fixture.anchors,
                 anchor_provider=FailingAnchor(),
-                patients=PatientDirectoryService(
-                    PatientRepository(session)
-                ),
+                patients=PatientDirectoryService(PatientRepository(session)),
             )
 
             result = await service.anchor_pending(limit=10)
@@ -420,9 +413,7 @@ def test_anchor_pending_counts_provider_failure_and_leaves_event_unanchored() ->
             assert result.failed == 1
             assert result.remaining == 1
 
-            assert (
-                await fixture.anchors.get_by_audit_log_id(fixture.event.id)
-            ) is None
+            assert (await fixture.anchors.get_by_audit_log_id(fixture.event.id)) is None
 
     asyncio.run(scenario())
 
@@ -478,7 +469,7 @@ def test_patient_cannot_verify_another_patients_event() -> None:
 
 
 def test_anchored_event_ids_returns_only_anchored_reports() -> None:
-    from app.modules.consent.anchor_service import anchored_event_ids, IntegrityReport
+    from app.modules.consent.anchor_service import IntegrityReport, anchored_event_ids
 
     first = uuid4()
     second = uuid4()
