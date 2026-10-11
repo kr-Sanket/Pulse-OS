@@ -42,11 +42,14 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     SmallInteger,
     String,
     Text,
@@ -354,17 +357,15 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     ``created_at`` would be impossible without either a second write — which append-only
     forbids — or excluding the timestamp entirely, which would leave the moment of the
     event untamper-evident and weaken exactly the property ADR-004 exists to provide.
-    The digest is 64 lowercase hex characters with no ``0x`` prefix, produced by the hasher
-    injected into ``ConsentService``. **That hasher is SHA-256 today, not keccak256**
-    (ADR-019): ADR-004 specifies keccak because that is what a Solidity contract verifies,
-    but `hashlib` ships NIST SHA-3 rather than keccak and the project carries no keccak
-    dependency yet. ``hash_version`` below records which scheme produced a given row. The
-    digest is what ``AuditAnchor`` publishes (ADR-004: hashes only, never identifiers or
-    PHI) — locally today via ``LocalChainAuditAnchor``, on-chain at M6, which per ADR-019
-    **must not happen until the keccak hasher is injected**, because this table is
-    append-only and a stored digest can never be recomputed. It is not unique: two
-    genuinely distinct events must never be blocked by a collision in a column whose whole
-    purpose is tamper evidence.
+    The digest is 64 lowercase hex characters with no ``0x`` prefix. **The algorithm is a
+    function of ``hash_version``** (app/modules/consent/service.py): SHA-256 for v1 and v2,
+    Ethereum Keccak-256 — what a Solidity contract verifies (ADR-004, ADR-019) — for v3,
+    which new rows are written under. Rows written earlier keep their SHA-256 digests and
+    verify under them, because this table is append-only and a stored digest is never
+    recomputed. The digest is what ``AuditAnchor`` publishes (ADR-004: hashes only, never
+    identifiers or PHI) — locally via ``LocalChainAuditAnchor``, on-chain at M6. It is not
+    unique: two genuinely distinct events must never be blocked by a collision in a column
+    whose whole purpose is tamper evidence.
 
     The actor's role is stored alongside the actor, not looked up: roles can change, and
     the trail must show the authority the actor held at the time. ``Role`` is auth's
@@ -443,7 +444,7 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
     event_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     # Which hashing scheme produced `event_hash` — canonicalization and algorithm together
     # (ADR-023). v1 is revision 0004's ten-key payload under SHA-256; v2 adds
-    # `actor_hospital_id`; v3 is reserved for ADR-019's keccak transition. Deliberately not
+    # `actor_hospital_id`; v3 is v2's payload under Keccak-256 (ADR-019). Deliberately not
     # part of the hashed payload: a mis-selected scheme is self-detecting, because
     # recomputing under the wrong one changes the key set and so changes the digest.
     hash_version: Mapped[int] = mapped_column(
@@ -528,4 +529,77 @@ class AuditAnchorEntry(UUIDPrimaryKeyMixin, Base):
         # with this column. UNIQUE already indexes it, so this is documentation of the
         # access path rather than a second index.
         Index("ix_audit_anchors_anchored_at", "anchored_at"),
+    )
+
+
+class AuditBatch(UUIDPrimaryKeyMixin, Base):
+    """One sealed Merkle batch of verified v3 audit events (ADR-027).
+
+    **Evidence, written once.** Every column is fixed at sealing: there is no status, no
+    ``updated_at``, nothing to UPDATE. Whether the batch still checks out is computed on
+    demand by reconciliation, never stored here (ADR-027 decision 9). A receipt from a chain,
+    when submission lands, is a separate append-only row.
+
+    ``batch_number`` is UNIQUE and contiguous from 1, assigned at sealing; it is one of the
+    four values bound into ``commitment``, so a deleted or renumbered batch is detectable.
+    ``commitment`` is the only value ever published (ADR-027 decision 5) and is computed
+    from ``(protocol_version, batch_number, leaf_count, root)``; reconciliation recomputes it.
+    ``first_occurred_at``/``last_occurred_at`` record the covered range for late-arrival
+    detection. No event content lives here — membership rows carry ids and digests only.
+    """
+
+    __tablename__ = "audit_batches"
+
+    batch_number: Mapped[int] = mapped_column(BigInteger(), unique=True, nullable=False)
+    #: Merkle protocol version (``merkle.MERKLE_PROTOCOL_VERSION``); 1 is ADR-027's.
+    protocol_version: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
+    #: Hash scheme of every member digest — always v3; v1/v2 events are never batched.
+    hash_version: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
+    leaf_count: Mapped[int] = mapped_column(Integer(), nullable=False)
+    root: Mapped[str] = mapped_column(String(64), nullable=False)
+    commitment: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    first_occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        _APPEND_ONLY_CREATED_AT, server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("batch_number >= 1", name="batch_number_positive"),
+        CheckConstraint("leaf_count >= 1", name="leaf_count_positive"),
+        CheckConstraint("hash_version = 3", name="hash_version_v3"),
+    )
+
+
+class AuditBatchMember(UUIDPrimaryKeyMixin, Base):
+    """One audit event's place in a sealed batch (ADR-027 decision 8). Written once.
+
+    **UNIQUE ``audit_log_id``: one batch per event, ever** — the constraint that makes a
+    concurrent or repeated sealing run unable to batch an event twice. ``leaf_index`` is the
+    authoritative position, UNIQUE within a batch and contiguous from 0; a proof's own
+    index/count are claims checked against it (``verify_proof``'s trusted values).
+    ``digest`` is the event's v3 digest as sealed, kept beside the event's own copy so a
+    later divergence between them is detectable — the same redundancy ``audit_anchors``
+    relies on.
+    """
+
+    __tablename__ = "audit_batch_members"
+
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("audit_batches.id"), nullable=False
+    )
+    audit_log_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("audit_logs.id"), unique=True, nullable=False
+    )
+    leaf_index: Mapped[int] = mapped_column(Integer(), nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        _APPEND_ONLY_CREATED_AT, server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "batch_id", "leaf_index", name="uq_audit_batch_members_batch_id_leaf_index"
+        ),
+        CheckConstraint("leaf_index >= 0", name="leaf_index_non_negative"),
     )

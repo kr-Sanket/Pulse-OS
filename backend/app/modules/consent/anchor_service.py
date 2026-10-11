@@ -30,7 +30,7 @@ the gap a real chain closes, and the honest limit of this milestone.
 """
 
 import logging
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
@@ -39,12 +39,18 @@ from app.modules.auth.domain import AuthenticatedUser
 from app.modules.consent.anchoring import AnchorReceipt, AuditAnchor, InvalidDigestError
 from app.modules.consent.errors import (
     AuditEventNotFoundError,
+    BatchAnchoredEventError,
     DuplicateAnchorError,
     PatientProfileNotFoundError,
+    UnanchorableAuditEventError,
 )
 from app.modules.consent.models import AuditAnchorEntry, AuditLog
 from app.modules.consent.repository import AuditAnchorRepository, AuditLogRepository
-from app.modules.consent.service import recompute_event_hash, sha256_event_hash
+from app.modules.consent.service import (
+    HASH_SCHEME_V3,
+    UnsupportedHashSchemeError,
+    recompute_event_hash,
+)
 from app.modules.patients.directory import PatientDirectoryService
 
 logger = logging.getLogger(__name__)
@@ -99,7 +105,8 @@ class AnchorOutcome:
 @dataclass(frozen=True, slots=True)
 class SweepResult:
     """What one sweep did. ``failed`` counts events the adapter refused or errored on;
-    they stay unanchored and are retried by the next sweep, in the same order."""
+    they stay unanchored and are retried by the next sweep, in the same order.
+    ``remaining`` counts only events this workflow serves — v3 events are batch-anchored."""
 
     anchored: int
     failed: int
@@ -120,15 +127,11 @@ class AuditAnchorService:
         anchors: AuditAnchorRepository,
         anchor_provider: AuditAnchor,
         patients: PatientDirectoryService,
-        event_hasher: Callable[[str], str] = sha256_event_hash,
     ) -> None:
         self._audit = audit
         self._anchors = anchors
         self._provider = anchor_provider
         self._patients = patients
-        # The same hasher the events were written with. Injected rather than imported so a
-        # keccak transition (ADR-019) reaches verification and writing through one seam.
-        self._hash = event_hasher
 
     # -- anchoring ---------------------------------------------------------------------
 
@@ -145,10 +148,22 @@ class AuditAnchorService:
         calling the adapter, and a concurrent caller that wins the race is resolved by the
         UNIQUE on ``audit_log_id``: the loser reads the winner's row back rather than
         failing. ``created`` distinguishes the two for a caller that cares.
+
+        **v3 events are refused** (``BatchAnchoredEventError``): they are anchored only in
+        Merkle batches (ADR-027 decision 7). This workflow keeps serving v1/v2 rows, and
+        existing per-event anchors of any version stay readable.
+
+        **Inconsistent events are refused** (``UnanchorableAuditEventError``) before a new
+        anchor is created: the version must be supported and the stored digest must recompute
+        under it. Otherwise the port would publish a digest the row itself no longer backs. An
+        existing anchor is still returned as-is — verification, not this path, judges it.
         """
+        if entry.hash_version == HASH_SCHEME_V3:
+            raise BatchAnchoredEventError()
         existing = await self._anchors.get_by_audit_log_id(entry.id)
         if existing is not None:
             return AnchorOutcome(anchor=existing, created=False)
+        _require_consistent(entry)
 
         receipt = await self._provider.submit(entry.event_hash)
         try:
@@ -181,13 +196,16 @@ class AuditAnchorService:
         and the next run picks it up again in the same position. Nothing here touches the
         audit rows themselves, so a sweep can never damage the trail it is attesting to.
         """
-        pending = await self._anchors.list_unanchored_events(limit=limit)
+        # v3 events never enter this queue: they are batch-anchored (ADR-027 decision 7).
+        pending = await self._anchors.list_unanchored_events(
+            limit=limit, exclude_hash_version=HASH_SCHEME_V3
+        )
         anchored = 0
         failed = 0
         for entry in pending:
             try:
                 await self.anchor_event(entry)
-            except (InvalidDigestError, OSError) as exc:
+            except (InvalidDigestError, UnanchorableAuditEventError, OSError) as exc:
                 # Only ids are logged, never event content (docs/SECURITY.md).
                 logger.warning(
                     "audit anchor failed", extra={"audit_log_id": str(entry.id), "error": str(exc)}
@@ -196,7 +214,9 @@ class AuditAnchorService:
                 continue
             anchored += 1
         return SweepResult(
-            anchored=anchored, failed=failed, remaining=await self._anchors.count_unanchored()
+            anchored=anchored,
+            failed=failed,
+            remaining=await self._anchors.count_unanchored(exclude_hash_version=HASH_SCHEME_V3),
         )
 
     # -- verification ------------------------------------------------------------------
@@ -249,7 +269,15 @@ class AuditAnchorService:
                 audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
             )
 
-        recomputed = recompute_event_hash(entry, hasher=self._hash)
+        try:
+            # Under the row's own scheme — the same resolution the writer used — so v1/v2
+            # SHA-256 rows and v3 Keccak-256 rows each verify under their own rule.
+            recomputed: str | None = recompute_event_hash(entry)
+        except UnsupportedHashSchemeError:
+            # A version this code never wrote cannot be vouched for, and ``hash_version`` sits
+            # outside the hashed payload (ADR-023), so an unknown value is itself a sign the
+            # row changed. Reported, never raised: one bad row must not fail a whole page.
+            recomputed = None
         if recomputed != entry.event_hash or entry.event_hash != anchor.digest:
             # Either the row no longer hashes to its own digest, or its digest is no longer
             # the one that was published. Both mean the event changed after anchoring.
@@ -267,6 +295,20 @@ class AuditAnchorService:
         return IntegrityReport(
             audit_log_id=entry.id, status=IntegrityStatus.VERIFIED, anchor=anchor
         )
+
+
+def _require_consistent(entry: AuditLog) -> None:
+    """Refuse an event whose stored digest is not what its own version recomputes to.
+
+    The same version-aware ``recompute_event_hash`` the writer and the verifier use — no
+    second implementation of the payload or the algorithm.
+    """
+    try:
+        recomputed = recompute_event_hash(entry)
+    except UnsupportedHashSchemeError:
+        raise UnanchorableAuditEventError(reason="unsupported_hash_version") from None
+    if recomputed != entry.event_hash:
+        raise UnanchorableAuditEventError(reason="digest_mismatch")
 
 
 def anchored_event_ids(reports: Collection[IntegrityReport]) -> set[UUID]:

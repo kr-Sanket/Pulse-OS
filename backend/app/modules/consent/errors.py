@@ -104,6 +104,63 @@ class DuplicateAnchorError(ConsentError):
     """
 
 
+class BatchSealConflictError(ConsentError):
+    """Another sealer committed a batch first (ADR-027 decision 10).
+
+    Raised **only** when the UNIQUE on ``audit_batches.batch_number`` or on
+    ``audit_batch_members.audit_log_id`` refuses this run's rows — the two collisions a
+    concurrent sealer can legitimately cause. The insert ran in a savepoint, so nothing of this
+    batch was written; the caller rolls back and the next run seals whatever is still
+    unbatched. Not an error to surface — the constraint working. Every other integrity
+    violation is ``BatchSealIntegrityError``.
+    """
+
+
+class BatchSealIntegrityError(ConsentError):
+    """The database refused a batch for a reason that is **not** a concurrent-sealer race.
+
+    A CHECK, foreign-key or NOT NULL violation, a collision on a constraint no race can trip
+    (the commitment, a ``(batch_id, leaf_index)`` pair, a primary key), or a violation that
+    cannot be classified at all. Not retryable — the same rows would fail the same way — so
+    it must reach an operator rather than a retry loop. The savepoint rolled back, so nothing
+    of this batch was written.
+
+    Carries the violation kind and, when the driver reports it, the constraint name: schema
+    identifiers only, never row values, SQL, digests or connection details. The original
+    database error stays attached as ``__cause__`` for logs that may hold it.
+    """
+
+    def __init__(self, *, violation: str, constraint: str | None) -> None:
+        self.violation = violation
+        self.constraint = constraint
+        super().__init__(
+            f"audit batch refused by the database: {violation} violation"
+            f" ({constraint or 'constraint not identified'})"
+        )
+
+
+class BatchAnchoredEventError(ConsentError):
+    """A v3 event was offered to the per-event anchoring workflow (ADR-027 decision 7).
+
+    v3 events are anchored only in Merkle batches; the per-event workflow keeps serving
+    historical v1/v2 rows. Carries no event content.
+    """
+
+
+class UnanchorableAuditEventError(ConsentError):
+    """An audit event cannot be anchored per-event: its stored digest is not trustworthy.
+
+    Raised before any adapter is called when the event's ``hash_version`` is unsupported or its
+    stored digest does not recompute under that version — anchoring it would publish evidence
+    for a row that is already inconsistent. ``reason`` is ``"unsupported_hash_version"`` or
+    ``"digest_mismatch"``; neither the digest nor any event content is carried.
+    """
+
+    def __init__(self, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"audit event cannot be anchored per-event: {reason}")
+
+
 class AuditEventNotFoundError(ConsentError):
     """No such audit event *for this caller* — missing, or belonging to another patient.
 

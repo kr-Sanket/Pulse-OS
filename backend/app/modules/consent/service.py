@@ -44,6 +44,8 @@ from enum import StrEnum
 from typing import Final, Protocol
 from uuid import UUID, uuid4
 
+from Crypto.Hash import keccak
+
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.consent.errors import (
     AccessDeniedError,
@@ -113,12 +115,25 @@ def as_utc(value: datetime) -> datetime:
 #: before migration 0005 carry it, and their digests reproduce only under it (ADR-023).
 HASH_SCHEME_V1: Final = 1
 
-#: The current scheme: the same payload plus ``actor_hospital_id``, still SHA-256. ADR-019's
-#: keccak transition becomes v3 and has this mechanism to land in.
+#: The same payload plus ``actor_hospital_id``, still SHA-256. Written from migration 0005
+#: until the keccak transition.
 HASH_SCHEME_V2: Final = 2
 
+#: ADR-019's keccak transition: v2's payload byte for byte, hashed with Ethereum
+#: Keccak-256 — the digest a Solidity contract can recompute with ``keccak256``.
+HASH_SCHEME_V3: Final = 3
+
 #: The scheme new events are written under.
-CURRENT_HASH_SCHEME: Final = HASH_SCHEME_V2
+CURRENT_HASH_SCHEME: Final = HASH_SCHEME_V3
+
+
+class UnsupportedHashSchemeError(ValueError):
+    """A row claims a ``hash_version`` this code has no rule for.
+
+    Raised rather than falling back to a default scheme: a fallback would let a row whose
+    version was altered verify under whichever rule happened to be the default. The column is
+    not part of the hashed payload (ADR-023), so this refusal is what keeps it honest.
+    """
 
 
 def canonical_event_payload(fields: Mapping[str, object], *, scheme: int) -> str:
@@ -131,8 +146,11 @@ def canonical_event_payload(fields: Mapping[str, object], *, scheme: int) -> str
     **v1 omits ``actor_hospital_id`` entirely rather than emitting it as null.** That is the
     whole reason legacy rows still verify: their digests were computed over a payload in
     which the key did not exist, so re-adding it — even as null — would change the bytes and
-    fail every row written before migration 0005.
+    fail every row written before migration 0005. v2 and v3 share one payload; they differ
+    only in the algorithm applied to it.
     """
+    if scheme not in _EVENT_HASHERS:
+        raise UnsupportedHashSchemeError(f"unsupported audit hash scheme: {scheme}")
     payload = dict(fields)
     if scheme == HASH_SCHEME_V1:
         payload.pop("actor_hospital_id", None)
@@ -140,16 +158,43 @@ def canonical_event_payload(fields: Mapping[str, object], *, scheme: int) -> str
 
 
 def sha256_event_hash(canonical_json: str) -> str:
-    """Default digest for an audit event.
+    """The v1/v2 digest: SHA-256 of the canonical event JSON.
 
-    ADR-004 specifies **keccak256** of the canonical event JSON, because that is what the
-    Polygon anchor verifies on-chain. The project has no keccak dependency (hashlib ships
-    NIST SHA-3, which is a different padding), so this default is sha256 and the real
-    hasher is injected. M6 must supply the keccak implementation through that seam
-    **before any anchored data exists**: changing the algorithm invalidates every digest
-    already stored, and the audit table is append-only.
+    Kept for verification only. Rows written under v1 and v2 carry SHA-256 digests forever —
+    ``audit_logs`` is append-only, so they are never rehashed — and must keep verifying under
+    the algorithm they were written with.
     """
     return hashlib.sha256(canonical_json.encode()).hexdigest()
+
+
+def keccak256_event_hash(canonical_json: str) -> str:
+    """The v3 digest: Ethereum Keccak-256 of the canonical event JSON (ADR-004, ADR-019).
+
+    **Not SHA3-256.** ``hashlib.sha3_256`` is the NIST-standardised variant with different
+    padding and produces a different digest for the same bytes; Solidity's ``keccak256`` is
+    the original Keccak submission, which is what ``Crypto.Hash.keccak`` implements. The
+    output format is unchanged from SHA-256 — 64 lowercase hex, no ``0x`` — so the anchor
+    port's ``require_digest`` accepts both without modification.
+    """
+    return keccak.new(digest_bits=256, data=canonical_json.encode()).hexdigest()
+
+
+#: The algorithm each scheme hashes with. **The single place a version maps to an
+#: algorithm**: writing and verifying both resolve through it, so a row is always checked
+#: under the rule it was written with, never under whatever is current.
+_EVENT_HASHERS: Final[Mapping[int, Callable[[str], str]]] = {
+    HASH_SCHEME_V1: sha256_event_hash,
+    HASH_SCHEME_V2: sha256_event_hash,
+    HASH_SCHEME_V3: keccak256_event_hash,
+}
+
+
+def event_hasher_for(scheme: int) -> Callable[[str], str]:
+    """The hash function ``scheme`` was defined with; refuses a scheme it does not know."""
+    try:
+        return _EVENT_HASHERS[scheme]
+    except KeyError:
+        raise UnsupportedHashSchemeError(f"unsupported audit hash scheme: {scheme}") from None
 
 
 def audit_event_fields(entry: AuditLog) -> dict[str, object]:
@@ -181,17 +226,18 @@ def audit_event_fields(entry: AuditLog) -> dict[str, object]:
     }
 
 
-def recompute_event_hash(
-    entry: AuditLog, *, hasher: Callable[[str], str] = sha256_event_hash
-) -> str:
+def recompute_event_hash(entry: AuditLog) -> str:
     """The digest ``entry`` should carry, recomputed from its own stored columns.
 
-    Hashed under the row's **own** ``hash_version``, not the current one: v1 rows omit
-    ``actor_hospital_id`` from the payload entirely (ADR-023), so verifying them under v2
-    would change the bytes and fail every event written before migration 0005.
+    Hashed under the row's **own** ``hash_version``, not the current one — both the payload
+    and the algorithm. v1 rows omit ``actor_hospital_id`` from the payload entirely
+    (ADR-023), and v1/v2 rows are SHA-256 while v3 rows are Keccak-256 (ADR-019), so
+    verifying a row under any other scheme would fail it. Raises
+    ``UnsupportedHashSchemeError`` for a version with no defined rule.
     """
-    canonical = canonical_event_payload(audit_event_fields(entry), scheme=entry.hash_version)
-    return hasher(canonical)
+    scheme = entry.hash_version
+    canonical = canonical_event_payload(audit_event_fields(entry), scheme=scheme)
+    return event_hasher_for(scheme)(canonical)
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,7 +473,6 @@ class ConsentService:
         request_ttl: timedelta = DEFAULT_REQUEST_TTL,
         grant_ttl: timedelta = DEFAULT_GRANT_TTL,
         clock: Callable[[], datetime] = utc_now,
-        event_hasher: Callable[[str], str] = sha256_event_hash,
     ) -> None:
         self._requests = requests
         self._request_categories = request_categories
@@ -440,7 +485,6 @@ class ConsentService:
         self._request_ttl = request_ttl
         self._grant_ttl = grant_ttl
         self._now = clock
-        self._hash = event_hasher
 
     # -- requests ----------------------------------------------------------------------
 
@@ -1132,7 +1176,7 @@ class ConsentService:
         )
         # Hashed *through the row*, so writing and verifying cannot drift: the same
         # ``audit_event_fields`` produces the payload on both sides (see that function).
-        entry.event_hash = recompute_event_hash(entry, hasher=self._hash)
+        entry.event_hash = recompute_event_hash(entry)
         return await self._audit.add(entry)
 
     @staticmethod

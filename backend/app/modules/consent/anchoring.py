@@ -33,7 +33,7 @@ LOCAL_DEV_NETWORK: Final = "local-dev"
 #: rule they were written with rather than silently failing.
 _LOCAL_REFERENCE_DOMAIN: Final = "pulseos:audit-anchor:local-dev:v1"
 
-#: A digest is the hex output of the event hasher (ADR-019: SHA-256 today, keccak256 at M6).
+#: A digest is the hex output of the event hasher (ADR-019: SHA-256 for v1/v2, Keccak-256 for v3).
 DIGEST_LENGTH: Final = 64
 
 

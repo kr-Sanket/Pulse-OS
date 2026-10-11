@@ -25,15 +25,18 @@ ordinary overridable providers, so tests substitute fakes without touching app s
 import logging
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Annotated, Any, Protocol
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.core.db import get_db_session
 from app.modules.consent.anchor_service import AuditAnchorService
 from app.modules.consent.anchoring import AuditAnchor, LocalChainAuditAnchor
+from app.modules.consent.batch_service import AuditBatchService
 from app.modules.consent.errors import (
     AccessDeniedError,
     AuditEventNotFoundError,
@@ -54,6 +57,7 @@ from app.modules.consent.errors import (
 )
 from app.modules.consent.repository import (
     AuditAnchorRepository,
+    AuditBatchRepository,
     AuditLogRepository,
     ConsentDecisionRepository,
     ConsentGrantRepository,
@@ -337,6 +341,20 @@ def get_audit_anchor_service(
         anchors=AuditAnchorRepository(session),
         anchor_provider=anchor,
         patients=PatientDirectoryService(PatientRepository(session)),
+    )
+
+
+def build_audit_batch_service(session: AsyncSession, settings: Settings) -> AuditBatchService:
+    """Batch sealing and reconciliation over ``session`` (ADR-027), configured from settings.
+
+    Deliberately not a request dependency: sealing never runs on a healthcare request, and no
+    endpoint exposes it. The future scheduler (and tests) call this with their own session
+    and own the transaction — commit on success, roll back on any exception.
+    """
+    return AuditBatchService(
+        batches=AuditBatchRepository(session),
+        max_size=settings.audit_batch_max_size,
+        backlog_threshold=timedelta(seconds=settings.audit_batch_backlog_threshold_seconds),
     )
 
 

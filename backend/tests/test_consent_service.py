@@ -8,6 +8,7 @@ grant is what enforcement reads, revocation and suspension both cut access immed
 
 import asyncio
 import datetime as dt
+import hashlib
 from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 
@@ -27,7 +28,12 @@ from app.modules.consent.errors import (
     UnknownPatientError,
     UnrequestedCategoryError,
 )
-from app.modules.consent.models import AuditAction, ConsentDecisionStatus, ConsentRequestStatus
+from app.modules.consent.models import (
+    AuditAction,
+    AuditLog,
+    ConsentDecisionStatus,
+    ConsentRequestStatus,
+)
 from app.modules.consent.repository import (
     AuditLogRepository,
     ConsentDecisionRepository,
@@ -36,12 +42,18 @@ from app.modules.consent.repository import (
     ConsentRequestRepository,
 )
 from app.modules.consent.service import (
+    CURRENT_HASH_SCHEME,
     HASH_SCHEME_V1,
     HASH_SCHEME_V2,
+    HASH_SCHEME_V3,
     ConsentGrantState,
     ConsentService,
+    UnsupportedHashSchemeError,
     as_utc,
     canonical_event_payload,
+    event_hasher_for,
+    keccak256_event_hash,
+    recompute_event_hash,
     sha256_event_hash,
 )
 from app.modules.patients.directory import PatientDirectoryService
@@ -1267,7 +1279,7 @@ def test_a_scheme_mismatch_is_detectable_in_both_directions() -> None:
     )
 
 
-def test_new_events_are_written_under_v2_and_verify_under_it() -> None:
+def test_new_events_are_written_under_v3_and_verify_under_it() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:
             h = await _harness(session)
@@ -1275,8 +1287,9 @@ def test_new_events_are_written_under_v2_and_verify_under_it() -> None:
 
             row = (await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9))[0]
 
-            assert row.hash_version == HASH_SCHEME_V2
-            recomputed = sha256_event_hash(
+            assert CURRENT_HASH_SCHEME == HASH_SCHEME_V3
+            assert row.hash_version == HASH_SCHEME_V3
+            recomputed = keccak256_event_hash(
                 canonical_event_payload(
                     {
                         "id": str(row.id),
@@ -1298,6 +1311,209 @@ def test_new_events_are_written_under_v2_and_verify_under_it() -> None:
                 )
             )
             assert recomputed == row.event_hash
+
+    asyncio.run(scenario())
+
+
+# -- ADR-019: Keccak-256 as scheme v3, beside the SHA-256 schemes it does not replace -----
+
+#: Published Keccak-256 vectors (the original Keccak submission, as Ethereum uses it). The
+#: empty-input digest is Ethereum's ``KECCAK_EMPTY`` constant; SHA3-256 of the same inputs
+#: is listed beside each so a silent swap to ``hashlib.sha3_256`` cannot pass.
+KECCAK_VECTORS = [
+    (
+        "",
+        "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+        "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a",
+    ),
+    (
+        "abc",
+        "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45",
+        "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+    ),
+    (
+        "The quick brown fox jumps over the lazy dog",
+        "4d741b6f1eb29cb2a9b9911c82f56fa8d73b04959d3d9d222895df6c0b28aa15",
+        "69070dda01975c8c120c3aada1b282394e7f032fa9cf32f4cb2259a0897dfc04",
+    ),
+]
+
+#: One fixed event, and the digests each scheme gives it — pinned literally, computed
+#: independently from the canonical JSON strings rather than through the code under test.
+#: v1 and v2 are what rows written before the keccak transition carry, so a change to any
+#: of these silently invalidates part of the existing trail.
+PINNED_FIELDS: dict[str, object] = {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "actor_user_id": "22222222-2222-4222-8222-222222222222",
+    "actor_role": "DOCTOR",
+    "action": "RECORD_VIEWED",
+    "patient_id": "33333333-3333-4333-8333-333333333333",
+    "target_record_id": None,
+    "target_category_id": None,
+    "target_request_id": None,
+    "request_context": None,
+    "occurred_at": "2026-03-01T00:00:00+00:00",
+    "actor_hospital_id": "44444444-4444-4444-8444-444444444444",
+}
+PINNED_DIGESTS = {
+    HASH_SCHEME_V1: "da488dec30fd904f8d8452dc30dec38b28de64b4f35a8dc1cadec5bcef554c86",
+    HASH_SCHEME_V2: "3a6b000ad492809810a311f4690f4d6b54120b218dfdd2c3185e65a2cee12f6f",
+    HASH_SCHEME_V3: "47e2ee003111a0b4f9a7783b8ecd6bc70efd7a3960fec10f44a544d4df8653f1",
+}
+
+
+def _pinned_row(scheme: int) -> AuditLog:
+    """``PINNED_FIELDS`` as an ``AuditLog`` row, carrying its pinned digest under ``scheme``."""
+    return AuditLog(
+        id=UUID("11111111-1111-4111-8111-111111111111"),
+        actor_user_id=UUID("22222222-2222-4222-8222-222222222222"),
+        actor_role=Role.DOCTOR,
+        action=AuditAction.RECORD_VIEWED,
+        patient_id=UUID("33333333-3333-4333-8333-333333333333"),
+        target_record_id=None,
+        target_category_id=None,
+        target_request_id=None,
+        request_context=None,
+        occurred_at=dt.datetime(2026, 3, 1, tzinfo=dt.UTC),
+        actor_hospital_id=UUID("44444444-4444-4444-8444-444444444444"),
+        hash_version=scheme,
+        event_hash=PINNED_DIGESTS[scheme],
+    )
+
+
+@pytest.mark.parametrize(("message", "expected", "sha3"), KECCAK_VECTORS)
+def test_keccak256_matches_published_vectors_and_is_not_sha3(
+    message: str, expected: str, sha3: str
+) -> None:
+    digest = keccak256_event_hash(message)
+
+    assert digest == expected
+    assert digest != sha3
+    assert hashlib.sha3_256(message.encode()).hexdigest() == sha3
+
+
+def test_each_scheme_resolves_to_its_own_algorithm() -> None:
+    assert event_hasher_for(HASH_SCHEME_V1) is sha256_event_hash
+    assert event_hasher_for(HASH_SCHEME_V2) is sha256_event_hash
+    assert event_hasher_for(HASH_SCHEME_V3) is keccak256_event_hash
+
+
+def test_v3_hashes_exactly_the_v2_payload() -> None:
+    """v3 changes the algorithm and nothing else: same keys, same bytes."""
+    assert canonical_event_payload(PINNED_FIELDS, scheme=HASH_SCHEME_V3) == (
+        canonical_event_payload(PINNED_FIELDS, scheme=HASH_SCHEME_V2)
+    )
+
+
+@pytest.mark.parametrize("scheme", [HASH_SCHEME_V1, HASH_SCHEME_V2, HASH_SCHEME_V3])
+def test_each_scheme_reproduces_its_pinned_digest(scheme: int) -> None:
+    canonical = canonical_event_payload(PINNED_FIELDS, scheme=scheme)
+
+    assert event_hasher_for(scheme)(canonical) == PINNED_DIGESTS[scheme]
+
+
+def test_the_three_schemes_give_three_distinct_digests() -> None:
+    assert len(set(PINNED_DIGESTS.values())) == 3
+
+
+def test_v3_digest_is_deterministic_and_bare_lowercase_hex() -> None:
+    first = keccak256_event_hash(canonical_event_payload(PINNED_FIELDS, scheme=HASH_SCHEME_V3))
+    reordered = dict(reversed(list(PINNED_FIELDS.items())))
+    second = keccak256_event_hash(canonical_event_payload(reordered, scheme=HASH_SCHEME_V3))
+
+    assert first == second
+    assert len(first) == 64
+    assert set(first) <= set("0123456789abcdef")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("action", "CONSENT_REVOKED"),
+        ("occurred_at", "2026-03-01T00:00:01+00:00"),
+        ("actor_hospital_id", None),
+        ("request_context", "req-1"),
+    ],
+)
+def test_changing_a_hashed_field_changes_the_v3_digest(field: str, value: object) -> None:
+    altered = {**PINNED_FIELDS, field: value}
+    digest = keccak256_event_hash(canonical_event_payload(altered, scheme=HASH_SCHEME_V3))
+
+    assert digest != PINNED_DIGESTS[HASH_SCHEME_V3]
+
+
+@pytest.mark.parametrize("scheme", [HASH_SCHEME_V1, HASH_SCHEME_V2, HASH_SCHEME_V3])
+def test_a_row_recomputes_under_its_own_scheme(scheme: int) -> None:
+    assert recompute_event_hash(_pinned_row(scheme)) == PINNED_DIGESTS[scheme]
+
+
+def test_a_relabelled_row_no_longer_recomputes_to_its_digest() -> None:
+    """A v2 SHA-256 row relabelled v3 (or the reverse) fails: the version picks the
+    algorithm, so it cannot be changed without the digest diverging."""
+    v2_as_v3 = _pinned_row(HASH_SCHEME_V2)
+    v2_as_v3.hash_version = HASH_SCHEME_V3
+    v3_as_v2 = _pinned_row(HASH_SCHEME_V3)
+    v3_as_v2.hash_version = HASH_SCHEME_V2
+
+    assert recompute_event_hash(v2_as_v3) != v2_as_v3.event_hash
+    assert recompute_event_hash(v3_as_v2) != v3_as_v2.event_hash
+
+
+@pytest.mark.parametrize("scheme", [0, 4, -1, 99])
+def test_an_unknown_scheme_is_refused_rather_than_defaulted(scheme: int) -> None:
+    with pytest.raises(UnsupportedHashSchemeError):
+        event_hasher_for(scheme)
+    with pytest.raises(UnsupportedHashSchemeError):
+        canonical_event_payload(PINNED_FIELDS, scheme=scheme)
+    row = _pinned_row(HASH_SCHEME_V2)
+    row.hash_version = scheme
+    with pytest.raises(UnsupportedHashSchemeError):
+        recompute_event_hash(row)
+
+
+def test_legacy_rows_are_left_untouched_when_new_events_are_written() -> None:
+    """Writing v3 events never rehashes or relabels v1/v2 rows already in the trail, and
+    each generation keeps verifying under its own scheme beside the others."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            legacy: list[AuditLog] = []
+            for scheme, offset in ((HASH_SCHEME_V1, 2), (HASH_SCHEME_V2, 1)):
+                row = AuditLog(
+                    id=uuid4(),
+                    actor_user_id=h.patient.user_id,
+                    actor_role=Role.PATIENT,
+                    action=AuditAction.RECORDS_LISTED,
+                    patient_id=h.patient_id,
+                    request_context=None,
+                    occurred_at=START - dt.timedelta(days=offset),
+                    actor_hospital_id=None,
+                    hash_version=scheme,
+                    event_hash="",
+                )
+                row.event_hash = recompute_event_hash(row)
+                session.add(row)
+                legacy.append(row)
+            await session.flush()
+            before = {row.id: (row.hash_version, row.event_hash) for row in legacy}
+
+            await _request(h, "CBC")
+            session.expire_all()
+
+            rows = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            by_id = {row.id: row for row in rows}
+            for row_id, (scheme, digest) in before.items():
+                assert (by_id[row_id].hash_version, by_id[row_id].event_hash) == (
+                    scheme,
+                    digest,
+                )
+            assert {row.hash_version for row in rows} == {
+                HASH_SCHEME_V1,
+                HASH_SCHEME_V2,
+                HASH_SCHEME_V3,
+            }
+            assert all(recompute_event_hash(row) == row.event_hash for row in rows)
 
     asyncio.run(scenario())
 

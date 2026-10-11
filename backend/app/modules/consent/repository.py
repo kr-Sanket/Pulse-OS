@@ -28,15 +28,19 @@ so paginating them would add cursor plumbing to a fetch of at most ten rows.
 """
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Final
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, and_, func, or_, select
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.modules.consent.errors import (
+    BatchSealConflictError,
+    BatchSealIntegrityError,
     DuplicateAnchorError,
     DuplicateDecisionError,
     DuplicateGrantError,
@@ -45,6 +49,8 @@ from app.modules.consent.errors import (
 )
 from app.modules.consent.models import (
     AuditAnchorEntry,
+    AuditBatch,
+    AuditBatchMember,
     AuditLog,
     ConsentDecision,
     ConsentGrant,
@@ -400,13 +406,16 @@ class AuditAnchorRepository:
         )
         return {entry.audit_log_id: entry for entry in result.scalars()}
 
-    async def list_unanchored_events(self, *, limit: int) -> list[AuditLog]:
+    async def list_unanchored_events(
+        self, *, limit: int, exclude_hash_version: int | None = None
+    ) -> list[AuditLog]:
         """The oldest audit events that carry no anchor yet — the sweep's work queue.
 
         An anti-join rather than "everything since a watermark": anchoring can fail for one
         event and succeed for the next, so a high-water mark would strand the gap forever.
         Oldest first, so the trail anchors in the order it happened and a partial sweep
-        leaves a contiguous anchored prefix rather than holes.
+        leaves a contiguous anchored prefix rather than holes. ``exclude_hash_version`` keeps
+        a scheme out of the queue entirely — v3, which is batch-anchored (ADR-027).
         """
         anchored = select(AuditAnchorEntry.audit_log_id)
         query: Select[tuple[AuditLog]] = (
@@ -415,12 +424,245 @@ class AuditAnchorRepository:
             .order_by(AuditLog.occurred_at.asc(), AuditLog.id.asc())
             .limit(limit)
         )
+        if exclude_hash_version is not None:
+            query = query.where(AuditLog.hash_version != exclude_hash_version)
         result = await self._session.execute(query)
         return list(result.scalars())
 
-    async def count_unanchored(self) -> int:
+    async def count_unanchored(self, *, exclude_hash_version: int | None = None) -> int:
         anchored = select(AuditAnchorEntry.audit_log_id)
-        result = await self._session.execute(
-            select(func.count()).select_from(AuditLog).where(AuditLog.id.not_in(anchored))
-        )
+        query = select(func.count()).select_from(AuditLog).where(AuditLog.id.not_in(anchored))
+        if exclude_hash_version is not None:
+            query = query.where(AuditLog.hash_version != exclude_hash_version)
+        result = await self._session.execute(query)
         return int(result.scalar_one())
+
+
+#: Key of the transaction-scoped PostgreSQL advisory lock that serialises batch sealers. An
+#: arbitrary fixed 63-bit value; it only has to be the same in every sealer.
+_SEALING_LOCK_KEY = 0x5055_4C53_4542_4154  # "PULSEBAT"
+
+#: Constraints whose collision *is* a concurrent-sealer race (ADR-027 decision 10): two sealers
+#: claiming the same next number, or batching the same event. Nothing else is, by itself.
+SEALING_RACE_CONSTRAINTS: Final = frozenset(
+    {"uq_audit_batches_batch_number", "uq_audit_batch_members_audit_log_id"}
+)
+
+#: A collision here is a race **only conditionally**. When two sealers seal the identical batch
+#: (same number, same events, same root) both ``batch_number`` and ``commitment`` collide, and
+#: which UNIQUE index reports first is backend-dependent — SQLite reports this one. Because the
+#: commitment binds the batch number, the collision is a race exactly when a batch with this
+#: run's number already exists; otherwise a stored batch carries a commitment that does not match
+#: its own number, which is tampering, not contention.
+COMMITMENT_CONSTRAINT: Final = "uq_audit_batches_commitment"
+
+#: PostgreSQL integrity SQLSTATEs (class 23) this module distinguishes.
+_POSTGRES_SQLSTATE_KINDS: Final = {
+    "23505": "unique",
+    "23514": "check",
+    "23503": "foreign_key",
+    "23502": "not_null",
+}
+
+#: SQLite's extended result names for constraint failures (``sqlite3.Error.sqlite_errorname``).
+_SQLITE_ERRORNAME_KINDS: Final = {
+    "SQLITE_CONSTRAINT_UNIQUE": "unique",
+    "SQLITE_CONSTRAINT_PRIMARYKEY": "primary_key",
+    "SQLITE_CONSTRAINT_CHECK": "check",
+    "SQLITE_CONSTRAINT_FOREIGNKEY": "foreign_key",
+    "SQLITE_CONSTRAINT_NOTNULL": "not_null",
+}
+
+#: SQLite names no constraint for a UNIQUE failure — only ``table.column`` lists, in the fixed
+#: form ``UNIQUE constraint failed: <columns>``. Exact strings for this module's batch UNIQUE
+#: constraints; any other text identifies nothing, which is the fail-closed answer.
+_SQLITE_UNIQUE_MESSAGES: Final = {
+    "UNIQUE constraint failed: audit_batches.batch_number": "uq_audit_batches_batch_number",
+    "UNIQUE constraint failed: audit_batches.commitment": "uq_audit_batches_commitment",
+    "UNIQUE constraint failed: audit_batch_members.audit_log_id": (
+        "uq_audit_batch_members_audit_log_id"
+    ),
+    "UNIQUE constraint failed: audit_batch_members.batch_id, audit_batch_members.leaf_index": (
+        "uq_audit_batch_members_batch_id_leaf_index"
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrityViolation:
+    """What kind of constraint refused a write, and which one when the driver says so.
+
+    ``kind`` is ``unique``, ``primary_key``, ``check``, ``foreign_key``, ``not_null`` or
+    ``unknown``; ``constraint`` is a schema identifier or ``None`` when it cannot be
+    established. Both are safe to log: no row values, SQL or connection details.
+    """
+
+    kind: str
+    constraint: str | None
+
+    @property
+    def is_sealing_race(self) -> bool:
+        return self.kind == "unique" and self.constraint in SEALING_RACE_CONSTRAINTS
+
+
+def classify_integrity_error(exc: IntegrityError) -> IntegrityViolation:
+    """Classify a refused write from structured driver metadata, failing closed.
+
+    * **PostgreSQL (asyncpg):** SQLAlchemy's adapter sets ``sqlstate`` on ``exc.orig`` and
+      chains the asyncpg error, whose ``constraint_name`` names the constraint.
+    * **SQLite (the test harness):** ``sqlite_errorname`` gives the kind. A UNIQUE failure
+      carries no constraint name, so it is identified only by an exact match of SQLite's fixed
+      message against the batch constraints above — never by partial parsing.
+
+    Anything else — another driver, a missing attribute, an unlisted SQLSTATE or message —
+    is ``unknown`` or has no constraint, and so is never mistaken for a sealing race.
+    """
+    orig = exc.orig
+    sqlstate = getattr(orig, "sqlstate", None)
+    if isinstance(sqlstate, str):
+        name = getattr(getattr(orig, "__cause__", None), "constraint_name", None)
+        return IntegrityViolation(
+            kind=_POSTGRES_SQLSTATE_KINDS.get(sqlstate, "unknown"),
+            constraint=name if isinstance(name, str) else None,
+        )
+    errorname = getattr(orig, "sqlite_errorname", None)
+    if isinstance(errorname, str):
+        kind = _SQLITE_ERRORNAME_KINDS.get(errorname, "unknown")
+        constraint = _SQLITE_UNIQUE_MESSAGES.get(str(orig)) if kind == "unique" else None
+        return IntegrityViolation(kind=kind, constraint=constraint)
+    return IntegrityViolation(kind="unknown", constraint=None)
+
+
+class AuditBatchRepository:
+    """Persistence for sealed Merkle batches and their membership (ADR-027).
+
+    Append-only: insert and read, never update or delete. Like every repository here it
+    flushes and never commits; sealing's atomicity comes from the savepoint in
+    ``add_sealed_batch`` plus the caller's transaction.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def lock_for_sealing(self) -> None:
+        """Serialise sealers for the rest of this transaction.
+
+        On PostgreSQL, ``pg_advisory_xact_lock`` makes a second sealer wait until the first
+        commits or rolls back; its following statements then see the committed batch, so it
+        selects only what is still unbatched instead of colliding. Released automatically at
+        transaction end. On SQLite (the test harness) writers are already serialised by the
+        database lock, so this is a no-op. Either way the UNIQUE constraints remain the
+        backstop — the lock avoids wasted work, it is not what makes sealing correct.
+        """
+        if self._session.get_bind().dialect.name == "postgresql":
+            await self._session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": _SEALING_LOCK_KEY}
+            )
+
+    async def list_unbatched_events(self, *, hash_version: int, limit: int) -> list[AuditLog]:
+        """The oldest events of ``hash_version`` not yet in any batch, canonical order.
+
+        Canonical order is ``(occurred_at, id)``, the order ``V3Batch`` assigns positions
+        in, so the selected prefix is the one the batch would choose anyway.
+        """
+        batched = select(AuditBatchMember.audit_log_id)
+        query: Select[tuple[AuditLog]] = (
+            select(AuditLog)
+            .where(AuditLog.hash_version == hash_version, AuditLog.id.not_in(batched))
+            .order_by(AuditLog.occurred_at.asc(), AuditLog.id.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(query)
+        return list(result.scalars())
+
+    async def all_unbatched_events(self, *, hash_version: int | None = None) -> list[AuditLog]:
+        """Every unbatched event, canonical order — reconciliation's input.
+
+        ``hash_version=None`` returns unbatched events of **every** version, including ones
+        no scheme defines: reconciliation recomputes each under its own label, which is how a
+        v3 event relabelled to v2 before sealing is found (ADR-027 decision 13).
+        """
+        batched = select(AuditBatchMember.audit_log_id)
+        query: Select[tuple[AuditLog]] = (
+            select(AuditLog)
+            .where(AuditLog.id.not_in(batched))
+            .order_by(AuditLog.occurred_at.asc(), AuditLog.id.asc())
+        )
+        if hash_version is not None:
+            query = query.where(AuditLog.hash_version == hash_version)
+        result = await self._session.execute(query)
+        return list(result.scalars())
+
+    async def next_batch_number(self) -> int:
+        """One more than the highest batch number, or 1. Contention is settled by UNIQUE."""
+        result = await self._session.execute(select(func.max(AuditBatch.batch_number)))
+        highest = result.scalar_one_or_none()
+        return 1 if highest is None else int(highest) + 1
+
+    async def add_sealed_batch(
+        self, batch: AuditBatch, members: list[AuditBatchMember]
+    ) -> AuditBatch:
+        """Insert a batch and all its members in one savepoint — all of it, or none.
+
+        On any integrity violation the savepoint rolls back every row of this batch, so no
+        partial membership can survive. The violation is then classified:
+
+        * a UNIQUE collision on ``batch_number`` or ``audit_log_id`` — another sealer won — is
+          ``BatchSealConflictError``: roll back and let the next run retry. So is a collision
+          on the commitment when a batch with this run's number now exists: the winner sealed
+          the identical batch (see ``COMMITMENT_CONSTRAINT``);
+        * anything else (CHECK, foreign key, NOT NULL, any other UNIQUE, a commitment collision
+          with no such batch, or unclassifiable) is ``BatchSealIntegrityError``: not
+          retryable, it needs an operator.
+        """
+        batch_number = batch.batch_number  # read before the savepoint can expunge ``batch``
+        try:
+            async with self._session.begin_nested():
+                self._session.add(batch)
+                await self._session.flush()
+                self._session.add_all(members)
+                await self._session.flush()
+        except IntegrityError as exc:
+            violation = classify_integrity_error(exc)
+            identical_batch_won = (
+                violation.kind == "unique"
+                and violation.constraint == COMMITMENT_CONSTRAINT
+                and await self._batch_number_taken(batch_number)
+            )
+            if violation.is_sealing_race or identical_batch_won:
+                raise BatchSealConflictError() from exc
+            raise BatchSealIntegrityError(
+                violation=violation.kind, constraint=violation.constraint
+            ) from exc
+        return batch
+
+    async def _batch_number_taken(self, batch_number: int) -> bool:
+        """Whether a batch with ``batch_number`` exists. Runs after the savepoint rolled back,
+        in the same transaction; on PostgreSQL a UNIQUE violation is only raised once the
+        conflicting row has committed, so a read-committed SELECT sees it."""
+        result = await self._session.execute(
+            select(AuditBatch.id).where(AuditBatch.batch_number == batch_number).limit(1)
+        )
+        return result.first() is not None
+
+    async def list_batches(self) -> list[AuditBatch]:
+        result = await self._session.execute(
+            select(AuditBatch).order_by(AuditBatch.batch_number.asc())
+        )
+        return list(result.scalars())
+
+    async def list_members_with_events(
+        self,
+    ) -> list[tuple[AuditBatchMember, AuditLog | None]]:
+        """Every membership row with its audit event, by batch then position.
+
+        An outer join: a member whose event row has gone missing must come back with
+        ``None`` rather than vanish, because that absence is exactly what reconciliation is
+        looking for.
+        """
+        result = await self._session.execute(
+            select(AuditBatchMember, AuditLog)
+            .outerjoin(AuditLog, AuditLog.id == AuditBatchMember.audit_log_id)
+            .order_by(AuditBatchMember.batch_id, AuditBatchMember.leaf_index)
+        )
+        return [(member, event) for member, event in result.tuples()]

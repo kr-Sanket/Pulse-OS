@@ -1,15 +1,17 @@
 """Audit-anchor adapter and service tests.
 
 These tests pin the blockchain boundary without requiring a network:
-- only bare SHA-256 digests cross the adapter boundary;
+- only bare hex digests (SHA-256 for v1/v2, Keccak-256 for v3) cross the adapter boundary;
 - the local adapter is deterministic and network-scoped;
 - anchoring is idempotent;
 - verification detects event and anchor tampering;
+- each audit row verifies under its own hash scheme, alongside rows of other schemes;
 - patient verification remains scoped to the caller's own audit trail.
 """
 
 import asyncio
 import datetime as dt
+import hashlib
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -28,13 +30,18 @@ from app.modules.consent.anchoring import (
     LOCAL_DEV_NETWORK,
     require_digest,
 )
-from app.modules.consent.errors import AuditEventNotFoundError
+from app.modules.consent.errors import (
+    AuditEventNotFoundError,
+    BatchAnchoredEventError,
+    UnanchorableAuditEventError,
+)
 from app.modules.consent.models import AuditAnchorEntry, AuditAction, AuditLog
 from app.modules.consent.repository import AuditAnchorRepository, AuditLogRepository
 from app.modules.consent.service import (
+    HASH_SCHEME_V1,
     HASH_SCHEME_V2,
+    HASH_SCHEME_V3,
     recompute_event_hash,
-    sha256_event_hash,
 )
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
@@ -102,7 +109,7 @@ class AuditFixture:
     event: AuditLog
 
 
-async def _fixture(session) -> AuditFixture:
+async def _fixture(session, scheme: int = HASH_SCHEME_V2) -> AuditFixture:
     patient_user = User(
         firebase_uid=f"fb-p-{uuid4()}",
         role=Role.PATIENT,
@@ -140,7 +147,7 @@ async def _fixture(session) -> AuditFixture:
         request_context=None,
         occurred_at=NOW,
         event_hash="",
-        hash_version=HASH_SCHEME_V2,
+        hash_version=scheme,
         actor_hospital_id=None,
     )
 
@@ -497,3 +504,284 @@ def test_anchored_event_ids_returns_only_anchored_reports() -> None:
     ]
 
     assert anchored_event_ids(reports) == {second}
+
+
+# ---------------------------------------------------------------------------
+# Hash schemes (ADR-019, ADR-023)
+# ---------------------------------------------------------------------------
+
+ALL_SCHEMES = [HASH_SCHEME_V1, HASH_SCHEME_V2, HASH_SCHEME_V3]
+
+
+async def _add_event(fixture: AuditFixture, scheme: int, *, seconds: int) -> AuditLog:
+    """One more event in the fixture patient's trail, hashed under ``scheme``."""
+    event = AuditLog(
+        id=uuid4(),
+        actor_user_id=fixture.patient_user.id,
+        actor_role=Role.PATIENT,
+        action=AuditAction.RECORD_VIEWED,
+        patient_id=fixture.patient.id,
+        request_context=None,
+        occurred_at=NOW + dt.timedelta(seconds=seconds),
+        actor_hospital_id=None,
+        hash_version=scheme,
+        event_hash="",
+    )
+    event.event_hash = recompute_event_hash(event)
+    fixture.session.add(event)  # type: ignore[attr-defined]
+    await fixture.session.flush()  # type: ignore[attr-defined]
+    return event
+
+
+def test_local_anchor_reference_derivation_is_unchanged() -> None:
+    """Pinned against the documented rule, so the keccak transition provably left the
+    local adapter alone: it still derives references with SHA-256 over its own domain."""
+
+    async def scenario() -> None:
+        provider = LocalChainAuditAnchor(clock=FixedClock(NOW))
+        receipt = await provider.submit(DIGEST)
+
+        expected = hashlib.sha256(
+            f"pulseos:audit-anchor:local-dev:v1:{DIGEST}".encode()
+        ).hexdigest()
+        assert receipt.reference == "0x" + expected
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("scheme", [HASH_SCHEME_V1, HASH_SCHEME_V2])
+def test_a_historical_event_anchors_per_event_and_verifies(scheme: int) -> None:
+    """v1/v2 keep the per-event workflow; v3 is batch-anchored (ADR-027 decision 7)."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, scheme)
+            original = (fixture.event.hash_version, fixture.event.event_hash)
+            require_digest(fixture.event.event_hash)
+
+            outcome = await fixture.service.anchor_event(fixture.event)
+            report = await fixture.service.verify(fixture.event)
+
+            assert outcome.anchor.hash_version == scheme
+            assert outcome.anchor.digest == fixture.event.event_hash
+            assert report.status is IntegrityStatus.VERIFIED
+            # Anchoring reads the row and never rewrites it.
+            assert (fixture.event.hash_version, fixture.event.event_hash) == original
+
+    asyncio.run(scenario())
+
+
+def test_a_mixed_scheme_trail_anchors_only_historical_rows_per_event() -> None:
+    """The sweep anchors v1 and v2 and never queues v3; each row verifies independently."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V1)
+            v2 = await _add_event(fixture, HASH_SCHEME_V2, seconds=1)
+            v3 = await _add_event(fixture, HASH_SCHEME_V3, seconds=2)
+            events = [fixture.event, v2, v3]
+
+            result = await fixture.service.anchor_pending(limit=10)
+            reports = await fixture.service.verify_many(events)
+
+            assert (result.anchored, result.failed, result.remaining) == (2, 0, 0)
+            assert {event.hash_version for event in events} == set(ALL_SCHEMES)
+            assert reports[fixture.event.id].status is IntegrityStatus.VERIFIED
+            assert reports[v2.id].status is IntegrityStatus.VERIFIED
+            assert reports[v3.id].status is IntegrityStatus.NOT_ANCHORED
+            assert await fixture.anchors.get_by_audit_log_id(v3.id) is None
+
+    asyncio.run(scenario())
+
+
+def test_a_v2_event_relabelled_v3_is_reported_as_event_altered() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V2)
+            await fixture.service.anchor_event(fixture.event)
+
+            fixture.event.hash_version = HASH_SCHEME_V3
+            await session.flush()
+
+            report = await fixture.service.verify(fixture.event)
+
+            assert report.status is IntegrityStatus.EVENT_ALTERED
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("scheme", [0, 4, 99])
+def test_an_unknown_scheme_is_reported_as_event_altered_not_raised(scheme: int) -> None:
+    """Never VERIFIED, and never an exception that would fail a whole audit page."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            # Built on v2: per-event anchoring is a v1/v2 workflow since ADR-027.
+            fixture = await _fixture(session, HASH_SCHEME_V2)
+            healthy = await _add_event(fixture, HASH_SCHEME_V2, seconds=1)
+            await fixture.service.anchor_pending(limit=10)
+
+            fixture.event.hash_version = scheme
+            await session.flush()
+
+            single = await fixture.service.verify(fixture.event)
+            page = await fixture.service.verify_many([fixture.event, healthy])
+
+            assert single.status is IntegrityStatus.EVENT_ALTERED
+            assert page[fixture.event.id].status is IntegrityStatus.EVENT_ALTERED
+            assert page[healthy.id].status is IntegrityStatus.VERIFIED
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# ADR-027 decision 7: v3 events leave the per-event workflow
+# ---------------------------------------------------------------------------
+
+
+def test_a_v3_event_is_refused_by_per_event_anchoring() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V3)
+            provider = RecordingAnchor()
+            service = AuditAnchorService(
+                audit=fixture.audit,
+                anchors=fixture.anchors,
+                anchor_provider=provider,
+                patients=PatientDirectoryService(PatientRepository(session)),
+            )
+
+            with pytest.raises(BatchAnchoredEventError):
+                await service.anchor_event(fixture.event)
+
+            assert provider.submitted == []
+            assert await fixture.anchors.get_by_audit_log_id(fixture.event.id) is None
+
+    asyncio.run(scenario())
+
+
+def test_the_sweep_never_queues_v3_events() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V3)
+            await _add_event(fixture, HASH_SCHEME_V3, seconds=1)
+
+            result = await fixture.service.anchor_pending(limit=10)
+
+            assert (result.anchored, result.failed, result.remaining) == (0, 0, 0)
+
+    asyncio.run(scenario())
+
+
+def test_an_existing_per_event_v3_anchor_stays_readable() -> None:
+    """A per-event anchor written for a v3 event before batching (between M6.1 and M6.3) is
+    historical evidence: it is never deleted or rewritten and still verifies as before."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V3)
+            receipt = await LocalChainAuditAnchor(clock=FixedClock(NOW)).submit(
+                fixture.event.event_hash
+            )
+            await fixture.anchors.add(
+                AuditAnchorEntry(
+                    audit_log_id=fixture.event.id,
+                    digest=fixture.event.event_hash,
+                    hash_version=HASH_SCHEME_V3,
+                    network=receipt.network,
+                    reference=receipt.reference,
+                    anchored_at=receipt.anchored_at,
+                )
+            )
+
+            report = await fixture.service.verify(fixture.event)
+
+            assert report.status is IntegrityStatus.VERIFIED
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Per-event anchoring refuses inconsistent events (ADR-027 decision 7)
+# ---------------------------------------------------------------------------
+
+
+def _recording_service(fixture: AuditFixture, provider: RecordingAnchor) -> AuditAnchorService:
+    return AuditAnchorService(
+        audit=fixture.audit,
+        anchors=fixture.anchors,
+        anchor_provider=provider,
+        patients=PatientDirectoryService(PatientRepository(fixture.session)),  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("scheme", "tamper", "reason"),
+    [
+        (HASH_SCHEME_V2, "edit", "digest_mismatch"),
+        (HASH_SCHEME_V1, "edit", "digest_mismatch"),
+        (HASH_SCHEME_V3, "relabel-to-v2", "digest_mismatch"),
+        (HASH_SCHEME_V2, "unsupported-version", "unsupported_hash_version"),
+    ],
+)
+def test_per_event_anchoring_refuses_an_inconsistent_event(
+    scheme: int, tamper: str, reason: str
+) -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, scheme)
+            if tamper == "edit":
+                fixture.event.request_context = "edited after writing"
+            elif tamper == "relabel-to-v2":
+                fixture.event.hash_version = HASH_SCHEME_V2
+            else:
+                fixture.event.hash_version = 4
+            await session.flush()
+            provider = RecordingAnchor()
+
+            with pytest.raises(UnanchorableAuditEventError) as raised:
+                await _recording_service(fixture, provider).anchor_event(fixture.event)
+
+            assert raised.value.reason == reason
+            assert fixture.event.event_hash not in str(raised.value)
+            assert provider.submitted == []  # refused before the adapter is called
+            assert await fixture.anchors.get_by_audit_log_id(fixture.event.id) is None
+
+    asyncio.run(scenario())
+
+
+def test_the_sweep_counts_an_inconsistent_event_as_failed_and_continues() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V2)
+            good = await _add_event(fixture, HASH_SCHEME_V2, seconds=1)
+            fixture.event.request_context = "edited after writing"
+            await session.flush()
+
+            result = await fixture.service.anchor_pending(limit=10)
+
+            assert (result.anchored, result.failed, result.remaining) == (1, 1, 1)
+            assert await fixture.anchors.get_by_audit_log_id(fixture.event.id) is None
+            assert await fixture.anchors.get_by_audit_log_id(good.id) is not None
+
+    asyncio.run(scenario())
+
+
+def test_an_existing_anchor_is_returned_as_is_and_verification_judges_the_row() -> None:
+    """The check guards *creating* anchors only; an anchor that already exists is
+    historical evidence and the verdict path reports the altered row."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V2)
+            first = await fixture.service.anchor_event(fixture.event)
+            fixture.event.request_context = "edited after anchoring"
+            await session.flush()
+
+            again = await fixture.service.anchor_event(fixture.event)
+            report = await fixture.service.verify(fixture.event)
+
+            assert (again.created, again.anchor.id) == (False, first.anchor.id)
+            assert report.status is IntegrityStatus.EVENT_ALTERED
+
+    asyncio.run(scenario())

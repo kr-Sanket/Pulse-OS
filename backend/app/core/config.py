@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:8b"
     ollama_timeout_seconds: float = 60.0
 
+    # Merkle-batched audit anchoring (ADR-027). Initial values are starting points for
+    # measurement, not limits of the design. The interval is read by the sealing scheduler,
+    # which is a later stage; M6.3 only defines it.
+    audit_batch_max_size: int = 256
+    audit_batch_interval_seconds: int = 300
+    audit_batch_backlog_threshold_seconds: int = 900
+
 
 @lru_cache
 def get_settings() -> Settings:
