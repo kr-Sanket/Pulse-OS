@@ -37,11 +37,12 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
   - **Clinician:** allowed categories come from `ConsentService.granted_category_ids` — the same
     grant predicate enforcement uses (active, unrevoked, unexpired grants for that doctor).
   - **Patient (own records):** every category in the vocabulary.
-- **Known gap — hidden records.** AI retrieval does **not** consult `medical_records.is_hidden`,
-  and hiding a record does not touch AI rows. A record a patient has hidden can therefore still
-  contribute evidence to a **clinician's** AI answer when its category is granted, although it is
-  withheld from every other grantee surface. Recorded in [SECURITY.md](SECURITY.md); fixing it is
-  an application-code change, not yet authorized.
+- **Hidden records.** Clinician retrieval (`AIRepository.search_grantee_chunks`) joins chunks to
+  `medical_records` and excludes `is_hidden` records **in the query**. They never reach scoring,
+  the result limit, generation context or citations. The patient's own retrieval keeps them, as
+  every owner surface does. The caller must choose the policy (`RetrievalVisibility.GRANTEE` or
+  `OWNER`); there is no default. Visibility is read live and AI rows are untouched, so hiding and
+  unhiding take effect without re-indexing. Answers already delivered cannot be recalled.
 
 ### Context assembly and generation
 
@@ -62,7 +63,7 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
 
 | Endpoint | Role | Rate limit | Notes |
 |---|---|---|---|
-| `GET /api/v1/ai/patients/{patient_id}/search` | DOCTOR | none | Returns ranked chunks within granted categories |
+| `GET /api/v1/ai/patients/{patient_id}/search` | DOCTOR | none | Returns ranked chunk text within granted categories, hidden records excluded; not audited |
 | `POST /api/v1/ai/patients/{patient_id}/answer` | DOCTOR | `ai_generate` (10 / 60 s) | Clinical assistant answer with citations |
 | `POST /api/v1/ai/me/answer` | PATIENT | `ai_generate` (10 / 60 s) | Patient Health Copilot over own records |
 

@@ -11,7 +11,7 @@
 | Threat | Control | Status |
 |---|---|---|
 | Doctor/hospital reads records without consent | Single enforcement point `consent.enforce` on every non-owner record read (ADR-013); 404-not-403 for unauthorized existence probes | **Implemented** (covered by `tests/test_m3_gate.py` and consent tests) |
-| A patient-hidden record reaches a grantee | Hidden records are excluded from existence, listing, read and download | **Implemented** for records — **Gap in AI:** AI retrieval ignores `is_hidden`, so a hidden record of a granted category can feed a clinician's AI answer (see §AI) |
+| A patient-hidden record reaches a grantee | Hidden records are excluded from existence, listing, read and download | **Implemented**, including clinician AI retrieval (search, answer context and citations), which filters `is_hidden` in the query before scoring and the result limit. Answers delivered before a record was hidden cannot be recalled (see §AI) |
 | Consent/audit tampering by someone with DB write access | Append-only audit tables; versioned audit digests; Merkle batches + database-only reconciliation (ADR-027) | **Partial** — append-only is by **convention only** (no DB privileges or triggers; deferred to M7); reconciliation detects inconsistencies but not a consistent rewrite before sealing; **no on-chain anchoring yet** (M6.4+ unauthorized) |
 | Stolen/leaked file URLs | Presigned URLs issued only after the consent check and audit write; lifetime `PULSEOS_S3_PRESIGN_TTL_SECONDS` (default 300 s); bucket created without a public policy | **Implemented** |
 | Data at rest | S3 server-side encryption; database volume encryption | **Absent** — no SSE is requested by the storage adapter; local volumes are unencrypted; platform encryption depends on the undecided deployment target (ADR-009) |
@@ -69,9 +69,11 @@
 
 See AI_ARCHITECTURE.md. Implemented: consent-scoped retrieval as a SQL predicate, patient scope
 limited to own records, `SUMMARY_GENERATED` audit event on generated answers, rate-limited answer
-endpoints, local-only generation. **Known gap:** hidden records are not excluded from AI
-retrieval. Not implemented: redaction layer, medical-advice refusal policy beyond the prompt, AI
-quotas.
+endpoints, local-only generation, and exclusion of patient-hidden records from clinician
+retrieval. The patient's own copilot still includes their hidden records (owner access). An
+answer already delivered cannot be recalled after a record is hidden. **Still open:** the clinician
+search endpoint returns raw chunk text with no audit event and no rate limit. Not implemented:
+redaction layer, medical-advice refusal policy beyond the prompt, AI quotas.
 
 ## Break-glass / emergency QR (Phase 2 — design before build)
 

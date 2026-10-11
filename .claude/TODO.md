@@ -162,9 +162,17 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
 
 ## 5b. M5 / M6 follow-ups (recorded 2026-10-11; each needs authorization before code changes)
 
-- [ ] BE: **AI retrieval ignores hidden records** — a hidden record of a granted category can
+- [x] BE: **AI retrieval ignores hidden records** — a hidden record of a granted category can
       still feed a clinician's AI answer (SECURITY.md, AI_ARCHITECTURE.md). Needs a code fix plus
-      tests; not yet authorized.
+      tests; not yet authorized. *Fixed 2026-10-11: clinician retrieval filters `is_hidden` in
+      the query; the patient copilot is unchanged. Regression tests in
+      `tests/modules/ai/test_hidden_record_retrieval.py`, validated on SQLite and on a disposable
+      PostgreSQL 16.15.*
+- [ ] BE: **Clinician AI search returns raw chunk text with no audit event and no rate limit**
+      (`GET /api/v1/ai/patients/{id}/search`; SECURITY.md). Needs a decision before code changes.
+- [ ] BE: The hidden-record regression tests use the SQLite harness only, so the
+      `backend-postgres` CI job does not run them; the PostgreSQL run was a one-off local
+      validation.
 - [ ] PO: M5 gate restatement or missing features — OCR, summary, timeline, explainer and the
       redaction requirement are not built (ROADMAP §M5); no RC-3 evaluation exists.
 - [ ] PO: Define and authorize M6.4 (or not) — receipts/submission, scheduler, CLI, contract and

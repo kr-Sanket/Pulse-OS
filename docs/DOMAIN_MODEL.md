@@ -39,8 +39,8 @@ in DB, ADR-005), processing status (`UPLOADED → PROCESSING → INDEXED | FAILE
 patient-controlled visibility (a patient may hide **any record they own**, whatever its origin;
 hiding withdraws it from what consent can share, and revokes nothing). Derived artifacts hang off
 the record: today these are AI documents and text chunks built from FHIR resources
-(AI_ARCHITECTURE.md); OCR text, embeddings and timeline entries are not implemented. **Known gap:**
-AI retrieval does not yet honour hiding (SECURITY.md).
+(AI_ARCHITECTURE.md); OCR text, embeddings and timeline entries are not implemented. Clinician AI
+retrieval honours hiding; the patient's own copilot still sees hidden records (AI_ARCHITECTURE.md).
 
 ### RecordCategory (controlled vocabulary)
 The consent granularity unit (FHIR `DocumentReference.type`-style codes). Seeded vocabulary
@@ -149,9 +149,9 @@ Legend: ✅ always (within role) · ⭕ conditional (condition noted) · ❌ nev
 
 **Hiding is scoped to what consent governs, and no further.** A hidden record disappears from
 every grantee surface — the existence projection, the grant-scoped listing, the single-record
-read and the download (exception: AI retrieval does not yet exclude hidden records — an open
-gap, see [SECURITY.md](SECURITY.md)) — but the row, the file and the grant are all untouched, and the uploading
-hospital keeps its layer-2 access to its own upload. A patient-facing screen offering the control
+read, the download and clinician AI retrieval (search, answer context and citations) — but the
+row, the file, its AI index and the grant are all untouched, and the uploading hospital keeps its
+layer-2 access to its own upload. A patient-facing screen offering the control
 has to say so rather than imply that hiding conceals a record from everyone.
 
 Two deliberate properties worth stating: **System Admin has zero access to medical content**

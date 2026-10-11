@@ -5,7 +5,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from app.modules.ai.models import AIChunk, AIDocument
-from app.modules.ai.service import AIIngestionService, AIRetrievalService
+from app.modules.ai.service import (
+    AIIngestionService,
+    AIRetrievalService,
+    RetrievalVisibility,
+)
 
 
 class FakeAIRepository:
@@ -167,6 +171,7 @@ def test_retrieval_service_returns_ranked_consent_scoped_chunks():
             patient_id=patient_id,
             category_ids=frozenset({allowed_category_id}),
             query="diabetes active",
+            visibility=RetrievalVisibility.OWNER,
             limit=10,
         )
     )
@@ -241,6 +246,7 @@ def test_t5_batched_date_lookup_single_query_and_correct_mapping() -> None:
             patient_id=patient_id,
             category_ids=frozenset({cat_id}),
             query="lab result",
+            visibility=RetrievalVisibility.OWNER,
             limit=10,
         )
     )
@@ -297,6 +303,7 @@ def test_t1_retrieval_service_temporal_query_prioritizes_newer_record() -> None:
             patient_id=patient_id,
             category_ids=frozenset({cat_id}),
             query="What are the patient's latest laboratory results?",
+            visibility=RetrievalVisibility.OWNER,
             limit=10,
         )
     )

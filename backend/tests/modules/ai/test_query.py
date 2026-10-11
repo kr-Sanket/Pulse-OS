@@ -35,6 +35,7 @@ class FakeRetrieval:
         patient_id,
         category_ids,
         query,
+        visibility,
         limit,
     ):
         self.calls.append(
@@ -42,6 +43,7 @@ class FakeRetrieval:
                 "patient_id": patient_id,
                 "category_ids": category_ids,
                 "query": query,
+                "visibility": visibility,
                 "limit": limit,
             }
         )

@@ -8,7 +8,7 @@ from app.modules.auth.domain import AuthenticatedUser
 from .context import AssembledContext, ContextAudience, assemble_context
 from .generation import AnswerGenerator, GeneratedAnswer
 from .retrieval import RetrievedChunk
-from .service import AIRetrievalService, RetrievalScope
+from .service import AIRetrievalService, RetrievalScope, RetrievalVisibility
 
 DEFAULT_EMPTY_EVIDENCE_ANSWER: Final[str] = (
     "The available medical records do not contain information regarding the requested topic."
@@ -61,6 +61,7 @@ class AIQueryService:
             patient_id=patient_id,
             category_ids=category_ids,
             query=query,
+            visibility=RetrievalVisibility.GRANTEE,
             limit=limit,
         )
 
@@ -197,6 +198,7 @@ class AIQueryService:
             patient_id=patient_id,
             category_ids=category_ids,
             query=query,
+            visibility=RetrievalVisibility.OWNER,
             limit=limit,
         )
 

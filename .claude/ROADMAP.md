@@ -149,7 +149,10 @@ as the only provider** (ADR-028, Gemini removed); three endpoints (clinician sea
 answer, patient copilot answer) with the `ai_generate` rate limit and `SUMMARY_GENERATED`
 auditing; the doctor `AIAssistantPanel` and patient `HealthCopilotPanel`. **Not built:** OCR of
 uploads and the worker pipeline, embeddings/pgvector, cached patient summary, timeline, report
-explainer, redaction layer. Known gap: AI retrieval does not honour hidden records
+explainer, redaction layer. Hidden-record fix (2026-10-11): clinician retrieval now excludes
+patient-hidden records in the query; the patient copilot keeps owner access (AI_ARCHITECTURE.md).
+It was validated locally on SQLite and a disposable PostgreSQL 16.15; GitHub CI has not run on
+it. Still open: the clinician search endpoint is neither audited nor rate-limited
 (SECURITY.md). The gate as written (timeline, summary, redaction, uploaded reports) needs either
 the missing features or a PO-approved restatement; no evaluation results exist (RC-3).
 

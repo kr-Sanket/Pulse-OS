@@ -12,7 +12,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
   sole provider; redaction revisited) and ADR-029 (lexical retrieval; pgvector deferred) record the
   Product Owner's direction; ADR-030 (Synthea FHIR import) is **proposed**. ADR-002, ADR-007 and
   ADR-008 carry status amendments; no historical decision text was rewritten. The documentation
-  also records a found gap: AI retrieval does not honour hidden records (not yet fixed).
+  also records a found gap: AI retrieval did not honour hidden records (fixed in this change set;
+  see Security).
 
 ### Added
 - **Opt-in PostgreSQL CI job and migration tests (2026-10-11; lands with this change set).** A
@@ -40,6 +41,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 ### Removed
 - **Gemini provider (`c95494a`, 2026-10-10).** Local Ollama (Qwen3:8B) is the only supported
   generation provider (ADR-028).
+
+### Security
+- **Doctor-facing AI retrieval excludes patient-hidden records (2026-10-11; lands with this change
+  set).** Clinician search and answer generation filter `is_hidden` in the database query, before
+  scoring and the result limit. Hidden records no longer reach clinician results, generation
+  context or citations. Hiding and unhiding take effect without re-indexing. The patient's own
+  copilot is unchanged and still includes their hidden records. Regression tests passed locally
+  on SQLite and on a disposable PostgreSQL 16.15; GitHub CI has not run on it. Still open: the
+  clinician search endpoint is neither audited nor rate-limited (SECURITY.md).
 
 ### Added
 - **Patients can hide and unhide their own records** — `PATCH /api/v1/records/{record_id}/visibility`.

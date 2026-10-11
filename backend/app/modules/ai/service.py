@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from datetime import date
+from enum import StrEnum
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -128,6 +129,18 @@ class RecordDateLookup(Protocol):
     ) -> Mapping[UUID, date]: ...
 
 
+class RetrievalVisibility(StrEnum):
+    """Which records a retrieval may draw on — chosen by the caller, never defaulted.
+
+    ``GRANTEE``: a consented clinician; records the patient has hidden are excluded.
+    ``OWNER``: the patient querying their own records; hidden records stay included, as they
+    do in every other owner surface (docs/DOMAIN_MODEL.md §3).
+    """
+
+    GRANTEE = "GRANTEE"
+    OWNER = "OWNER"
+
+
 class AIRetrievalService:
     """Deterministic retrieval over consent-scoped AI chunks."""
 
@@ -151,16 +164,29 @@ class AIRetrievalService:
         patient_id: UUID,
         category_ids: frozenset[UUID],
         query: str,
+        visibility: RetrievalVisibility,
         limit: int = 10,
     ) -> list[RetrievedChunk]:
-        """Search only within the categories already authorized."""
+        """Search only within the categories already authorized.
+
+        ``visibility`` is required: a default would silently pick one party's policy for
+        the other. The hidden-record filter runs in the query, before scoring and ``limit``.
+        """
         if limit <= 0:
             return []
 
-        chunks = await self._repository.search_chunks(
-            patient_id=patient_id,
-            category_ids=category_ids,
-        )
+        if visibility is RetrievalVisibility.GRANTEE:
+            chunks = await self._repository.search_grantee_chunks(
+                patient_id=patient_id,
+                category_ids=category_ids,
+            )
+        elif visibility is RetrievalVisibility.OWNER:
+            chunks = await self._repository.search_chunks(
+                patient_id=patient_id,
+                category_ids=category_ids,
+            )
+        else:
+            raise ValueError(f"unsupported retrieval visibility: {visibility!r}")
 
         if not chunks:
             return []

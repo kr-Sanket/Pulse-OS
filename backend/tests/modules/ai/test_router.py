@@ -18,6 +18,7 @@ from app.modules.ai.providers.ollama import (
 )
 from app.modules.ai.query import AIQueryService
 from app.modules.ai.retrieval import RetrievedChunk
+from app.modules.ai.service import RetrievalVisibility
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.fake import FakeAuthProvider
 from app.modules.consent.dependencies import (
@@ -293,6 +294,7 @@ class FakeRetrieval:
         patient_id: UUID,
         category_ids: frozenset[UUID],
         query: str,
+        visibility: RetrievalVisibility,
         limit: int = 10,
     ) -> list[RetrievedChunk]:
         self.calls.append(
@@ -300,6 +302,7 @@ class FakeRetrieval:
                 "patient_id": patient_id,
                 "category_ids": category_ids,
                 "query": query,
+                "visibility": visibility,
                 "limit": limit,
             }
         )
