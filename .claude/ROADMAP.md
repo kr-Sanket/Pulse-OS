@@ -142,17 +142,35 @@ test?" correctly; doctor summary generates in <15s warm / cached afterwards; red
 ## M6 — Blockchain Anchoring (Month 6)
 
 **Carried forward from M3:** the `AuditAnchor` interface itself (ADR-004 placed it at M3 so M6
-would be a plug-in; it was not built). **Prerequisite before any anchored data exists:** swap the
-injected event hasher from SHA-256 to keccak256 per ADR-019 — `audit_logs` is append-only, so
-digests written under the old algorithm can never be recomputed.
+would be a plug-in) — since built: the port, `LocalChainAuditAnchor` and migration 0006
+(`b17c2f0`). **Prerequisite before any anchored data exists — done (M6.1):** new audit events
+are hashed with Keccak-256 as `hash_version` 3 per ADR-019's resolution; v1/v2 rows keep their
+SHA-256 digests (`audit_logs` is append-only) and are verifiable locally only.
 
-Solidity consent-anchor contract on Polygon Amoy; `AuditAnchor` interface + `PolygonAuditAnchor`
-implementation; reconciliation job (verify DB audit log against chain); graceful degradation
-when testnet is down (queue + retry, never block consent flow). See BLOCKCHAIN_ARCHITECTURE.md.
+**Architecture: ADR-027 — Merkle-batched anchoring of verified v3 events**, one opaque 32-byte
+commitment per batch on-chain (amends ADR-004 decision 2; no per-event on-chain anchoring). Stages:
 
-**Gate:** every consent grant/revoke and record access produces an on-chain anchor (hash only);
-a verification script proves a tampered DB row is detectable; consent flow still works with the
-chain offline.
+- **M6.1 — done:** Keccak-256 audit digests as `hash_version` 3 (ADR-019 Resolution).
+- **M6.2 / M6.2.1 — done:** `consent/merkle.py` reference implementation, pinned vectors, proof
+  verification against trusted index/count.
+- **M6.3 — committed in `e3c0fe1` (PostgreSQL integration tests in `1ce4c14`); M6.1–M6.3
+  accepted with deferred items:** additive batch and membership tables (migration 0007);
+  deterministic sealing (max 256 leaves, 300 s interval, 900 s backlog threshold — all
+  configurable); commitment computation with pinned vectors; database-only reconciliation; v3
+  events refused by the old per-event workflow; migration and concurrency/idempotency tests. No
+  chain, scheduler, API or CLI. Reported validation (2026-10-11, historical results): full backend
+  run 1045 passed, 2 skipped; the 2 opt-in PostgreSQL tests and a manual migration validation
+  reported passing against a disposable scratch PostgreSQL.
+- **M6.4 — not authorized.**
+- **Later (deferred by ADR-027):** receipts and retry-safe submission; Solidity commitment registry
+  and `PolygonAuditAnchor` on Amoy; scheduler; reconciliation CLI with chain-side checks; integrity
+  API/frontend; graceful degradation when the testnet is down (never block consent flow). See
+  BLOCKCHAIN_ARCHITECTURE.md.
+
+**Gate:** every v3 consent grant/revoke and record-access event is covered by a batch whose
+commitment is anchored on-chain (hash only, ADR-027); a verification script proves a tampered DB
+row is detectable; consent flow still works with the chain offline. **Gate status: not complete**
+— on-chain batch submission, receipts and chain-side verification remain deferred.
 
 ## M7 — Hardening, Deploy, Paper (Month 7)
 

@@ -36,11 +36,25 @@ health timelines, a report explainer, and a Health Copilot chat.
 - **Next:** the **`notifications` module** (access requests still arrive silently — the last M4
   backend item), then **SYSTEM_ADMIN provisioning** (nothing can call `POST /hospitals/{hid}/verify`,
   so a self-registered hospital is stranded `PENDING`), then **QR identity**. A first Playwright
-  E2E over the consent journey is the cheapest demo insurance. **Not started, do not describe as
-  working:** M5 AI/RAG (`workers/tasks.py` still only logs), M6 blockchain (no `AuditAnchor`
-  interface exists), M7 hardening/deploy.
-- **Health:** **653 backend tests at 97% coverage**, mypy strict + ruff clean; **463 web tests**,
-  tsc + eslint + prettier clean; 3/3 web builds; CI green on both.
+  E2E over the consent journey is the cheapest demo insurance. **Partially built:** M5 AI/RAG —
+  `app/modules/ai` exists (ingestion, consent-scoped retrieval, Ollama-only generation, clinical
+  assistant, patient copilot) but `workers/tasks.py` still only logs; M6 blockchain per
+  **ADR-027** (Merkle-batched v3 anchoring) — the `AuditAnchor` port, network-free
+  `LocalChainAuditAnchor`, migration 0006, Keccak-256 v3 digests (M6.1), `consent/merkle.py`
+  (M6.2/M6.2.1) and M6.3 (migration 0007 batch/membership tables, deterministic sealing,
+  commitments, database-only reconciliation, v3 refused by the per-event workflow) are committed
+  in `e3c0fe1` (implementation), with the opt-in PostgreSQL integration tests in `1ce4c14`.
+  M6.1–M6.3 are accepted with deferred items. **The M6 gate is not complete. Not built, do not
+  describe as working:** on-chain batch submission, receipts, chain-side verification,
+  contract, chain adapter, scheduler, reconciliation CLI; M7 hardening/deploy. **M6.4 is not
+  authorized.**
+- **Health (reported results, 2026-10-11 — not re-run by this documentation update):** most
+  recent full backend run **1045 passed, 2 skipped** (the 2 skips are the opt-in PostgreSQL
+  tests); those 2 PostgreSQL tests and a manual migration validation were reported passing
+  against a disposable scratch PostgreSQL. Repo-wide `ruff check` (39), `ruff format --check`
+  (20 files) and `mypy` (158 lines, mostly AI tests) report pre-existing findings, so those CI
+  steps are not green. Web figures last recorded at session 016 and not re-run since: 463 web
+  tests, tsc + eslint + prettier clean, 3/3 builds.
 - **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 016 — read this second, update it before ending every session.
 
 ## Architecture in One Paragraph

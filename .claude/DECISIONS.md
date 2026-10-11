@@ -71,7 +71,7 @@ patient code), but share components, tokens, and the client.
 ---
 
 ## ADR-004 — Hash-only on-chain consent anchoring behind a pluggable interface
-**Date:** 2026-07-20 · **Status:** Accepted
+**Date:** 2026-07-20 · **Status:** Accepted — decision 2 amended by ADR-027 (2026-10-11)
 
 **Context:** Plan says "consent recorded permanently on blockchain" (Polygon Amoy, Month 6),
 while the consent service ships Month 3–4. Public chains must never hold PHI — even encrypted —
@@ -83,6 +83,9 @@ and testnets are unreliable and get deprecated.
 2. An `AuditAnchor` interface exists from Month 3 with a DB-backed implementation; Month 6 adds a
    `PolygonAuditAnchor` that writes `keccak256(canonical_event_json)` + event type + timestamp —
    **hashes only, never identifiers or PHI** on-chain.
+   **Amended by ADR-027 (2026-10-11):** the per-event on-chain payload is replaced by one opaque
+   32-byte commitment per Merkle batch of verified v3 events; no event type, event UUID or
+   per-event digest goes on-chain. The interface and "hashes only" principle stand.
 3. Anchoring is asynchronous (queued) and non-blocking: chain downtime never delays or blocks a
    consent decision. A reconciliation job detects unanchored events and tampered rows.
 
@@ -375,7 +378,8 @@ defines); no denial record at all (fails the gate).
 ---
 
 ## ADR-019 — SHA-256 event digests until keccak256 is available (M6)
-**Date:** 2026-09-01 · **Status:** Accepted (M3, temporary — must be resolved before M6)
+**Date:** 2026-09-01 · **Status:** Accepted (M3, temporary) — **resolved at M6.1 (2026-10-11)**, see
+Resolution below
 
 **Context:** ADR-004 specifies `keccak256(canonical_event_json)` because that is the digest a
 Solidity contract verifies on-chain. Python's `hashlib` ships NIST SHA-3, which uses different
@@ -399,6 +403,21 @@ on-chain-comparable. Tracked in TODO.md as an M6 prerequisite rather than an M6 
 surface carried for three milestones before use); store both digests (doubles the column set for
 a transitional period); defer hashing entirely (no tamper evidence during M3–M5, and ADR-004's
 RC-2 experiment would have nothing to demonstrate against).
+
+**Resolution (M6.1, 2026-10-11):** keccak256 landed as **`hash_version` 3**, in the slot ADR-023
+decision 2 reserved for it. v3 hashes v2's canonical payload byte for byte with Ethereum
+Keccak-256 (`pycryptodome`'s `Crypto.Hash.keccak`; `hashlib.sha3_256` is the NIST variant and is
+not used). New events are written under v3; v1 and v2 rows keep their SHA-256 digests and verify
+under them — nothing is rehashed or relabelled. Because `hash_version` already selects the whole
+scheme (ADR-023), the algorithm is now resolved from the row's version through one table in
+`consent/service.py` (`event_hasher_for`) rather than injected: the `event_hasher` constructor seam
+described above was removed, since a single injected function could hash a row under an algorithm
+other than the one its version names. An unknown version is refused (`UnsupportedHashSchemeError`)
+and verifies as `EVENT_ALTERED`, never as a default scheme. **Compatibility boundary:** only v3
+digests are on-chain-comparable; v1/v2 rows remain verifiable locally only. Only verified v3
+digests may enter on-chain anchoring, which per ADR-027 publishes one commitment per Merkle batch
+of v3 digests rather than the digests themselves; admitting anything else requires a separately
+designed and approved migration strategy.
 
 ---
 
@@ -657,6 +676,15 @@ project had already ruled on this exact problem once, on `consent_requests.reque
    `hash_version` is deliberately **outside** the hashed payload, and that is safe because
    any mis-selection is self-detecting: recomputing a v2 row under v1 drops a key the digest
    covered, and a v1 row under v2 adds one it did not. Both directions are tested.
+   **Qualified (2026-10-11, M6.3):** "self-detecting" holds only when the stored digest is left
+   unchanged *and* something recomputes the row. A relabel alone (e.g. a v3 row set to v2 with its
+   Keccak digest untouched) no longer recomputes and is reported once checked — reconciliation
+   now recomputes every unbatched event under its own version (ADR-027 decision 13) and per-event
+   anchoring refuses such rows. A relabel **combined with a consistent digest rewrite** under the
+   new version is, on current database evidence, indistinguishable from a genuine event of that
+   version: nothing in the row records which version it was written under. Only sealing (and, once
+   commitments are on-chain, the chain) or database-level append-only enforcement — deferred to
+   M7 hardening — closes that window.
 
 3. **Legacy rows keep NULL and their digests.** No backfill: the only available source is the
    forbidden join. Hospital-scoped queries therefore begin at migration 0005 — a documented
@@ -807,6 +835,224 @@ projection was missing it.
 **Consequence:** the hospital named against pre-0005 events disappears from the patient's view,
 replaced by an honest "unattributed". That is a visible regression in coverage and a correction
 in accuracy — the previous value was a guess. Attribution is complete from September 2026.
+
+---
+
+## ADR-026 — (placeholder) Deferred per-event audit anchoring — text not yet written
+**Status:** Documentation follow-up — **the original decision text has never existed in this file
+and has not been recovered.** Commit `b17c2f0` (2026-10-04, "add deferred blockchain anchoring")
+cites "ADR-026" in `consent/anchoring.py`, `anchor_service.py`, `models.py`, `repository.py`,
+`router.py`, `schemas.py`, `errors.py`, `dependencies.py` and migration 0006, but no ADR was
+recorded. Writing it is a separate task: it must document only behaviour verifiable in that code,
+mark any principle inferred from code comments as inferred, and go to the Product Owner for
+approval. ADR-027 lists the inferred behaviours it preserves and the one it supersedes.
+
+---
+
+## ADR-027 — Merkle-batched blockchain anchoring of v3 audit digests
+**Date:** 2026-10-11 · **Status:** Accepted (M6; approved by the Product Owner 2026-10-11) ·
+**Amends:** ADR-004 decision 2 · **Clarifies:** ADR-019 Resolution · **Builds on:** ADR-023 and
+the existing anchoring behaviour cited as ADR-026 (unwritten — see its placeholder)
+
+**Context:** ADR-004 makes PostgreSQL the authoritative audit store and a public chain a
+tamper-evidence layer — hashes only, anchoring asynchronous and never on the clinical path — and
+sketched one on-chain write per event carrying the event digest, event type and timestamp. That
+shape costs gas in proportion to clinical activity, publishes the timing and type of each
+patient's care, and cannot pass through the anchor port that exists in code:
+`AuditAnchor.submit(digest)` accepts a bare 64-hex digest only (`require_digest`). M6.1 made new
+audit events Keccak-256 (`hash_version` 3, ADR-019 Resolution); v1/v2 stay SHA-256 and locally
+verifiable. M6.2/M6.2.1 added `consent/merkle.py`, a reviewed Merkle reference implementation with
+pinned vectors and trusted-metadata proof verification. This ADR decides how v3 events are batched,
+committed, persisted, published and reconciled.
+
+**Decision:**
+
+1. **Scope.** Only verified v3 audit events are chain-anchored, in **batches** — one Merkle root
+   per batch, one 32-byte commitment per batch on-chain. Per-event on-chain anchoring is not
+   built. No healthcare request waits on sealing, submission or reconciliation (ADR-004
+   decision 3 stands).
+
+2. **Versioned hashing.** v1/v2 digests remain SHA-256, verified under each row's own scheme
+   (ADR-023); they are never rehashed, relabelled, deleted or admitted to a batch. A row enters a
+   batch only through `V3Batch`, which requires a non-null UUID `id`, `hash_version == 3` and
+   `recompute_event_hash(row) == row.event_hash`, and refuses the whole batch otherwise.
+   `MerkleTree` over raw digests is never used directly for chain-bound data.
+
+3. **Merkle construction — protocol version 1.** `consent/merkle.py` is the reference
+   implementation; any other implementation, Solidity included, must reproduce its pinned vectors
+   byte for byte. Keccak-256 (never SHA3-256). Leaf `keccak256(0x00 ‖ d)`, `d` = the 32 raw bytes of
+   the event's v3 `event_hash`. Node `keccak256(0x01 ‖ left ‖ right)`, positional children (not
+   sorted). An unpaired last node is promoted unchanged, never duplicated (equivalent to RFC 6962's
+   tree hash). Empty batches refused; a single-leaf root is `keccak256(0x00 ‖ d)`; duplicate
+   digests and duplicate event ids refused.
+
+4. **Order.** Leaves are ordered `(occurred_at UTC ASC, id ASC)` once, at sealing, and the
+   position is persisted as `leaf_index`. Thereafter the persisted index is authoritative; nothing
+   re-sorts.
+
+5. **Batch commitment — the only value published.**
+   `C = keccak256(0x02 ‖ uint8 protocol_version ‖ uint64 batch_number ‖ uint32 leaf_count ‖ bytes32 root)`,
+   packed and big-endian (46 input bytes); Solidity
+   `keccak256(abi.encodePacked(bytes1(0x02), uint8(v), uint64(n), uint32(c), root))`. `0x02` is
+   distinct from the leaf and node prefixes. `C` binds the protocol version, sequence number and
+   leaf count, so none of them rests on a proof-supplied claim, and it is a 64-hex value, so the
+   digest-only `AuditAnchor.submit(digest)` port is preserved unchanged. Pinned vectors (computed
+   with pycryptodome and cross-checked with OpenSSL's `keccak-256`, built on `merkle.py`'s pinned
+   roots):
+
+   | v | n | c | root | C |
+   |---|---|---|---|---|
+   | 1 | 1 | 5 | `9649d2b3…d0cb1952` | `7d2d9dd7205f9adb892bd361857652127df7e954f3132228e7724aeb53476c36` |
+   | 1 | 2 | 1 | `5f61df14…3188e313` | `dcf485fefd095822e3191e95048dfe944a8dcdc7e0412397a9fb1c53af8caa4c` |
+
+6. **Proof verification.** A Merkle proof establishes membership under a root and nothing more;
+   `MerkleProof.leaf_index`/`leaf_count` are claims. Positions and batch sizes are authoritative
+   only from persisted batch metadata, passed as `trusted_leaf_index`/`trusted_leaf_count`. Full
+   verification of one event: recompute its v3 digest from the row → verify the proof with the
+   trusted index and count → recompute `C` from persisted `(protocol_version, batch_number,
+   leaf_count, root)` → compare with the stored commitment and, once a receipt exists, the
+   on-chain value. No inclusion proof is presented as evidence that a batch is complete.
+
+7. **Existing per-event anchors.** `audit_anchors` and every historical row stay readable; none is
+   deleted or rewritten. When batch sealing is introduced (M6.3), the old per-event workflow
+   (`AuditAnchorService.anchor_event` / `anchor_pending`) stops admitting v3 events, so no new
+   per-event anchor is created for one. Nor is one created for any event whose `hash_version` is
+   unsupported or whose stored digest does not recompute under it. Three kinds of evidence are
+   kept distinct and never substituted for one another:
+   - **Historical per-event anchor verification.** A per-event `audit_anchors` row of any hash
+     version — including a v3 event anchored per-event before M6.3 — keeps verifying through the
+     existing per-event path (`AuditAnchorService` verdicts) as *historical per-event evidence*.
+     A `local-dev` anchor is a simulation and proves no public-chain inclusion.
+   - **Merkle batch membership.** Established only by a membership row checked against its sealed
+     batch's root using the persisted, trusted `leaf_index` and `leaf_count`.
+   - **On-chain verification of a batch commitment.** Established only by comparing the stored
+     commitment with the on-chain value referenced by the batch's receipt (deferred stage).
+
+   A v3 event's *batch* anchoring status is derived from its batch membership, the batch metadata
+   and the batch's receipt — never inferred from a per-event anchor. A per-event verdict is never
+   presented as evidence of batch membership or of on-chain commitment verification, and batch
+   membership is never presented as on-chain verification. Until the integrity API is updated
+   (deferred), the existing per-event path reads `NOT_ANCHORED` for a batched v3 event that has no
+   historical per-event anchor: accurate but incomplete, and not a verdict on the batch.
+
+8. **Persistence (M6.3; additive tables only — `audit_logs` and `audit_anchors` unaltered).**
+   *Batch* (immutable once written): `id`, `batch_number` (UNIQUE, contiguous from 1, assigned at
+   sealing), `protocol_version`, `hash_version` (= 3), `leaf_count` (1 ≤ c ≤ configured maximum),
+   `root`, `commitment`, the covered `occurred_at` range, `created_at`. *Membership* (immutable):
+   `batch_id`, `audit_log_id` (**UNIQUE** — one batch per event, ever), `leaf_index` (UNIQUE per
+   batch, contiguous `0..leaf_count-1`), `digest` as sealed. *Receipt* (append-only; deferred
+   stage): `batch_id`, `network`, `reference` (tx hash), block number/time where available,
+   `anchored_at`, UNIQUE `(batch_id, network)`.
+
+9. **Verdicts are computed; evidence is persisted.** Batches, memberships and receipts are
+   verification *evidence*, written once. Integrity verdicts stay computed on demand and are never
+   stored as a mutable status. If reconciliation results are ever persisted, they are append-only
+   evidence records, not a status column.
+
+10. **Sealing.** Asynchronous; never blocks a healthcare request. Configurable settings, initial
+    values: **maximum 256 leaves per batch**, **sealing interval 300 seconds**, **backlog threshold
+    900 seconds**. A sealing run selects unbatched v3 events in canonical order up to the maximum,
+    builds a `V3Batch`, assigns the next `batch_number`, computes `C`, and writes batch and members
+    in **one transaction**. No eligible events → nothing written; empty batches are never created.
+    UNIQUE `batch_number` and `audit_log_id` make a concurrent sealer fail and roll back rather than
+    double-batch; a refused batch writes nothing. The scheduler that invokes sealing is not part of
+    M6.3.
+
+11. **Submission (deferred stage; requirements fixed now).** Separate from sealing and retry-safe:
+    before resubmitting, the adapter checks whether `C` is already recorded on-chain; a duplicate of
+    the same `C` is success. A batch whose submission keeps failing stays sealed and unanchored —
+    never re-sealed or edited. Failures are logged with ids only.
+
+12. **On-chain privacy boundary.** On-chain: the commitment `C`, and one minimal event from a
+    write-restricted registry carrying `C` and at most what the contract needs to index it. Never
+    on-chain: PHI, patient or Health IDs, event UUIDs, event types, raw audit records, per-event
+    digests, leaf hashes or Merkle roots. **Acknowledged:** the transaction's sender address and
+    its timing (block time, inclusion) are public and observable — they reveal the platform's
+    anchoring cadence, not who or what was involved. Logs and errors carry ids only.
+
+13. **Database-only reconciliation (M6.3; a library, no CLI).** Reports: **backlog** — v3 events
+    without membership older than the backlog threshold (not tampering by itself); **membership
+    integrity** per batch — member count = `leaf_count`, contiguous indices, every member's audit
+    row exists and recomputes to the sealed digest, root rebuilt in `leaf_index` order equals the
+    stored root, stored `C` equals recomputed `C`; **gaps** — `batch_number` contiguity; **late
+    arrivals** — v3 events whose `occurred_at` falls within or before an already sealed range
+    (backdated inserts); **unbatched event integrity** — every unbatched event, of any version, is
+    recomputed under its own stored version: `UNSUPPORTED_HASH_VERSION` for a version no scheme
+    defines (never reinterpreted), `EVENT_DIGEST_MISMATCH` for a stored digest that does not
+    recompute (an edited row, or a relabel such as v3 → v2 without a matching digest); a
+    consistent v1/v2 event is not a finding. Chain-side checks (stored `C` vs on-chain value;
+    orphaned on-chain commitments) come with receipts. **Accepted limitations:** an event deleted
+    *before* sealing leaves no trace, and an event relabelled *with* a consistently rewritten digest
+    before sealing is indistinguishable from a genuine event of that version (ADR-023, qualified);
+    the sealing interval bounds both windows, and database-level append-only enforcement (M7) would
+    close them.
+
+14. **Solidity requirements (no contract in this ADR).** `abi.encodePacked` exactly as in
+    decision 5, never `abi.encode` (it pads). **Do not use OpenZeppelin `MerkleProof` /
+    `StandardMerkleTree`** — sorted pairs (`commutativeKeccak256`), no node prefix and
+    double-hashed leaves make it incompatible. Any on-chain proof verifier must handle promotion —
+    derive sides from `(leafIndex, leafCount)` as `_path_shape` does, or take them explicitly;
+    index bits alone are wrong (`(4, 5)` has one step, not three). Reject `leafCount == 0` and
+    `leafIndex >= leafCount`. Take batch metadata from the commitment's preimage, never from a
+    proof. The minimal contract is a write-restricted commitment registry; on-chain proof
+    verification is optional and deferred.
+
+**Existing behaviour cited as ADR-026 — what this ADR preserves and supersedes.** ADR-026 is
+unwritten; the behaviours below are *inferred from code and its comments* (commit `b17c2f0`), not
+from a recorded decision.
+
+| Inferred existing behaviour | Under ADR-027 |
+|---|---|
+| Anchoring is deferred, never inline in a clinical request | **Preserved** (decision 10) |
+| Integrity verdicts are computed on demand, never stored as a status | **Preserved** (decision 9) |
+| Anchors are append-only evidence; one anchor per event, enforced by UNIQUE `audit_log_id` | **Preserved** in form — membership has UNIQUE `audit_log_id` (decision 8) |
+| No backfill that misstates when an event was witnessed | **Preserved** — pre-M6.3 v3 rows are sealed by the first run with that run's time; v1/v2 never batched |
+| No endpoint that triggers anchoring; no endpoint that verifies an arbitrary hash | **Preserved** — no API change |
+| Patient verifies only events of their own trail | **Preserved** — no API change |
+| `LocalChainAuditAnchor` is a network-free simulation without independent immutability | **Preserved** |
+| Per-event anchoring: every event gets its own `audit_anchors` row via the sweep | **Superseded for v3 events** — batch membership + commitment instead; existing rows stay readable (decision 7) |
+
+**Alternatives considered:** per-event anchoring (ADR-004's sketch) — gas grows with activity,
+leaks per-event timing and type, would widen the digest-only port; rejected. Structured on-chain
+fields `(batchNumber, root, leafCount, protocolVersion)` — more legible on an explorer but changes
+the port and publishes batch sizes; rejected for `C`. Sorted-pair (OpenZeppelin-style) trees —
+cannot express positions and conflict with the reference implementation; rejected. Bitcoin-style
+odd-node duplication — `[a,b,c]` and `[a,b,c,c]` collide; rejected. Anchoring v1/v2 digests —
+SHA-256, not verifiable by a Solidity contract, and would mix schemes in one protocol; rejected.
+
+**Risks:** the pre-sealing window (decision 13); Amoy deprecation or outage (chain settings are
+configuration, receipts are retry-safe, the local adapter works offline); key custody (environment
+secret, testnet funds only); SQLite-vs-Postgres differences in UUID ordering, timestamps and
+UNIQUE races — at least one Postgres integration run is required before the M6 gate; append-only
+is enforced by convention, with database privileges/triggers an operations item
+(docs/DATABASE_DESIGN.md principle 3).
+
+**Testing strategy:** `merkle.py` vectors and the commitment vectors above are pinned and must be
+reproduced by the contract's tests. Sealing: v3-only admission, contiguous numbering, unique
+membership, a concurrent sealer losing cleanly, refusal writes nothing, no empty batch, maximum
+enforced, per-event workflow refusing v3. Reconciliation: one tamper case per finding (edited row,
+member, root, commitment; deleted member; batch-number gap; backdated insert). Migration
+upgrade/downgrade in `test_alembic`. Existing integrity and anchoring tests stay green or are
+updated only where decision 7 deliberately changes v3 behaviour.
+
+**Migration considerations:** additive tables only, chained from the current head
+(`aedb0169a4eb`); no backfill; v1/v2 rows remain outside batches permanently; downgrade drops only
+the new tables.
+
+**M6.3 scope (approved):** additive batch and membership tables; deterministic sealing; commitment
+computation with pinned vectors; database-only reconciliation; the decision-7 refusal of v3 events
+in the per-event workflow; migration and concurrency/idempotency tests.
+
+**Deferred:** receipts and submission; Polygon Amoy adapter, wallet handling, gas policy; Solidity
+contract and deployment; scheduler (arq cron or operator-run); reconciliation CLI and chain-side
+checks; public API and frontend changes (closing the decision-7 transitional gap; presenting v1/v2
+rows that will never be anchored); on-chain proof verification; database-level append-only
+enforcement; writing ADR-026.
+
+**Consequences:** one transaction per batch rather than per event; the chain shows opaque 32-byte
+commitments plus unavoidable sender and timing metadata; every v3 event is verifiable end to end
+against persisted, authoritative metadata; completeness is a reconciliation result, never a proof
+property; the ADR-004 anchor port is unchanged.
 
 ---
 
