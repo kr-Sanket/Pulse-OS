@@ -116,10 +116,10 @@ class PatientProfileUpdateRequest(RequestModel):
         assert self.full_name is not None
         return self.full_name
 
-    def date_of_birth_change(self) -> date | None | Unset:
+    def date_of_birth_change(self) -> date | Unset | None:
         return self.date_of_birth if "date_of_birth" in self.model_fields_set else UNSET
 
-    def gender_change(self) -> Gender | None | Unset:
+    def gender_change(self) -> Gender | Unset | None:
         return self.gender if "gender" in self.model_fields_set else UNSET
 
 

@@ -95,8 +95,8 @@ class PatientService:
         user_id: UUID,
         *,
         full_name: str | Unset = UNSET,
-        date_of_birth: date | None | Unset = UNSET,
-        gender: Gender | None | Unset = UNSET,
+        date_of_birth: date | Unset | None = UNSET,
+        gender: Gender | Unset | None = UNSET,
     ) -> Patient:
         """Change the caller's own profile. Partial: an omitted field is left alone.
 
