@@ -5,7 +5,7 @@
 // a Health ID arriving in the URL (from the dashboard's search card) runs immediately.
 
 import { FolderOpen, Search } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { SectionCard } from "@/components/shell/SectionCard";
@@ -28,7 +28,21 @@ export function PatientSearchPage() {
   const { resource } = useDoctorProfile();
   const clinician = resource.status === "ready" ? resource.data : null;
   const identity = clinician?.kind === "registered" ? toIdentityView(clinician.profile) : null;
-  const request = useAccessRequest();
+
+  // A search that resolved to a real patient — whether or not they hold anything — is also
+  // the moment to find out whether this clinician already has access to them. Both outcomes
+  // are real patients; only "error" and the pre-search states are not.
+  const identified = outcome.kind === "found" || outcome.kind === "none" ? outcome.healthId : null;
+  const granted = useGrantedRecords(identified);
+
+  const grantedCategoryCodes = useMemo(() => {
+    if (!granted.outcome || granted.outcome.kind === "no-grant") {
+      return new Set<string>();
+    }
+    return new Set<string>(granted.outcome.categoryCodes);
+  }, [granted.outcome]);
+
+  const request = useAccessRequest(grantedCategoryCodes);
 
   // A new search is a new patient: nothing selected, no half-written draft carried over.
   const startSearch = (healthId: string) => {
@@ -40,13 +54,10 @@ export function PatientSearchPage() {
   const chosenCategories =
     found === null
       ? []
-      : found.categories.filter((category) => request.selected.has(category.code));
+      : found.categories
+          .filter((category) => request.selected.has(category.code))
+          .filter((category) => !grantedCategoryCodes.has(category.code));
 
-  // A search that resolved to a real patient — whether or not they hold anything — is also
-  // the moment to find out whether this clinician already has access to them. Both outcomes
-  // are real patients; only "error" and the pre-search states are not.
-  const identified = outcome.kind === "found" || outcome.kind === "none" ? outcome.healthId : null;
-  const granted = useGrantedRecords(identified);
   // Shown only where there is genuinely something to view. Never disabled: a button a
   // clinician cannot press teaches them nothing about why.
   const grantedScope =
@@ -112,6 +123,7 @@ export function PatientSearchPage() {
         outcome={outcome}
         selection={{
           selected: request.selected,
+          grantedCodes: grantedCategoryCodes,
           onToggle: request.toggleCategory,
           onClear: request.clearSelection,
           onRequestAccess: request.openDialog,

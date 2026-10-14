@@ -13,13 +13,15 @@ import { FolderOpen, Send, ShieldQuestion } from "lucide-react";
 import { ErrorState } from "@/components/common/ErrorState";
 import { IconChip } from "@/components/shell/IconChip";
 import { SectionCard } from "@/components/shell/SectionCard";
-import { Button, Card, CardContent, Checkbox, Label, Skeleton } from "@pulseos/ui";
+import { Badge, Button, Card, CardContent, Checkbox, cn, Label, Skeleton } from "@pulseos/ui";
 
 import type { SearchOutcome } from "@/existence/view";
 
 export interface CategorySelection {
   /** Category codes currently ticked. */
   selected: ReadonlySet<string>;
+  /** Category codes already granted to the clinician. */
+  grantedCodes?: ReadonlySet<string>;
   onToggle: (code: string) => void;
   onClear: () => void;
   onRequestAccess: () => void;
@@ -99,21 +101,48 @@ export function CategoryResults({ outcome, selection }: CategoryResultsProps) {
     >
       <ul className="space-y-1">
         {outcome.categories.map((category) => {
+          const isGranted = selection.grantedCodes?.has(category.code) ?? false;
           const inputId = `category-${category.code}`;
-          const ticked = selection.selected.has(category.code);
+          const ticked = !isGranted && selection.selected.has(category.code);
           return (
             <li key={category.code}>
               <Label
                 htmlFor={inputId}
-                className="hover:bg-accent/40 flex cursor-pointer items-center gap-3.5 rounded-xl px-2 py-2 font-normal transition-colors duration-150"
+                className={cn(
+                  "flex items-center gap-3.5 rounded-xl px-2 py-2 font-normal transition-colors duration-150",
+                  isGranted
+                    ? "cursor-default text-muted-foreground select-none"
+                    : "cursor-pointer hover:bg-accent/40",
+                )}
               >
                 <Checkbox
                   id={inputId}
                   checked={ticked}
-                  onCheckedChange={() => selection.onToggle(category.code)}
+                  disabled={isGranted}
+                  onCheckedChange={() => {
+                    if (!isGranted) {
+                      selection.onToggle(category.code);
+                    }
+                  }}
                 />
-                <IconChip icon={FolderOpen} size="sm" />
-                <span className="text-foreground text-sm font-medium">{category.displayName}</span>
+                <IconChip
+                  icon={FolderOpen}
+                  size="sm"
+                  className={isGranted ? "opacity-60" : undefined}
+                />
+                <span
+                  className={cn(
+                    "text-sm font-medium",
+                    isGranted ? "text-muted-foreground" : "text-foreground",
+                  )}
+                >
+                  {category.displayName}
+                </span>
+                {isGranted ? (
+                  <Badge variant="success" className="text-xs font-medium gap-1">
+                    ✓ Access granted
+                  </Badge>
+                ) : null}
               </Label>
             </li>
           );

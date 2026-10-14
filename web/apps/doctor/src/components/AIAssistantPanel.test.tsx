@@ -21,6 +21,7 @@ vi.mock("@/granted/useGrantedRecords", () => ({
           kind: "loaded",
           patientId: "00000000-0000-0000-0000-000000000001",
           categories: ["Complete Blood Count"],
+          categoryCodes: ["CBC"],
           records: [
             {
               id: "rec-123",
@@ -263,8 +264,8 @@ test("14. Request failure does not expose raw technical details", async () => {
   }
 });
 
-// 15. Existing PatientRecordsPage functionality remains unaffected
-test("15. Existing PatientRecordsPage records list and headers remain unaffected", () => {
+// 15. Existing PatientRecordsPage records list, headers, and repositioned AI assistant panel
+test("15. Existing PatientRecordsPage records list and headers remain unaffected, with AI assistant above records", () => {
   const html = renderToString(
     <MemoryRouter initialEntries={[`/patients/${HEALTH_ID}/records`]}>
       <Routes>
@@ -286,6 +287,17 @@ test("15. Existing PatientRecordsPage records list and headers remain unaffected
 
   // AI Assistant section is also present
   expect(html).toContain("Clinical AI Assistant");
+
+  // Layout order: AI assistant panel appears above the first record card
+  const headingIndex = html.indexOf("Granted records");
+  const badgesIndex = html.indexOf("Complete Blood Count");
+  const aiAssistantIndex = html.indexOf("Clinical AI Assistant");
+  const firstRecordIndex = html.indexOf("TMH Jamshedpur");
+
+  expect(headingIndex).toBeGreaterThan(-1);
+  expect(badgesIndex).toBeGreaterThan(headingIndex);
+  expect(aiAssistantIndex).toBeGreaterThan(badgesIndex);
+  expect(firstRecordIndex).toBeGreaterThan(aiAssistantIndex);
 });
 
 // 16. Regression: Assistant receives internal patient UUID from granted-records outcome, not route Health ID

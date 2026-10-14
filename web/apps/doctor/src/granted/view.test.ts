@@ -4,6 +4,7 @@ import { formatCalendarDate, formatInstantDate } from "@pulseos/ui";
 
 import type { GrantedRecord, GrantedRecordPage } from "./api";
 import {
+  grantedCategoryCodes,
   grantedCategoryNames,
   hasGrant,
   hospitalLabel,
@@ -143,6 +144,7 @@ test("a live grant over an empty patient is a different answer from no grant", (
   expect(outcome).toEqual({
     kind: "granted-empty",
     categories: ["Complete Blood Count"],
+    categoryCodes: ["CBC"],
     patientId: PATIENT_ID,
   });
   expect(outcome.kind).not.toBe("no-grant");
@@ -160,6 +162,7 @@ test("records under a grant load, and the scope is reported beside them", () => 
   }
   expect(outcome.records.map((record) => record.id)).toEqual(["rec-1", "rec-2"]);
   expect(outcome.categories).toEqual(["Complete Blood Count", "MRI Scan"]);
+  expect(outcome.categoryCodes).toEqual(["CBC", "MRI"]);
   expect(outcome.truncated).toBe(false);
   expect(outcome.patientId).toBe(PATIENT_ID);
 });
@@ -175,6 +178,11 @@ test("a full page admits that there is more rather than implying it is everythin
 test("category names keep the vocabulary order the API sent", () => {
   expect(grantedCategoryNames([CBC, MRI])).toEqual(["Complete Blood Count", "MRI Scan"]);
   expect(grantedCategoryNames([])).toEqual([]);
+});
+
+test("category codes keep the vocabulary order the API sent", () => {
+  expect(grantedCategoryCodes([CBC, MRI])).toEqual(["CBC", "MRI"]);
+  expect(grantedCategoryCodes([])).toEqual([]);
 });
 
 // -- wording ---------------------------------------------------------------------------------

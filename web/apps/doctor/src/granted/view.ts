@@ -72,6 +72,11 @@ export function grantedCategoryNames(categories: readonly RecordCategory[]): rea
   return categories.map((category) => category.displayName);
 }
 
+/** The category codes a grant covers, in the vocabulary order the API returned them. */
+export function grantedCategoryCodes(categories: readonly RecordCategory[]): readonly string[] {
+  return categories.map((category) => category.code);
+}
+
 /**
  * What the page renders, given a loaded response.
  *
@@ -82,10 +87,16 @@ export function grantedCategoryNames(categories: readonly RecordCategory[]): rea
  */
 export type GrantedRecordsOutcome =
   | { kind: "no-grant" }
-  | { kind: "granted-empty"; categories: readonly string[]; patientId: string }
+  | {
+      kind: "granted-empty";
+      categories: readonly string[];
+      categoryCodes: readonly string[];
+      patientId: string;
+    }
   | {
       kind: "loaded";
       categories: readonly string[];
+      categoryCodes: readonly string[];
       records: readonly GrantedRecordView[];
       /** True when the patient has more granted records than one page holds. */
       truncated: boolean;
@@ -94,17 +105,19 @@ export type GrantedRecordsOutcome =
 
 export function outcomeFor(page: GrantedRecordPage): GrantedRecordsOutcome {
   const categories = grantedCategoryNames(page.grantedCategories);
+  const categoryCodes = grantedCategoryCodes(page.grantedCategories);
   if (categories.length === 0) {
     // The scope is empty, so `items` is necessarily empty too — the API cannot return a
     // record outside a granted category.
     return { kind: "no-grant" };
   }
   if (page.items.length === 0) {
-    return { kind: "granted-empty", categories, patientId: page.patientId };
+    return { kind: "granted-empty", categories, categoryCodes, patientId: page.patientId };
   }
   return {
     kind: "loaded",
     categories,
+    categoryCodes,
     records: toGrantedRecordViews(page.items),
     truncated: page.nextCursor !== null,
     patientId: page.patientId,

@@ -9,7 +9,7 @@
 // is a mutation a clinician performs. What is shared is everything underneath — the client,
 // the result contract and the error wording (requests/api.ts).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/api";
 
@@ -47,7 +47,7 @@ export interface AccessRequestFlow {
   reset: () => void;
 }
 
-export function useAccessRequest(): AccessRequestFlow {
+export function useAccessRequest(grantedCodes?: ReadonlySet<string>): AccessRequestFlow {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [purpose, setPurpose] = useState("");
@@ -55,10 +55,38 @@ export function useAccessRequest(): AccessRequestFlow {
   // Only surfaced once the clinician has tried to send; an empty form should not scold.
   const [attempted, setAttempted] = useState(false);
 
-  const codes = useMemo(() => [...selected], [selected]);
+  // If access is granted for a previously selected category, remove it from selection.
+  useEffect(() => {
+    if (!grantedCodes || grantedCodes.size === 0) {
+      return;
+    }
+    setSelected((current) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const code of current) {
+        if (grantedCodes.has(code)) {
+          changed = true;
+        } else {
+          next.add(code);
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [grantedCodes]);
+
+  const codes = useMemo(() => {
+    const list = [...selected];
+    if (!grantedCodes || grantedCodes.size === 0) {
+      return list;
+    }
+    return list.filter((code) => !grantedCodes.has(code));
+  }, [selected, grantedCodes]);
   const canRequest = selectionProblem(codes) === null;
 
   function toggleCategory(code: string): void {
+    if (grantedCodes?.has(code)) {
+      return;
+    }
     setSelected((current) => {
       const next = new Set(current);
       if (!next.delete(code)) {

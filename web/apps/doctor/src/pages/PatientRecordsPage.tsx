@@ -12,7 +12,7 @@ import { ArrowLeft, FolderOpen } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ErrorState } from "@/components/common/ErrorState";
-import { Badge, Button, Separator } from "@pulseos/ui";
+import { Badge, Button } from "@pulseos/ui";
 
 import { AIAssistantPanel } from "@/components/AIAssistantPanel";
 import { EmptyGrantedRecords } from "@/granted/components/EmptyGrantedRecords";
@@ -96,6 +96,14 @@ export function PatientRecordsPage({ patientId: propPatientId }: PatientRecordsP
         />
       ) : (
         <>
+          {patientId ? (
+            <AIAssistantPanel
+              patientId={patientId}
+              patientHealthId={healthId}
+              onSelectCitation={handleSelectCitation}
+            />
+          ) : null}
+
           <GrantedRecordList records={outcome.records} patientHealthId={healthId} />
           {outcome.truncated ? (
             <p className="text-muted-foreground text-xs">
@@ -108,16 +116,6 @@ export function PatientRecordsPage({ patientId: propPatientId }: PatientRecordsP
             Select a record to see its details and download the file. Every one you open is recorded
             on the patient's audit trail.
           </p>
-
-          <Separator className="my-8" />
-
-          {patientId ? (
-            <AIAssistantPanel
-              patientId={patientId}
-              patientHealthId={healthId}
-              onSelectCitation={handleSelectCitation}
-            />
-          ) : null}
         </>
       )}
     </div>
