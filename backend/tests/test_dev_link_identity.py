@@ -46,7 +46,7 @@ class FakeSettings:
     """Just the two fields the environment gate reads."""
 
     environment: str = "local"
-    database_url: str = "postgresql+asyncpg://pulseos:pulseos@localhost:5432/pulseos"
+    database_url: str = "postgresql+asyncpg://pulseos:pulseos@localhost:5433/pulseos"
 
 
 def _user(firebase_uid: str, *, email: str = "admin.tmh@demo.pulseos.test") -> Any:

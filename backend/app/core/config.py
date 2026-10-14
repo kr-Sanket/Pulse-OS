@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
-    database_url: str = "postgresql+asyncpg://pulseos:pulseos@localhost:5432/pulseos"
+    database_url: str = "postgresql+asyncpg://pulseos:pulseos@localhost:5433/pulseos"
     redis_url: str = "redis://localhost:6379/0"
 
     # Path to a Firebase service-account JSON (ADR-011). None -> Application Default

@@ -53,11 +53,11 @@ pulse-os/
 - **Two `.env` files:** the root `.env` (created by `make env` from `.env.example`) is read by
   Docker Compose; the API reads `.env` relative to its working directory, i.e. `backend/.env`
   under `make dev-api` (there is no `backend/.env.example` yet — see TODO.md).
-- **PostgreSQL port:** Compose publishes `${POSTGRES_PORT:-5432}:5432`, and `.env.example` sets
-  `POSTGRES_PORT=5432` with a matching `PULSEOS_DATABASE_URL`. If 5432 is taken locally, set a
-  different `POSTGRES_PORT` in the root `.env` **and** point `PULSEOS_DATABASE_URL` at that port
-  in the environment the API reads (some developers keep a local, uncommitted Compose default of
-  5433 for this reason).
+- **PostgreSQL port:** Compose publishes `${POSTGRES_PORT:-5433}:5432`, and `.env.example` sets
+  `POSTGRES_PORT=5433` with a matching `PULSEOS_DATABASE_URL`. The host port defaults to 5433 to
+  avoid collisions with local PostgreSQL instances on the standard port 5432 (e.g. other projects
+  sharing the development machine). If needed, a different `POSTGRES_PORT` can be configured in the
+  root `.env` along with a matching `PULSEOS_DATABASE_URL`.
 - **AI:** the AI endpoints need a reachable Ollama with the configured model
   (`PULSEOS_OLLAMA_BASE_URL`, `PULSEOS_OLLAMA_MODEL`, default `qwen3:8b`). Set
   `PULSEOS_AI_PROVIDER=fake` to run without a model.
