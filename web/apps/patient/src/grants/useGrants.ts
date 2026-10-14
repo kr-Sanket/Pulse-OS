@@ -40,7 +40,7 @@ export interface GrantsResource {
 
 export function useGrants(): GrantsResource {
   const loadGrants = useCallback((signal: AbortSignal) => listGrants(api, signal), []);
-  const grants = useApiResource(loadGrants);
+  const grants = useApiResource(loadGrants, { pollIntervalMs: 15_000, refreshOnFocus: true });
 
   const loadVocabulary = useCallback((signal: AbortSignal) => listCategories(api, signal), []);
   const vocabulary = useApiResource(loadVocabulary);

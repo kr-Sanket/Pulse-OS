@@ -110,3 +110,13 @@ test("a rejected fetch (offline, or an aborted request) is an error result, not 
 
   expect(result.status).toBe("error");
 });
+
+test("deciding a request updates the initiating UI with recorded outcome", async () => {
+  const { client } = stubClient(ok({ requestId: "req-1", requestStatus: "DECIDED" }));
+
+  const result = await decideRequest(client, "req-1", ["CBC"], "approve");
+  expect(result.status).toBe("ready");
+  if (result.status === "ready") {
+    expect(result.data.requestStatus).toBe("DECIDED");
+  }
+});

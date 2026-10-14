@@ -81,9 +81,9 @@ export function useDashboard(): Dashboard {
   const fetchCategories = useCallback((signal: AbortSignal) => loadCategories(api, signal), []);
 
   const records = useApiResource(fetchRecords);
-  const inbox = useApiResource(fetchInbox);
-  const grants = useApiResource(fetchGrants);
-  const trail = useApiResource(fetchTrail);
+  const inbox = useApiResource(fetchInbox, { pollIntervalMs: 20_000, refreshOnFocus: true });
+  const grants = useApiResource(fetchGrants, { pollIntervalMs: 20_000, refreshOnFocus: true });
+  const trail = useApiResource(fetchTrail, { pollIntervalMs: 30_000, refreshOnFocus: true });
   const categories = useApiResource(fetchCategories);
 
   const recordsResource = records.resource;

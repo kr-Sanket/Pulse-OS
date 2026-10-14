@@ -43,6 +43,7 @@ export {
   type Loader,
   type Resource,
   type ApiResourceState,
+  type AutoRefreshOptions,
 } from "./lib/useApiResource";
 export {
   formatCalendarDate,

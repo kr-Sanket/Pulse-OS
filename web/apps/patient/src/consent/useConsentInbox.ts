@@ -42,7 +42,7 @@ export interface ConsentInbox {
 
 export function useConsentInbox(): ConsentInbox {
   const loadInbox = useCallback((signal: AbortSignal) => listInbox(api, signal), []);
-  const inbox = useApiResource(loadInbox);
+  const inbox = useApiResource(loadInbox, { pollIntervalMs: 15_000, refreshOnFocus: true });
 
   const loadVocabulary = useCallback((signal: AbortSignal) => listCategories(api, signal), []);
   const vocabulary = useApiResource(loadVocabulary);

@@ -29,7 +29,7 @@ export interface SentRequestsResource {
 
 export function useSentRequests(): SentRequestsResource {
   const loadRequests = useCallback((signal: AbortSignal) => listSentRequests(api, signal), []);
-  const requests = useApiResource(loadRequests);
+  const requests = useApiResource(loadRequests, { pollIntervalMs: 15_000, refreshOnFocus: true });
 
   const loadVocabulary = useCallback((signal: AbortSignal) => listCategories(api, signal), []);
   const vocabulary = useApiResource(loadVocabulary);

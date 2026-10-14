@@ -39,7 +39,10 @@ export function useGrantedRecords(patientHealthId: string | null): GrantedRecord
         : (signal: AbortSignal) => listGrantedRecords(api, patientHealthId, signal),
     [patientHealthId],
   );
-  const { resource, reload } = useApiResource(load);
+  const { resource, reload } = useApiResource(load, {
+    pollIntervalMs: 15_000,
+    refreshOnFocus: true,
+  });
 
   return {
     // "Nothing requested yet" reads as loading to a page that only mounts with a patient,
