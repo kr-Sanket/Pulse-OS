@@ -61,3 +61,4 @@ Operational scripts (owned here, run from repo root):
 
 `review1_deck/` is presentation tooling (regenerates `PulseOS_Review1.pptx` via
 `python3 build.py`), not part of the product.
+
