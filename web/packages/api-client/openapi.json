@@ -1428,6 +1428,147 @@
         "title": "IntegrityStatus",
         "type": "string"
       },
+      "MarkAllReadResponse": {
+        "description": "Count of notifications newly marked as read.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "MarkAllReadResponse",
+        "type": "object"
+      },
+      "NotificationEventType": {
+        "description": "Consent lifecycle events that trigger an in-app notification (ADR-031).",
+        "enum": [
+          "ACCESS_REQUESTED",
+          "CONSENT_APPROVED",
+          "CONSENT_REJECTED",
+          "CONSENT_REVOKED"
+        ],
+        "title": "NotificationEventType",
+        "type": "string"
+      },
+      "NotificationListResponse": {
+        "description": "Keyset-paginated list of notifications.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "NotificationListResponse",
+        "type": "object"
+      },
+      "NotificationResponse": {
+        "description": "Notification representation for client display and routing (ADR-031).",
+        "properties": {
+          "actorDoctorId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actordoctorid"
+          },
+          "actorHospitalId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actorhospitalid"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "eventType": {
+            "$ref": "#/components/schemas/NotificationEventType"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "isRead": {
+            "title": "Isread",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "readAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readat"
+          },
+          "referenceRequestId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Referencerequestid"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "eventType",
+          "title",
+          "message",
+          "isRead",
+          "createdAt"
+        ],
+        "title": "NotificationResponse",
+        "type": "object"
+      },
       "PatientLookupResponse": {
         "description": "Identity confirmation for a hospital, and deliberately nothing else.\n\nTwo fields, both already known to whoever is holding the patient's card: the Health ID\nthey typed, echoed back in canonical form, and the name to read back to them. Date of\nbirth, gender, contact details, the internal UUID and every record fact are absent \u2014\nthe question this answers is \"is this the person in front of me\", not \"who is this\nperson\" (docs/DOMAIN_MODEL.md \u00a73: hospital admin gets existence + name confirmation\nonly). Widening it has to be a deliberate edit to this class.",
         "properties": {
@@ -1939,6 +2080,20 @@
           "hospitalName"
         ],
         "title": "StaffDisplayResponse",
+        "type": "object"
+      },
+      "UnreadCountResponse": {
+        "description": "Count of unread notifications for the caller.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "UnreadCountResponse",
         "type": "object"
       },
       "UploadingHospitalResponse": {
@@ -3291,6 +3446,222 @@
         "summary": "Verify Hospital",
         "tags": [
           "hospitals"
+        ]
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "description": "List notifications for the calling user with keyset cursor pagination.",
+        "operationId": "list_notifications_api_v1_notifications_get",
+        "parameters": [
+          {
+            "description": "Opaque keyset pagination cursor.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque keyset pagination cursor.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Page size (1-100).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Page size (1-100).",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter strictly for unread notifications.",
+            "in": "query",
+            "name": "unreadOnly",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Filter strictly for unread notifications.",
+              "title": "Unreadonly",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Unauthenticated."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Insufficient role for this operation."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Invalid pagination cursor or limit."
+          }
+        },
+        "summary": "List Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/notifications/mark-all-read": {
+      "post": {
+        "description": "Bulk-mark all unread notifications for the calling user as read.",
+        "operationId": "mark_all_notifications_read_api_v1_notifications_mark_all_read_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkAllReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Unauthenticated."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Insufficient role for this operation."
+          }
+        },
+        "summary": "Mark All Notifications Read",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/notifications/unread-count": {
+      "get": {
+        "description": "Return the total number of unread notifications for the calling user.",
+        "operationId": "get_unread_count_api_v1_notifications_unread_count_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Unauthenticated."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Insufficient role for this operation."
+          }
+        },
+        "summary": "Get Unread Count",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/notifications/{id}/read": {
+      "post": {
+        "description": "Mark a notification as read (idempotent).",
+        "operationId": "mark_notification_read_api_v1_notifications__id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Unauthenticated."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Insufficient role for this operation."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Notification not found."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Notification Read",
+        "tags": [
+          "notifications"
         ]
       }
     },

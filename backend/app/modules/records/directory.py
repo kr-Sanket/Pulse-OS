@@ -196,6 +196,11 @@ class ClinicianDirectoryService:
             is_active=doctor.status is DoctorStatus.ACTIVE,
         )
 
+    async def get_user_id_by_doctor_id(self, doctor_id: UUID) -> UUID | None:
+        """Resolve a doctor profile id back to the account user_id it belongs to."""
+        doctor = await self._doctors.get_by_id(doctor_id)
+        return doctor.user_id if doctor is not None else None
+
 
 class RecordCategoryDirectoryService:
     """How other modules translate between category codes and ids.

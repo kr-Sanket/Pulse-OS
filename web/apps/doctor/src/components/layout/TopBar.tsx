@@ -4,11 +4,13 @@
 import { Menu } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
-import { Button } from "@pulseos/ui";
+import { Button, NotificationBell } from "@pulseos/ui";
+import { api } from "@/api";
 
 import { titleForPath } from "./navigation";
 
 export interface TopBarProps {
+  /** Opens the sidebar drawer on small screens. */
   onMenuClick: () => void;
 }
 
@@ -31,6 +33,10 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         <h1 className="min-w-0 flex-1 truncate text-[15px] font-medium md:text-base">
           {titleForPath(pathname)}
         </h1>
+
+        <div className="flex shrink-0 items-center gap-3">
+          <NotificationBell client={api} />
+        </div>
       </div>
     </header>
   );

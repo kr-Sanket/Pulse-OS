@@ -424,3 +424,32 @@ def test_the_visibility_toggle_claims_no_rate_limit_and_adds_no_query_surface() 
     404 for anything not the caller's own, and no Health ID anywhere."""
     operation = _spec()["paths"]["/api/v1/records/{record_id}/visibility"]["patch"]
     assert "429" not in operation["responses"]
+
+
+def test_notifications_paths_are_present() -> None:
+    """ADR-031 Stage 2: notifications endpoints are registered."""
+    paths = _spec()["paths"]
+    assert "get" in paths["/api/v1/notifications"]
+    assert "get" in paths["/api/v1/notifications/unread-count"]
+    assert "post" in paths["/api/v1/notifications/{id}/read"]
+    assert "post" in paths["/api/v1/notifications/mark-all-read"]
+
+
+def test_notifications_response_schema_fields() -> None:
+    """ADR-031: NotificationResponse exposes only generic metadata and structured references, zero PHI."""
+    schemas = _spec()["components"]["schemas"]
+    assert set(schemas["NotificationResponse"]["properties"]) == {
+        "id",
+        "eventType",
+        "title",
+        "message",
+        "referenceRequestId",
+        "actorDoctorId",
+        "actorHospitalId",
+        "isRead",
+        "readAt",
+        "createdAt",
+    }
+    assert set(schemas["UnreadCountResponse"]["properties"]) == {"count"}
+    assert set(schemas["MarkAllReadResponse"]["properties"]) == {"count"}
+    assert set(schemas["NotificationListResponse"]["properties"]) == {"items", "nextCursor"}

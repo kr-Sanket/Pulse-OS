@@ -121,12 +121,14 @@ class FakeClinicianDirectory:
 
     def __init__(self) -> None:
         self.by_user_id: dict[UUID, Clinician] = {}
+        self.by_doctor_id: dict[UUID, UUID] = {}
 
     def register(
         self, user_id: UUID, *, doctor_id: UUID, hospital_id: UUID, is_active: bool = True
     ) -> Clinician:
         clinician = Clinician(id=doctor_id, hospital_id=hospital_id, is_active=is_active)
         self.by_user_id[user_id] = clinician
+        self.by_doctor_id[doctor_id] = user_id
         return clinician
 
     def suspend(self, user_id: UUID) -> None:
@@ -137,6 +139,9 @@ class FakeClinicianDirectory:
 
     async def get_by_user_id(self, user_id: UUID) -> Clinician | None:
         return self.by_user_id.get(user_id)
+
+    async def get_user_id_by_doctor_id(self, doctor_id: UUID) -> UUID | None:
+        return self.by_doctor_id.get(doctor_id)
 
 
 class FakeCategoryVocabularySource:

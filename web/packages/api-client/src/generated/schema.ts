@@ -611,6 +611,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Notifications
+         * @description List notifications for the calling user with keyset cursor pagination.
+         */
+        get: operations["list_notifications_api_v1_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/mark-all-read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark All Notifications Read
+         * @description Bulk-mark all unread notifications for the calling user as read.
+         */
+        post: operations["mark_all_notifications_read_api_v1_notifications_mark_all_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Unread Count
+         * @description Return the total number of unread notifications for the calling user.
+         */
+        get: operations["get_unread_count_api_v1_notifications_unread_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Notification Read
+         * @description Mark a notification as read (idempotent).
+         */
+        post: operations["mark_notification_read_api_v1_notifications__id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/patients/lookup": {
         parameters: {
             query?: never;
@@ -1747,6 +1827,61 @@ export interface components {
          */
         IntegrityStatus: "NOT_ANCHORED" | "VERIFIED" | "EVENT_ALTERED" | "ANCHOR_ALTERED";
         /**
+         * MarkAllReadResponse
+         * @description Count of notifications newly marked as read.
+         */
+        MarkAllReadResponse: {
+            /** Count */
+            count: number;
+        };
+        /**
+         * NotificationEventType
+         * @description Consent lifecycle events that trigger an in-app notification (ADR-031).
+         * @enum {string}
+         */
+        NotificationEventType: "ACCESS_REQUESTED" | "CONSENT_APPROVED" | "CONSENT_REJECTED" | "CONSENT_REVOKED";
+        /**
+         * NotificationListResponse
+         * @description Keyset-paginated list of notifications.
+         */
+        NotificationListResponse: {
+            /** Items */
+            items: components["schemas"]["NotificationResponse"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+        };
+        /**
+         * NotificationResponse
+         * @description Notification representation for client display and routing (ADR-031).
+         */
+        NotificationResponse: {
+            /** Actordoctorid */
+            actorDoctorId?: string | null;
+            /** Actorhospitalid */
+            actorHospitalId?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            eventType: components["schemas"]["NotificationEventType"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Isread */
+            isRead: boolean;
+            /** Message */
+            message: string;
+            /** Readat */
+            readAt?: string | null;
+            /** Referencerequestid */
+            referenceRequestId?: string | null;
+            /** Title */
+            title: string;
+        };
+        /**
          * PatientLookupResponse
          * @description Identity confirmation for a hospital, and deliberately nothing else.
          *
@@ -2022,6 +2157,14 @@ export interface components {
             hospitalName: string;
             /** Specialty */
             specialty: string | null;
+        };
+        /**
+         * UnreadCountResponse
+         * @description Count of unread notifications for the caller.
+         */
+        UnreadCountResponse: {
+            /** Count */
+            count: number;
         };
         /** UploadingHospitalResponse */
         UploadingHospitalResponse: {
@@ -3044,6 +3187,194 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HospitalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_v1_notifications_get: {
+        parameters: {
+            query?: {
+                /** @description Opaque keyset pagination cursor. */
+                cursor?: string | null;
+                /** @description Page size (1-100). */
+                limit?: number;
+                /** @description Filter strictly for unread notifications. */
+                unreadOnly?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationListResponse"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Insufficient role for this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Invalid pagination cursor or limit. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    mark_all_notifications_read_api_v1_notifications_mark_all_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkAllReadResponse"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Insufficient role for this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_unread_count_api_v1_notifications_unread_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadCountResponse"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Insufficient role for this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    mark_notification_read_api_v1_notifications__id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationResponse"];
+                };
+            };
+            /** @description Unauthenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Insufficient role for this operation. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Notification not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
                 };
             };
             /** @description Validation Error */

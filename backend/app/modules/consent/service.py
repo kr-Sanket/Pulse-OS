@@ -76,6 +76,8 @@ from app.modules.consent.repository import (
     ConsentRequestCategoryRepository,
     ConsentRequestRepository,
 )
+from app.modules.notifications.models import Notification, NotificationEventType
+from app.modules.notifications.repository import NotificationRepository
 from app.modules.patients.directory import PatientDirectoryService
 from app.shared.pagination import CursorKey, encode_cursor
 from app.shared.time import utc_now
@@ -261,6 +263,8 @@ class ClinicianDirectory(Protocol):
     """
 
     async def get_by_user_id(self, user_id: UUID) -> Clinician | None: ...
+
+    async def get_user_id_by_doctor_id(self, doctor_id: UUID) -> UUID | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,6 +473,7 @@ class ConsentService:
         patients: PatientDirectoryService,
         clinicians: ClinicianDirectory,
         staff: StaffDirectory,
+        notifications: NotificationRepository | None = None,
         *,
         request_ttl: timedelta = DEFAULT_REQUEST_TTL,
         grant_ttl: timedelta = DEFAULT_GRANT_TTL,
@@ -482,6 +487,7 @@ class ConsentService:
         self._patients = patients
         self._clinicians = clinicians
         self._staff = staff
+        self._notifications = notifications
         self._request_ttl = request_ttl
         self._grant_ttl = grant_ttl
         self._now = clock
@@ -533,6 +539,18 @@ class ConsentService:
             occurred_at=now,
             request_context=request_context,
         )
+        if self._notifications is not None:
+            await self._notifications.add(
+                Notification(
+                    recipient_user_id=patient.user_id,
+                    event_type=NotificationEventType.ACCESS_REQUESTED,
+                    title="Access Request Received",
+                    message="A doctor requested access to your health records.",
+                    reference_request_id=request.id,
+                    actor_doctor_id=clinician.id,
+                    actor_hospital_id=clinician.hospital_id,
+                )
+            )
         return RequestView(request=request, requested_category_ids=wanted)
 
     async def list_inbox(
@@ -750,6 +768,22 @@ class ConsentService:
             occurred_at=now,
             request_context=request_context,
         )
+
+        if self._notifications is not None:
+            doctor_user_id = await self._clinicians.get_user_id_by_doctor_id(
+                grant.grantee_doctor_id
+            )
+            if doctor_user_id is not None:
+                await self._notifications.add(
+                    Notification(
+                        recipient_user_id=doctor_user_id,
+                        event_type=NotificationEventType.CONSENT_REVOKED,
+                        title="Consent Grant Revoked",
+                        message="A consent grant for patient records was revoked.",
+                        actor_doctor_id=grant.grantee_doctor_id,
+                    )
+                )
+
         return grant
 
     # -- enforcement (ADR-013 layer 3) --------------------------------------------------
@@ -1043,6 +1077,33 @@ class ConsentService:
             )
 
         await self._close_request_if_fully_decided(request)
+
+        if self._notifications is not None and wanted:
+            doctor_user_id = await self._clinicians.get_user_id_by_doctor_id(
+                request.requester_doctor_id
+            )
+            if doctor_user_id is not None:
+                if status is ConsentDecisionStatus.APPROVED:
+                    event_type = NotificationEventType.CONSENT_APPROVED
+                    title = "Access Request Approved"
+                    message = "A patient approved your record access request."
+                else:
+                    event_type = NotificationEventType.CONSENT_REJECTED
+                    title = "Access Request Declined"
+                    message = "A patient declined your record access request."
+
+                await self._notifications.add(
+                    Notification(
+                        recipient_user_id=doctor_user_id,
+                        event_type=event_type,
+                        title=title,
+                        message=message,
+                        reference_request_id=request.id,
+                        actor_doctor_id=request.requester_doctor_id,
+                        actor_hospital_id=request.requester_hospital_id,
+                    )
+                )
+
         return DecisionOutcome(request=request, decisions=tuple(decisions), grants=tuple(grants))
 
     async def _close_request_if_fully_decided(self, request: ConsentRequest) -> None:

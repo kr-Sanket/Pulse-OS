@@ -50,6 +50,7 @@ APP_TABLES = {
     "audit_anchors",
     "audit_batches",
     "audit_batch_members",
+    "notifications",
 }
 
 
@@ -154,3 +155,88 @@ def test_0007_downgrade_removes_only_the_batch_tables(tmp_path: Path) -> None:
 
     command.upgrade(config, "head")
     assert _table_names(db_file) >= BATCH_TABLES
+
+
+#: ADR-031's notifications table: revision 0008, on top of 0007.
+NOTIFICATION_TABLES = {"notifications"}
+
+
+def test_0008_creates_notifications_table_with_constraints(tmp_path: Path) -> None:
+    db_file = tmp_path / "notifications.db"
+    command.upgrade(_config(f"sqlite+aiosqlite:///{db_file}"), "0008")
+
+    assert "notifications" in _table_names(db_file)
+    unique, checks, foreign = _constraints(db_file, "notifications")
+    # notifications has no unique constraints, but has foreign keys to users,
+    # consent_requests, doctors, and hospitals
+    assert foreign == {
+        "fk_notifications_users_recipient_user_id",
+        "fk_notifications_consent_requests_reference_request_id",
+        "fk_notifications_doctors_actor_doctor_id",
+        "fk_notifications_hospitals_actor_hospital_id",
+    }
+
+    # Inspect foreign key ondelete rules
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        fks = {fk["name"]: fk for fk in inspect(engine).get_foreign_keys("notifications")}
+        # recipient_user_id has NO cascade / NO ondelete rule (tombstone policy)
+        assert fks["fk_notifications_users_recipient_user_id"].get("options", {}).get("ondelete") in (None, "NO ACTION", "RESTRICT")
+        # structured references have SET NULL ondelete
+        assert fks["fk_notifications_consent_requests_reference_request_id"].get("options", {}).get("ondelete") == "SET NULL"
+        assert fks["fk_notifications_doctors_actor_doctor_id"].get("options", {}).get("ondelete") == "SET NULL"
+        assert fks["fk_notifications_hospitals_actor_hospital_id"].get("options", {}).get("ondelete") == "SET NULL"
+    finally:
+        engine.dispose()
+
+
+def test_0008_matches_model_metadata() -> None:
+    """The ORM model metadata and migration 0008 must agree on table name, columns, indexes and foreign key options."""
+    from app.core.db import Base
+    from app.modules.notifications.models import Notification  # noqa: F401
+
+    table = Base.metadata.tables["notifications"]
+    index_names = {idx.name for idx in table.indexes}
+    assert index_names == {
+        "ix_notifications_recipient_unread_created",
+        "ix_notifications_recipient_created",
+    }
+
+    col_names = set(table.columns.keys())
+    assert col_names == {
+        "id",
+        "recipient_user_id",
+        "event_type",
+        "title",
+        "message",
+        "reference_request_id",
+        "actor_doctor_id",
+        "actor_hospital_id",
+        "is_read",
+        "read_at",
+        "created_at",
+        "updated_at",
+    }
+
+    # Verify foreign key ondelete parity on ORM model metadata
+    fk_by_col = {fk.parent.name: fk for fk in table.foreign_keys}
+    assert fk_by_col["recipient_user_id"].ondelete is None
+    assert fk_by_col["reference_request_id"].ondelete == "SET NULL"
+    assert fk_by_col["actor_doctor_id"].ondelete == "SET NULL"
+    assert fk_by_col["actor_hospital_id"].ondelete == "SET NULL"
+
+
+def test_0008_downgrade_removes_notifications_table(tmp_path: Path) -> None:
+    db_file = tmp_path / "notifications_down.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+    command.upgrade(config, "head")
+    assert _table_names(db_file) >= NOTIFICATION_TABLES
+
+    command.downgrade(config, "0007")
+    remaining = _table_names(db_file)
+    assert not (NOTIFICATION_TABLES & remaining)
+    assert BATCH_TABLES <= remaining
+
+    command.upgrade(config, "head")
+    assert _table_names(db_file) >= NOTIFICATION_TABLES
+

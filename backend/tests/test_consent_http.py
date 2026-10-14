@@ -51,6 +51,7 @@ from app.modules.consent.router import (
     audit_logs_router,
     consent_grants_router,
 )
+from app.modules.notifications.models import Notification, NotificationEventType
 from app.modules.patients.models import Patient
 from app.modules.records.models import (
     Doctor,
@@ -61,6 +62,7 @@ from app.modules.records.models import (
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from tests.support import (
@@ -88,6 +90,8 @@ class World:
     patient: dict[str, str]
     other_patient: dict[str, str]
     doctor_user_id: UUID
+    engine: AsyncEngine | None = None
+    patient_user_id: UUID | None = None
 
 
 def _bearer(token: str) -> dict[str, str]:
@@ -208,6 +212,8 @@ def world(consent_app: FastAPI) -> Iterator[World]:
             patient=_bearer("patient"),
             other_patient=_bearer("other"),
             doctor_user_id=ids["doctor_user_id"],
+            engine=engine,
+            patient_user_id=ids["patient_user_id"],
         )
 
 
@@ -880,3 +886,97 @@ def test_a_token_without_a_profile_row_gets_404_on_every_listing(world: World) -
     assert world.client.get(f"{REQUESTS}/sent", headers=_bearer("ghost-doctor")).status_code == 404
     assert world.client.get(GRANTS, headers=_bearer("ghost-patient")).status_code == 404
     assert world.client.get(AUDIT, headers=_bearer("ghost-patient")).status_code == 404
+
+
+def test_consent_http_lifecycle_persists_notifications(world: World) -> None:
+    """Verifies that the full HTTP consent lifecycle (request creation, approval,
+    and revocation) persists the expected notifications atomically."""
+    assert world.engine is not None
+    assert world.patient_user_id is not None
+
+    # 1. Doctor creates an access request
+    res = _create(world, "cbc", "mri")
+    assert res.status_code == 201
+    request_id = res.json()["id"]
+
+    # Verify ACCESS_REQUESTED notification for patient in DB
+    async def check_patient_notif(session: AsyncSession) -> None:
+        result = await session.execute(
+            select(Notification).where(
+                Notification.recipient_user_id == world.patient_user_id
+            )
+        )
+        notifs = list(result.scalars())
+        assert len(notifs) == 1
+        n = notifs[0]
+        assert n.event_type is NotificationEventType.ACCESS_REQUESTED
+        assert str(n.reference_request_id) == request_id
+        assert n.title == "Access Request Received"
+        assert n.message == "A doctor requested access to your health records."
+
+    run_with_session(world.engine, check_patient_notif)
+
+    # 2. Patient approves both categories in one call
+    approve_res = world.client.post(
+        f"{REQUESTS}/{request_id}/approve",
+        json={"categoryCodes": ["cbc", "mri"]},
+        headers=world.patient,
+    )
+    assert approve_res.status_code == 200
+
+    # Verify CONSENT_APPROVED notification for doctor in DB (exactly 1 notification)
+    async def check_doctor_approval_notif(session: AsyncSession) -> None:
+        result = await session.execute(
+            select(Notification).where(
+                Notification.recipient_user_id == world.doctor_user_id
+            )
+        )
+        notifs = list(result.scalars())
+        assert len(notifs) == 1
+        n = notifs[0]
+        assert n.event_type is NotificationEventType.CONSENT_APPROVED
+        assert str(n.reference_request_id) == request_id
+        assert n.title == "Access Request Approved"
+        assert n.message == "A patient approved your record access request."
+
+    run_with_session(world.engine, check_doctor_approval_notif)
+
+    # 3. Patient revokes one grant
+    grants_res = world.client.get(GRANTS, headers=world.patient)
+    assert grants_res.status_code == 200
+    grant_id = grants_res.json()["items"][0]["id"]
+
+    revoke_res = world.client.post(f"{GRANTS}/{grant_id}/revoke", headers=world.patient)
+    assert revoke_res.status_code == 200
+
+    # Verify CONSENT_REVOKED notification for doctor in DB
+    async def check_doctor_revocation_notif(session: AsyncSession) -> None:
+        result = await session.execute(
+            select(Notification).where(
+                Notification.recipient_user_id == world.doctor_user_id
+            )
+        )
+        notifs = list(result.scalars())
+        assert len(notifs) == 2
+        revoked_n = next(
+            item for item in notifs if item.event_type is NotificationEventType.CONSENT_REVOKED
+        )
+        assert revoked_n.title == "Consent Grant Revoked"
+        assert revoked_n.message == "A consent grant for patient records was revoked."
+
+    run_with_session(world.engine, check_doctor_revocation_notif)
+
+    # 4. Repeated revocation attempt returns 200 and emits NO duplicate notification
+    repeat_res = world.client.post(f"{GRANTS}/{grant_id}/revoke", headers=world.patient)
+    assert repeat_res.status_code == 200
+
+    async def check_no_duplicate_notif(session: AsyncSession) -> None:
+        result = await session.execute(
+            select(Notification).where(
+                Notification.recipient_user_id == world.doctor_user_id
+            )
+        )
+        notifs = list(result.scalars())
+        assert len(notifs) == 2
+
+    run_with_session(world.engine, check_no_duplicate_notif)

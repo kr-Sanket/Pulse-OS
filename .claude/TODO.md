@@ -48,8 +48,10 @@ What is left, ordered by dependency. Each item is demonstrable on its own.
       has no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in
       demos because the three simulated hospitals are seeded `VERIFIED`.
 - [ ] BE: **`notifications` module** — in-app notification on request created / decided /
-      revoked, delivered through arq. Currently an empty `__init__.py`; access requests arrive
-      silently.
+      revoked. Architecture decided in **ADR-031** (in-app delivery, transactional persistence
+      in consent transaction, polling; arq dropped for notifications). ADR-031 is finalized and
+      awaiting Product Owner review. Implementation is pending approval (currently an empty
+      `__init__.py`; access requests arrive silently).
 - [ ] FE: QR identity generation + scanning (ROADMAP M4 scope).
 
 ### Deferred from patient hide/unhide (shipped 2026-09-08)

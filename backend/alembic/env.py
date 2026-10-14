@@ -15,6 +15,7 @@ from app.core.db import Base
 from app.modules.ai import models as ai_models  # noqa: F401
 from app.modules.auth import models as auth_models  # noqa: F401
 from app.modules.consent import models as consent_models  # noqa: F401
+from app.modules.notifications import models as notifications_models  # noqa: F401
 from app.modules.patients import models as patients_models  # noqa: F401
 from app.modules.records import models as records_models  # noqa: F401
 from sqlalchemy.engine import Connection

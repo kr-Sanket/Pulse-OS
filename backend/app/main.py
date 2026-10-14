@@ -31,6 +31,7 @@ from app.modules.consent.router import (
     consent_grants_router,
     hospital_audit_logs_router,
 )
+from app.modules.notifications.router import router as notifications_router
 from app.modules.patients.router import router as patients_router
 from app.modules.records.organizations_router import doctors_router, hospitals_router
 from app.modules.records.router import (
@@ -48,10 +49,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     engine = create_db_engine(settings)
     app.state.db_engine = engine
-    app.state.db_sessionmaker = create_session_factory(engine)
+    sessionmaker = create_session_factory(engine)
+    app.state.db_sessionmaker = sessionmaker
+
     # Lazy-initializing providers (ADR-011/005/014): the app boots without Firebase,
     # MinIO, or Redis; tests override the corresponding get_* dependencies with fakes.
     app.state.auth_provider = FirebaseAuthProvider(settings)
+
     app.state.object_storage = S3ObjectStorage(settings)
     job_queue = ArqJobQueue(settings.redis_url)
     app.state.job_queue = job_queue
@@ -98,6 +102,7 @@ def create_app() -> FastAPI:
     application.include_router(access_requests_router, prefix=API_V1_PREFIX)
     application.include_router(consent_grants_router, prefix=API_V1_PREFIX)
     application.include_router(audit_logs_router, prefix=API_V1_PREFIX)
+    application.include_router(notifications_router, prefix=API_V1_PREFIX)
     application.include_router(ai_router, prefix=API_V1_PREFIX)
     # /hospitals/me/audit-logs is consent-owned data on a records-owned URL prefix (ADR-023).
     application.include_router(hospital_audit_logs_router, prefix=API_V1_PREFIX)

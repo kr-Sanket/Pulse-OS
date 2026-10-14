@@ -145,4 +145,39 @@ export { Skeleton } from "./components/ui/skeleton";
 export { Switch } from "./components/ui/switch";
 export { Textarea } from "./components/ui/textarea";
 
+// -- Notifications (ADR-031) ---------------------------------------------------------------
+export {
+  fetchUnreadCount,
+  listNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+  type ListNotificationsOptions,
+  type NotificationItem,
+  type NotificationListPage,
+  type UnreadCount,
+  type MarkAllReadResult,
+  type NotificationEventType,
+} from "./notifications/api";
+export {
+  badgeCountLabel,
+  eventTypeMeta,
+  toNotificationViewItem,
+  type NotificationEventMeta,
+  type NotificationViewItem,
+  NO_NOTIFICATIONS_TITLE,
+  NO_NOTIFICATIONS_DESC,
+  NOTIFICATIONS_TITLE,
+  MARK_ALL_READ_LABEL,
+} from "./notifications/view";
+export {
+  useNotifications,
+  type NotificationsState,
+  type UseNotificationsOptions,
+} from "./notifications/useNotifications";
+export {
+  NotificationDrawer,
+  type NotificationDrawerProps,
+} from "./notifications/NotificationDrawer";
+export { NotificationBell, type NotificationBellProps } from "./notifications/NotificationBell";
+
 export const UI_PACKAGE_NAME = "@pulseos/ui";

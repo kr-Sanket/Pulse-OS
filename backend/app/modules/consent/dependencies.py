@@ -206,6 +206,9 @@ class RecordsClinicianDirectory:
             id=profile.id, hospital_id=profile.hospital_id, is_active=profile.is_active
         )
 
+    async def get_user_id_by_doctor_id(self, doctor_id: UUID) -> UUID | None:
+        return await self._directory.get_user_id_by_doctor_id(doctor_id)
+
 
 class RecordsCategoryVocabulary:
     """Adapts ``records``' published category list into the two-way lookup the boundary
@@ -301,8 +304,11 @@ def get_consent_service(
     clinicians: Annotated[ClinicianDirectory, Depends(get_clinician_directory)],
     staff: Annotated[StaffDirectory, Depends(get_staff_directory)],
 ) -> ConsentService:
+    from app.modules.notifications.repository import NotificationRepository
+
     # All repositories share the request's single session/transaction (get_db_session is
-    # cached per request by FastAPI), so a use case and its audit rows commit together.
+    # cached per request by FastAPI), so a use case, its audit rows, and in-app notifications
+    # commit together atomically (ADR-031).
     return ConsentService(
         requests=ConsentRequestRepository(session),
         request_categories=ConsentRequestCategoryRepository(session),
@@ -312,6 +318,7 @@ def get_consent_service(
         patients=PatientDirectoryService(PatientRepository(session)),
         clinicians=clinicians,
         staff=staff,
+        notifications=NotificationRepository(session),
     )
 
 

@@ -1142,6 +1142,247 @@ records long term; whether Phase B of the import (deferred, TODO.md) changes any
 
 ---
 
+## ADR-031 — Notifications Module: in-app delivery, transactional persistence, and polling
+**Date:** 2026-10-12 · **Status:** Proposed — awaiting Product Owner review · **Supersedes in part:**
+ADR-008 (the async notification delivery assumption)
+
+**Context:** The consent lifecycle consists of critical workflow handoffs: a clinician petitions
+for patient records (`ACCESS_REQUESTED`), a patient reviews and decides per category
+(`CONSENT_APPROVED` or `CONSENT_REJECTED`), and a patient can withdraw consent at any time
+(`CONSENT_REVOKED`). Currently, access requests arrive silently in the patient inbox
+(`GET /access-requests/inbox`), and approvals/rejections/revocations are discovered by clinicians
+only upon querying `GET /granted-records` or attempting a record read.
+
+ADR-008 originally sketched a Redis-backed async job queue (via arq, ADR-014) for background tasks
+including notifications. However, introducing an asynchronous worker queue for notifications
+creates a distributed dual-write hazard between PostgreSQL and Redis: enqueuing before database
+commit risks phantom notifications if the consent transaction rolls back, while enqueuing after
+commit risks lost notifications if the process crashes. Furthermore, clinical workflow integrity
+demands that a failed or rolled-back consent transaction must never leave behind a notification.
+Additionally, healthcare privacy regulations (HIPAA, India DPDP Act 2023) dictate that notification
+messages must never leak Protected Health Information (PHI) or ungranted clinical context to
+unauthorized parties or administrative roles.
+
+**Decision:**
+
+1. **Delivery — in-app notifications only.**
+   - No external delivery channels: no Firebase Cloud Messaging (FCM), Apple Push Notification
+     service (APNs), SMS, or email providers (SES/SendGrid).
+   - In-app delivery via dedicated notification centers in the Patient and Doctor web portals
+     fulfills all clinical workflow requirements for MVP without external third-party credentials,
+     network failure modes, delivery fees, or data-sharing privacy risks.
+
+2. **Persistence and transactions — PostgreSQL same-transaction atomicity.**
+   - Notifications are stored in PostgreSQL in a dedicated `notifications` table owned by the
+     `notifications` module.
+   - Notifications are created within the **exact same database transaction** as the triggering
+     consent change (managed by FastAPI's `get_db_session` request-scoped `AsyncSession`).
+   - **Transaction boundary guarantee:** If a consent transaction fails, raises a domain or
+     validation error, or rolls back for any reason, the notification is rolled back atomically.
+     No phantom notifications, orphaned records, or eventual-consistency lag can occur.
+   - **Explicit supersession of ADR-008:** ADR-008's assumption that notifications run via arq/Redis
+     is superseded. The async job queue is not used for notification creation or delivery.
+
+3. **Notification events, triggers, and recipients:**
+   Notifications are generated strictly for four consent lifecycle events:
+   - `ACCESS_REQUESTED`: Triggered in `ConsentService.create_request()`. Recipient is the target
+     **Patient** (`patient.user_id`).
+   - `CONSENT_APPROVED`: Triggered in `ConsentService.approve_categories()` / `_decide()`. Recipient
+     is the requesting **Doctor** (`doctor.user_id`).
+   - `CONSENT_REJECTED`: Triggered in `ConsentService.reject_categories()` / `_decide()`. Recipient
+     is the requesting **Doctor** (`doctor.user_id`).
+   - `CONSENT_REVOKED`: Triggered in `ConsentService.revoke_grant()`. Recipient is the grantee
+     **Doctor** (`doctor.user_id`).
+   - **Decision batching:** A successful logical consent decision covering multiple categories
+     creates **exactly one notification** for its recipient, generated outside the per-category loop.
+     A failed or rolled-back transaction leaves no notification.
+   - **Revocation idempotency:** `CONSENT_REVOKED` is emitted **strictly when a grant is newly
+     revoked** (after `grant.revoked_at` is set, guarded by the existing check that returns early if
+     `grant.revoked_at is not None`). Idempotent retry calls produce no duplicate notifications.
+   - **Grant expiry produces no notification** in this version: passive expiry or sweep jobs do
+     not emit notification rows.
+
+4. **Doctor identity resolution seam:**
+   - `ConsentRequest.requester_doctor_id` and `ConsentGrant.grantee_doctor_id` store `doctors.id`
+     primary keys. Notifications are addressed to `recipient_user_id` (`users.id`).
+   - Doctor IDs and User IDs are **not interchangeable**.
+   - Direct cross-module queries from `notifications` to `records.doctors` are forbidden (system
+     isolation rule 1).
+   - Identity resolution is performed through a minimal method on the published directory seam
+     (`ClinicianDirectory`, backed by `DoctorRepository.get_by_id(doctor_id)` in `records.directory`
+     over the shared request session): `get_user_id_by_doctor_id(doctor_id: UUID) -> UUID | None`.
+
+5. **Notification content, privacy, and structured references:**
+   - **Generic administrative messages:** Notification messages contain purely administrative,
+     non-identifying copy. They must never disclose diagnoses, clinical categories, document
+     details, Health IDs (`health_id`), or unnecessary personal identifiers:
+     * `ACCESS_REQUESTED`: Title: `"Access Request Received"`; Message: `"A doctor requested access to your health records."`
+     * `CONSENT_APPROVED`: Title: `"Access Request Approved"`; Message: `"A patient approved your record access request."`
+     * `CONSENT_REJECTED`: Title: `"Access Request Declined"`; Message: `"A patient declined your record access request."`
+     * `CONSENT_REVOKED`: Title: `"Consent Grant Revoked"`; Message: `"A consent grant for patient records was revoked."`
+     *(Specifically, `CONSENT_REVOKED` does not disclose the revoked category name).*
+   - **Structured references:** The `notifications` table stores only the minimal references required
+     for client routing and authorized navigation:
+     * `reference_request_id: UUID | None` — links to the relevant access request.
+     * `actor_doctor_id: UUID | None` — records the initiating clinician where relevant.
+     * `actor_hospital_id: UUID | None` — records hospital context where relevant.
+     Display names are not duplicated in the notification row; clients resolve display details on
+     demand through existing authorized endpoints.
+   - **Authorization invariant:** A stored reference **never bypasses normal authorization checks**.
+     Navigating to a referenced request or record still executes full role gates, relationship checks,
+     and `consent.enforce`.
+   - **Logging discipline:** Structured application logs (`app/core/logging.py`) record only opaque
+     identifiers (`notification_id`, `recipient_user_id`, `event_type`, `request_id`). Notification
+     message text, patient identifiers, and names are excluded from logs.
+
+6. **Database schema and deletion conventions:**
+   - Follows PulseOS's identity-retention and tombstone conventions (docs/DATABASE_DESIGN.md
+     principle 5). `recipient_user_id` uses standard `ForeignKey("users.id", nullable=False)`
+     without `ON DELETE CASCADE`.
+   - `notifications` table:
+     * `id`: `UUID` primary key (`UUIDPrimaryKeyMixin`).
+     * `recipient_user_id`: `UUID` (`ForeignKey("users.id")`, `NOT NULL`, indexed).
+     * `event_type`: `VARCHAR(32)` (`NOT NULL`), values: `ACCESS_REQUESTED`, `CONSENT_APPROVED`,
+       `CONSENT_REJECTED`, `CONSENT_REVOKED`.
+     * `title`: `VARCHAR(120)` (`NOT NULL`).
+     * `message`: `VARCHAR(255)` (`NOT NULL`).
+     * `reference_request_id`: `Uuid()` (`nullable=True`).
+     * `actor_doctor_id`: `Uuid()` (`nullable=True`).
+     * `actor_hospital_id`: `Uuid()` (`nullable=True`).
+     * `is_read`: `BOOLEAN` (`NOT NULL`, default `False`).
+     * `read_at`: `DateTime(timezone=True)` (`nullable=True`).
+     * `created_at` / `updated_at`: `DateTime(timezone=True)` (`TimestampMixin`).
+   - Indexes:
+     * `ix_notifications_recipient_unread_created`: `(recipient_user_id, is_read, created_at, id)` —
+       serves unread count and unread-filtered inbox without sorting.
+     * `ix_notifications_recipient_created`: `(recipient_user_id, created_at, id)` — serves keyset
+       cursor pagination.
+
+7. **API and authorization:**
+   - **Role gates:** Restricted to `Role.PATIENT` and `Role.DOCTOR`.
+   - **System admin invariant:** Per docs/SECURITY.md and docs/DOMAIN_MODEL.md, `Role.SYSTEM_ADMIN`
+     and `Role.HOSPITAL_ADMIN` have zero access to notification endpoints (`403 Forbidden`).
+   - **Strict ownership & 404-not-403 convention:** Users can list and mutate only notifications
+     where `recipient_user_id == caller.user_id`. Accessing or mutating another user's notification
+     returns `404 Not Found` (never `403 Forbidden`), preventing existence probing and enumeration.
+   - **Endpoints (under `/api/v1`):**
+     * `GET /api/v1/notifications`: Keyset cursor-paginated (`?cursor=&limit=&unreadOnly=`, limit
+       capped at 100). Response: `{ "items": [...], "nextCursor": "..." }`.
+     * `GET /api/v1/notifications/unread-count`: Returns `{ "unreadCount": int }` for badge display.
+     * `POST /api/v1/notifications/{id}/read`: Marks a single notification as read (idempotent,
+       sub-resource action matching API guidelines).
+     * `POST /api/v1/notifications/mark-all-read`: Marks all unread notifications of caller as read.
+   - **Error handling and schema:** RFC 7807 problem details on error; camelCase JSON serialization.
+
+8. **Frontend delivery and interaction:**
+   - Shared bell icon and notification drawer in `@pulseos/ui`, integrated into Patient and Doctor
+     portal headers.
+   - Polling of `/api/v1/notifications/unread-count` (recommended 30-second interval, plus window
+     focus and navigation triggers).
+   - No WebSockets and no Server-Sent Events (SSE).
+
+9. **Audit separation and retention:**
+   - **Convenience records, not audit evidence:** Authoritative, tamper-evident audit history
+     remains `audit_logs` (Keccak-256 v3 digests, Merkle batch commitments per ADR-027). The
+     `notifications` table is mutable (`is_read`, `read_at`) and carries no cryptographic hash
+     chain or blockchain anchoring.
+   - **Retention and erasure:** Notifications may be pruned or erased under DPDP right-to-erasure
+     and user retention policies without affecting the immutable append-only audit trail.
+
+**Transaction and Notification Flow:**
+
+```
+Client (Doctor / Patient)
+       │
+       ▼  HTTP Request (e.g., POST /api/v1/access-requests)
+┌────────────────────────────────────────────────────────────────────────┐
+│ FastAPI Dependency: get_db_session                                     │
+│   async with sessionmaker() as session, session.begin():               │
+│                                                                        │
+│   ┌──────────────────────── consent module ────────────────────────┐   │
+│   │ 1. Validate caller, permissions & requested categories         │   │
+│   │ 2. Insert ConsentRequest & ConsentRequestCategory rows         │   │
+│   │ 3. Append AuditLog row (action=ACCESS_REQUESTED)               │   │
+│   │ 4. Dispatch notification via NotificationService/seam          │   │
+│   └───────────────────────────────┬────────────────────────────────┘   │
+│                                   │                                    │
+│   ┌───────────────────────────────▼ notifications module ──────────┐   │
+│   │ 5. Insert Notification (recipient=patient.user_id,             │   │
+│   │    event=ACCESS_REQUESTED, unread=True, references)            │   │
+│   │    into SAME session                                           │   │
+│   └────────────────────────────────────────────────────────────────┘   │
+│                                                                        │
+│   6. Request handler returns cleanly                                   │
+│   7. Transaction COMMITS atomically (all rows durable)                 │
+│      [On any exception / failure: ROLLBACK rolls back all rows]        │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Alternatives considered:**
+
+- *Async job queue via arq / Redis (ADR-008 sketch):* Rejected due to dual-write atomicity failure
+  modes (phantom notifications on rollback, lost notifications on crash), operational complexity of
+  worker lifecycle, and unnecessary latency for a local in-app alert.
+- *WebSockets / Server-Sent Events (SSE):* Rejected due to stateful connection management, proxy/
+  gateway connection limits, heartbeat overhead, reconnection handling complexity in frontend, and
+  unwarranted complexity for low-frequency consent events.
+- *External Push (FCM / APNs) / Email (SES / SendGrid):* Rejected due to external credentials,
+  third-party service costs, device token lifecycle maintenance, and the privacy hazard of leaking
+  healthcare interaction timing and metadata to third-party push networks.
+- *PostgreSQL NOTIFY / LISTEN:* Rejected because it bypasses application domain abstractions, does
+  not work smoothly with connection poolers (PgBouncer in transaction mode), and is unsupported in
+  the SQLite local test environment.
+
+**Consequences and trade-offs:**
+
+- *Transactional consistency:* Guarantees 100% consistency between consent actions, audit logging,
+  and notifications with zero dual-write bugs.
+- *Privacy preservation:* Generic administrative text prevents clinical data or ungranted categories
+  from leaking across notification views.
+- *Latency & UX:* Polling introduces slight delivery latency (up to 30 seconds), which is fully
+  acceptable for consent workflows where review cycles are measured in minutes or days.
+- *Database load:* Polling creates periodic lightweight queries on indexed columns; mitigated by
+  an efficient composite index and dedicated `unread-count` endpoint.
+- *Module coupling:* `consent` calls a `NotificationDispatcher` interface published by
+  `notifications`. Both participate in the request's shared `AsyncSession` without violating Clean
+  Architecture or direct cross-module table access.
+
+**Testing requirements:**
+
+1. *Transactional rollback test:* Inject a failure/exception immediately after notification insertion
+   before handler return; assert that `consent_requests`, `audit_logs`, and `notifications` are all
+   rolled back and zero rows remain.
+2. *Decision batching test:* Verify that approving/rejecting multiple categories in a single request
+   produces exactly one consolidated notification for the requesting clinician.
+3. *Revocation idempotency test:* Verify that calling `revoke_grant` on an already-revoked grant
+   does not create a second notification.
+4. *Data privacy & copy tests:* Assert that notification `message` and `title` contain strictly
+   generic administrative copy and no Health IDs, patient names, diagnoses, or category codes.
+5. *Authorization & negative authz tests:*
+   - Patient attempting to fetch or mark Doctor's notification returns `404 Not Found`.
+   - Doctor attempting to fetch or mark Patient's notification returns `404 Not Found`.
+   - `Role.SYSTEM_ADMIN` and `Role.HOSPITAL_ADMIN` receive `403 Forbidden` on all notification endpoints.
+6. *Read status & pagination tests:* Verify `POST /read`, `POST /mark-all-read`, unread count, and
+   cursor pagination over `(created_at, id)`.
+
+**Migration considerations:**
+
+- New Alembic revision (revision `0008`), chained directly from the current head (`0007`).
+- Additive schema only: creates `notifications` table and indexes.
+- Reversible: `downgrade()` drops the table cleanly.
+- No historical backfill: notifications begin accumulating from deployment onward.
+
+**Explicitly out-of-scope features:**
+
+- FCM push notifications, APNs, SMS, email, or third-party webhooks.
+- WebSockets or Server-Sent Events (SSE).
+- Background worker (arq) processing for notifications.
+- Passive grant expiry notifications or undecided request lapse notifications.
+- Administrative (Hospital Admin / System Admin) notification streams.
+- Emergency break-glass notifications (deferred to Phase 2 with its own ADR).
+
+---
+
 ## ADR-009 — (placeholder) Deployment target: Render vs AWS
 **Status:** Proposed — decide at M1 gate. Recommendation: Render (managed Postgres + Redis,
 simplest path for students); AWS only if the team wants the learning curve.
@@ -1150,3 +1391,4 @@ simplest path for students); AWS only if the team wants the learning curve.
 **Status:** Proposed — decide at M1 gate. Recommendation: start Flutter in Month 4 *after* the
 patient web portal stabilizes, reusing the proven API; web portal is the demo-critical patient
 surface. Original plan had all four clients in Month 3, which overloads the single frontend lead.
+

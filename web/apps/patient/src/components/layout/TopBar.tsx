@@ -8,10 +8,11 @@
 // exist so the shell matches the intended product surface; wiring lands with the pages
 // that own the data.
 
-import { Bell, Menu, Search } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
-import { Button } from "@pulseos/ui";
+import { Button, NotificationBell } from "@pulseos/ui";
+import { api } from "@/api";
 
 import { titleForPath } from "./navigation";
 
@@ -64,9 +65,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
             />
           </div>
 
-          <Button variant="ghost" size="icon" aria-label="Notifications">
-            <Bell className="size-5" aria-hidden />
-          </Button>
+          <NotificationBell client={api} />
         </div>
       </div>
     </header>

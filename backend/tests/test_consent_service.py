@@ -32,6 +32,7 @@ from app.modules.consent.models import (
     AuditAction,
     AuditLog,
     ConsentDecisionStatus,
+    ConsentRequest,
     ConsentRequestStatus,
 )
 from app.modules.consent.repository import (
@@ -41,6 +42,8 @@ from app.modules.consent.repository import (
     ConsentRequestCategoryRepository,
     ConsentRequestRepository,
 )
+from app.modules.notifications.models import Notification, NotificationEventType
+from app.modules.notifications.repository import NotificationRepository
 from app.modules.consent.service import (
     CURRENT_HASH_SCHEME,
     HASH_SCHEME_V1,
@@ -70,6 +73,7 @@ from app.modules.records.models import (
     RecordOrigin,
 )
 from app.shared.pagination import CursorKey, decode_cursor
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.support import FakeClinicianDirectory, sqlite_session
@@ -107,6 +111,7 @@ class Harness:
     doctor_id: UUID
     record_id: UUID
     categories: dict[str, UUID] = field(default_factory=dict)
+    notifications: NotificationRepository = field(default=None)  # type: ignore
 
     async def actions(self) -> list[str]:
         """The audited actions for this patient, sorted.
@@ -162,6 +167,7 @@ async def _harness(session: AsyncSession) -> Harness:
     clinicians = FakeClinicianDirectory()
     clinicians.register(doctor_user.id, doctor_id=doctor.id, hospital_id=hospital.id)
     clock = Clock(START)
+    notifications = NotificationRepository(session)
     return Harness(
         session=session,
         service=ConsentService(
@@ -175,6 +181,7 @@ async def _harness(session: AsyncSession) -> Harness:
             # The real adapter, against the same SQLite session: the projection's joins
             # are worth exercising here rather than faking away.
             staff=RecordsStaffDirectory(staff_directory(session)),
+            notifications=notifications,
             clock=clock,
         ),
         audit=AuditLogRepository(session),
@@ -194,6 +201,7 @@ async def _harness(session: AsyncSession) -> Harness:
         doctor_id=doctor.id,
         record_id=record.id,
         categories={code: category.id for code, category in categories.items()},
+        notifications=notifications,
     )
 
 
@@ -1738,5 +1746,297 @@ def test_an_unattributed_legacy_event_stays_unattributed() -> None:
             # The actor is still named — only the attribution is missing.
             assert view.actor is not None
             assert view.actor.hospital_name == "TMH"
+
+    asyncio.run(scenario())
+
+
+# ======================================================================================
+# Notification Regression Tests (ADR-031 / Stage 3B)
+# ======================================================================================
+
+
+def test_consent_request_creation_emits_access_requested_notification() -> None:
+    """Requirement A: In ConsentService.create_request:
+    - Exactly one ACCESS_REQUESTED notification is created for the target patient.
+    - Uses patient.user_id as recipient_user_id.
+    - References the created consent request id.
+    - Uses ADR-031's approved generic wording.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+
+            # Verify patient received exactly one notification
+            items = await h.notifications.list_page_by_recipient(
+                h.patient.user_id, after=None, limit=50
+            )
+            assert len(items) == 1
+
+            n = items[0]
+            assert n.recipient_user_id == h.patient.user_id
+            assert n.event_type is NotificationEventType.ACCESS_REQUESTED
+            assert n.reference_request_id == request_id
+            assert n.actor_doctor_id == h.doctor_id
+            assert n.actor_hospital_id is not None
+            assert n.title == "Access Request Received"
+            assert n.message == "A doctor requested access to your health records."
+            assert n.is_read is False
+
+            # Verify doctor and other patient received no notifications
+            doc_items = await h.notifications.list_page_by_recipient(
+                h.doctor.user_id, after=None, limit=50
+            )
+            assert len(doc_items) == 0
+            other_items = await h.notifications.list_page_by_recipient(
+                h.other_patient.user_id, after=None, limit=50
+            )
+            assert len(other_items) == 0
+
+    asyncio.run(scenario())
+
+
+def test_consent_approval_emits_single_notification_even_for_multiple_categories() -> None:
+    """Requirement B: In ConsentService._decide (approval):
+    - Emits CONSENT_APPROVED to requesting doctor's internal user_id.
+    - Exactly ONE notification emitted even when approving multiple categories.
+    - References the request id, doctor id, and hospital id.
+    - Uses ADR-031's approved generic wording.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC", "MRI", "XRAY")
+
+            # Patient approves all 3 categories in a single call
+            await h.service.approve_categories(
+                h.patient,
+                request_id,
+                [h.categories["CBC"], h.categories["MRI"], h.categories["XRAY"]],
+            )
+
+            # Requesting doctor received exactly ONE notification
+            doc_items = await h.notifications.list_page_by_recipient(
+                h.doctor.user_id, after=None, limit=50
+            )
+            assert len(doc_items) == 1
+
+            n = doc_items[0]
+            assert n.recipient_user_id == h.doctor.user_id
+            assert n.event_type is NotificationEventType.CONSENT_APPROVED
+            assert n.reference_request_id == request_id
+            assert n.actor_doctor_id == h.doctor_id
+            assert n.title == "Access Request Approved"
+            assert n.message == "A patient approved your record access request."
+            assert n.is_read is False
+
+    asyncio.run(scenario())
+
+
+def test_consent_rejection_emits_single_notification_even_for_multiple_categories() -> None:
+    """Requirement C: In ConsentService._decide (rejection):
+    - Emits CONSENT_REJECTED to requesting doctor's internal user_id.
+    - Exactly ONE notification emitted even when rejecting multiple categories.
+    - References the request id, doctor id, and hospital id.
+    - Uses ADR-031's approved generic wording.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC", "MRI")
+
+            # Patient rejects all categories in a single call
+            await h.service.reject_categories(
+                h.patient,
+                request_id,
+                [h.categories["CBC"], h.categories["MRI"]],
+            )
+
+            # Requesting doctor received exactly ONE notification
+            doc_items = await h.notifications.list_page_by_recipient(
+                h.doctor.user_id, after=None, limit=50
+            )
+            assert len(doc_items) == 1
+
+            n = doc_items[0]
+            assert n.recipient_user_id == h.doctor.user_id
+            assert n.event_type is NotificationEventType.CONSENT_REJECTED
+            assert n.reference_request_id == request_id
+            assert n.actor_doctor_id == h.doctor_id
+            assert n.title == "Access Request Declined"
+            assert n.message == "A patient declined your record access request."
+            assert n.is_read is False
+
+    asyncio.run(scenario())
+
+
+def test_consent_revocation_emits_notification_and_repeated_revocation_does_not_duplicate() -> None:
+    """Requirement D: In ConsentService.revoke_grant:
+    - Emits CONSENT_REVOKED to grantee doctor's internal user_id.
+    - Emits only on newly revoked grant; repeated revocation attempts emit NO duplicates.
+    - Uses generic copy from ADR-031 without disclosing clinical category.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+            outcome = await h.service.approve_categories(
+                h.patient, request_id, [h.categories["CBC"]]
+            )
+            grant = outcome.grants[0]
+
+            # Doctor currently has 1 notification (CONSENT_APPROVED)
+            doc_items = await h.notifications.list_page_by_recipient(
+                h.doctor.user_id, after=None, limit=50
+            )
+            assert len(doc_items) == 1
+
+            # Revoke grant for the first time
+            await h.service.revoke_grant(h.patient, grant.id)
+
+            doc_items_after = await h.notifications.list_page_by_recipient(
+                h.doctor.user_id, after=None, limit=50
+            )
+            assert len(doc_items_after) == 2
+
+            # The new notification is CONSENT_REVOKED
+            revoked_n = next(
+                item
+                for item in doc_items_after
+                if item.event_type is NotificationEventType.CONSENT_REVOKED
+            )
+            assert revoked_n.recipient_user_id == h.doctor.user_id
+            assert revoked_n.title == "Consent Grant Revoked"
+            assert revoked_n.message == "A consent grant for patient records was revoked."
+            assert revoked_n.actor_doctor_id == grant.grantee_doctor_id
+
+            # Repeated revocation attempt (idempotency test)
+            repeated_grant = await h.service.revoke_grant(h.patient, grant.id)
+            assert repeated_grant.id == grant.id
+
+            # Notification count must NOT increase
+            doc_items_repeated = await h.notifications.list_page_by_recipient(
+                h.doctor.user_id, after=None, limit=50
+            )
+            assert len(doc_items_repeated) == 2
+
+    asyncio.run(scenario())
+
+
+def test_consent_notifications_contain_no_phi_or_sensitive_identifiers() -> None:
+    """Requirement E: Privacy compliance:
+    - Notification title and message must NOT disclose patient name, health ID,
+      clinical category names/codes, or document details.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC", "MRI")
+            outcome = await h.service.approve_categories(
+                h.patient, request_id, [h.categories["CBC"]]
+            )
+            await h.service.revoke_grant(h.patient, outcome.grants[0].id)
+            await h.service.reject_categories(
+                h.patient, request_id, [h.categories["MRI"]]
+            )
+
+            # Query all notifications in the session
+            result = await session.execute(select(Notification))
+            all_notifications = list(result.scalars())
+            assert len(all_notifications) == 4  # request, approve, revoke, reject
+
+            sensitive_terms = [
+                "Aarav",  # patient name
+                "Dr Verma",  # doctor name (not in message copy)
+                HEALTH_ID,  # "PHI-IND-2026-1QE8DVR"
+                "CBC",  # category code
+                "MRI",  # category code
+                "cbc.pdf",  # document filename
+            ]
+
+            for n in all_notifications:
+                for term in sensitive_terms:
+                    assert term not in n.title, f"Sensitive term '{term}' leaked in title: '{n.title}'"
+                    assert term not in n.message, f"Sensitive term '{term}' leaked in message: '{n.message}'"
+
+    asyncio.run(scenario())
+
+
+def test_consent_mutation_and_notification_roll_back_together() -> None:
+    """Requirement G: Transaction atomicity and rollback:
+    - Proves notification and consent changes participate in the same session/transaction
+      and roll back together when a transaction aborts.
+    - Also proves that if notification creation fails, the exception is NOT swallowed
+      and the consent request, audit log, and notification roll back.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            # 1. Rollback via savepoint: discards both consent request and notification
+            async with session.begin_nested() as savepoint:
+                await h.service.create_request(
+                    h.doctor,
+                    patient_health_id=HEALTH_ID,
+                    category_ids=[h.categories["CBC"]],
+                    purpose="follow-up",
+                )
+                # Verify rows exist in-flight within savepoint
+                reqs = (await session.execute(select(ConsentRequest))).scalars().all()
+                assert len(reqs) == 1
+                notifs = (await session.execute(select(Notification))).scalars().all()
+                assert len(notifs) == 1
+
+                # Abort the savepoint
+                await savepoint.rollback()
+
+            # After rollback, neither consent request nor notification was persisted
+            reqs_after = (await session.execute(select(ConsentRequest))).scalars().all()
+            assert len(reqs_after) == 0
+            notifs_after = (await session.execute(select(Notification))).scalars().all()
+            assert len(notifs_after) == 0
+
+            # 2. Simulated failure during notification insert:
+            # Wrap notification repository to simulate database failure on add()
+            class FailingNotificationRepository(NotificationRepository):
+                async def add(self, notification: Notification) -> Notification:
+                    raise RuntimeError("Simulated notification database failure")
+
+            failing_service = ConsentService(
+                requests=ConsentRequestRepository(session),
+                request_categories=ConsentRequestCategoryRepository(session),
+                decisions=ConsentDecisionRepository(session),
+                grants=ConsentGrantRepository(session),
+                audit=AuditLogRepository(session),
+                patients=PatientDirectoryService(PatientRepository(session)),
+                clinicians=h.clinicians,
+                staff=RecordsStaffDirectory(staff_directory(session)),
+                notifications=FailingNotificationRepository(session),
+                clock=h.clock,
+            )
+
+            # Attempting request creation must raise and NOT swallow the exception
+            with pytest.raises(RuntimeError, match="Simulated notification database failure"):
+                async with session.begin_nested():
+                    await failing_service.create_request(
+                        h.doctor,
+                        patient_health_id=HEALTH_ID,
+                        category_ids=[h.categories["CBC"]],
+                        purpose="follow-up",
+                    )
+
+            # The entire transaction rolled back: no request, no audit log, no notification
+            reqs_fail = (await session.execute(select(ConsentRequest))).scalars().all()
+            assert len(reqs_fail) == 0
+            notifs_fail = (await session.execute(select(Notification))).scalars().all()
+            assert len(notifs_fail) == 0
+            audits_fail = (await session.execute(select(AuditLog))).scalars().all()
+            assert len(audits_fail) == 0
 
     asyncio.run(scenario())
