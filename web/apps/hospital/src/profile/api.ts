@@ -37,9 +37,17 @@ const UNREGISTERED_STATUSES: ReadonlySet<number> = new Set([403, 404]);
 export async function loadHospitalProfile(
   client: PulseOSClient,
   signal: AbortSignal,
+  refreshToken?: () => Promise<void>,
 ): Promise<ApiResult<HospitalIdentity>> {
   return attempt<HospitalIdentity>(async () => {
-    const result = await client.GET("/api/v1/hospitals/me", { signal });
+    let result = await client.GET("/api/v1/hospitals/me", { signal });
+    // Registration sets custom claims server-side. A normal getIdToken() may still return
+    // the pre-registration token, including after a browser reload. Refresh only after the
+    // expected unprovisioned response, then let the API make the authorization decision again.
+    if (result.data === undefined && result.response.status === 403 && refreshToken !== undefined) {
+      await refreshToken();
+      result = await client.GET("/api/v1/hospitals/me", { signal });
+    }
     if (result.data === undefined) {
       if (UNREGISTERED_STATUSES.has(result.response.status)) {
         return { status: "ready", data: { kind: "unregistered" } };

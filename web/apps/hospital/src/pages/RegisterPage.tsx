@@ -44,16 +44,26 @@ export function RegisterPage() {
       </OnboardingShell>
     );
   }
-  // Already an administrator, and not through this form: the portal proper is where they
-  // belong. Without this guard, registering a second hospital would be one URL away.
-  if (resource.data.kind === "registered" && state.kind !== "registered") {
+  // Already an administrator of a VERIFIED hospital: the portal proper is where they
+  // belong.
+  if (
+    resource.data.kind === "registered" &&
+    resource.data.profile.hospital.verificationStatus === "VERIFIED"
+  ) {
     return <Navigate to="/" replace />;
   }
 
+  const profile =
+    state.kind === "registered"
+      ? state.profile
+      : resource.data.kind === "registered"
+        ? resource.data.profile
+        : null;
+
   return (
     <OnboardingShell>
-      {state.kind === "registered" ? (
-        <Registered profile={state.profile} />
+      {profile !== null ? (
+        <Registered profile={profile} />
       ) : (
         <Card className="[--card-spacing:--spacing(6)]">
           <CardContent className="space-y-6">
