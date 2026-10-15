@@ -27,9 +27,11 @@ from app.modules.consent.merkle import (
     MERKLE_PROTOCOL_VERSION,
     InvalidCommitmentInputError,
     MerkleError,
+    MerkleProof,
     MerkleTree,
     V3Batch,
     batch_commitment,
+    verify_proof,
 )
 from app.modules.consent.models import AuditBatch, AuditBatchMember, AuditLog
 from app.modules.consent.repository import AuditBatchRepository
@@ -107,6 +109,42 @@ class ReconciliationReport:
 
     def of_kind(self, kind: FindingKind) -> tuple[Finding, ...]:
         return tuple(finding for finding in self.findings if finding.kind is kind)
+
+
+@dataclass(frozen=True, slots=True)
+class BatchVerificationResult:
+    """The result of verifying an individual sealed batch against the database."""
+
+    batch_number: int
+    batch_id: UUID
+    protocol_version: int
+    hash_version: int
+    leaf_count: int
+    root: str
+    commitment: str
+    is_valid: bool
+    findings: tuple[Finding, ...]
+    first_occurred_at: datetime | None = None
+    last_occurred_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EventProofResult:
+    """The result of generating and verifying a Merkle proof for an individual audit event."""
+
+    audit_log_id: UUID
+    batch_number: int
+    batch_id: UUID
+    leaf_index: int
+    leaf_count: int
+    root: str
+    commitment: str
+    event_digest: str
+    recomputed_digest: str | None
+    is_event_valid: bool
+    is_proof_valid: bool
+    proof: MerkleProof
+    proof_steps_count: int
 
 
 #: The canonical position key, timezone-normalised (SQLite returns naive, Postgres aware).
@@ -195,6 +233,20 @@ class AuditBatchService:
         ]
         return await self._batches.add_sealed_batch(batch, members)
 
+    async def seal_all_batches(self, max_batches: int | None = None) -> list[AuditBatch]:
+        """Seal eligible unbatched v3 events into batches iteratively.
+
+        Stops when no more events are eligible, or when ``max_batches`` is reached.
+        Returns the list of sealed batches.
+        """
+        batches: list[AuditBatch] = []
+        while max_batches is None or len(batches) < max_batches:
+            batch = await self.seal_next_batch()
+            if batch is None:
+                break
+            batches.append(batch)
+        return batches
+
     # -- reconciliation ------------------------------------------------------------------
 
     async def reconcile(self) -> ReconciliationReport:
@@ -225,6 +277,97 @@ class AuditBatchService:
             members_checked=len(rows),
             unbatched_v3_events=len(unbatched),
             unbatched_events_checked=len(every_unbatched),
+        )
+
+    # -- verification and proofs ---------------------------------------------------------
+
+    async def verify_batch(self, batch_number: int) -> BatchVerificationResult | None:
+        """Verify an existing sealed batch against stored members and audit events.
+
+        Returns None if no batch with ``batch_number`` exists.
+        Recomputes tree root and commitment, and re-checks every member event against
+        its sealed digest and current columns.
+        """
+        batch = await self._batches.get_batch_by_number(batch_number)
+        if batch is None:
+            return None
+
+        members = await self._batches.list_members_for_batch(batch.id)
+        member_pairs: list[tuple[AuditBatchMember, AuditLog | None]] = []
+        for member in members:
+            event = await self._batches.get_event_by_id(member.audit_log_id)
+            member_pairs.append((member, event))
+
+        findings = _check_batch(batch, member_pairs)
+        return BatchVerificationResult(
+            batch_number=batch.batch_number,
+            batch_id=batch.id,
+            protocol_version=batch.protocol_version,
+            hash_version=batch.hash_version,
+            leaf_count=batch.leaf_count,
+            root=batch.root,
+            commitment=batch.commitment,
+            is_valid=len(findings) == 0,
+            findings=tuple(findings),
+            first_occurred_at=batch.first_occurred_at,
+            last_occurred_at=batch.last_occurred_at,
+        )
+
+    async def get_proof_for_event(self, audit_log_id: UUID) -> EventProofResult | None:
+        """Generate and independently verify a Merkle membership proof for an event.
+
+        Returns None if the event is not part of any sealed batch, or if the batch is missing.
+        """
+        member = await self._batches.get_member_by_audit_log_id(audit_log_id)
+        if member is None:
+            return None
+
+        batch = await self._batches.get_batch_by_id(member.batch_id)
+        if batch is None:
+            return None
+
+        event = await self._batches.get_event_by_id(audit_log_id)
+        all_members = await self._batches.list_members_for_batch(batch.id)
+
+        digests = [m.digest for m in all_members]
+        tree = MerkleTree(digests)
+        proof = tree.proof(member.leaf_index)
+
+        is_proof_valid = verify_proof(
+            member.digest,
+            proof,
+            batch.root,
+            trusted_leaf_index=member.leaf_index,
+            trusted_leaf_count=batch.leaf_count,
+        )
+
+        recomputed: str | None = None
+        is_event_valid = False
+        if event is not None:
+            try:
+                recomputed = recompute_event_hash(event)
+                is_event_valid = (
+                    event.event_hash == member.digest
+                    and recomputed == member.digest
+                    and event.hash_version == HASH_SCHEME_V3
+                )
+            except UnsupportedHashSchemeError:
+                is_event_valid = False
+
+        return EventProofResult(
+            audit_log_id=audit_log_id,
+            batch_number=batch.batch_number,
+            batch_id=batch.id,
+            leaf_index=member.leaf_index,
+            leaf_count=batch.leaf_count,
+            root=batch.root,
+            commitment=batch.commitment,
+            event_digest=member.digest,
+            recomputed_digest=recomputed,
+            is_event_valid=is_event_valid,
+            is_proof_valid=is_proof_valid,
+            proof=proof,
+            proof_steps_count=len(proof.steps),
         )
 
     def _backlog(self, unbatched: Sequence[AuditLog]) -> list[Finding]:

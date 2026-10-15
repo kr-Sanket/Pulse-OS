@@ -724,6 +724,37 @@ class AuditBatchRepository:
         )
         return list(result.scalars())
 
+    async def get_batch_by_id(self, batch_id: UUID) -> AuditBatch | None:
+        """Fetch one sealed batch by its UUID primary key."""
+        return await self._session.get(AuditBatch, batch_id)
+
+    async def get_batch_by_number(self, batch_number: int) -> AuditBatch | None:
+        """Fetch one sealed batch by its contiguous sequential number."""
+        result = await self._session.execute(
+            select(AuditBatch).where(AuditBatch.batch_number == batch_number)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_member_by_audit_log_id(self, audit_log_id: UUID) -> AuditBatchMember | None:
+        """Fetch the membership record linking an audit event to its batch."""
+        result = await self._session.execute(
+            select(AuditBatchMember).where(AuditBatchMember.audit_log_id == audit_log_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_members_for_batch(self, batch_id: UUID) -> list[AuditBatchMember]:
+        """Fetch all members of a batch ordered by leaf position (0 .. n-1)."""
+        result = await self._session.execute(
+            select(AuditBatchMember)
+            .where(AuditBatchMember.batch_id == batch_id)
+            .order_by(AuditBatchMember.leaf_index.asc())
+        )
+        return list(result.scalars())
+
+    async def get_event_by_id(self, audit_log_id: UUID) -> AuditLog | None:
+        """Fetch an audit log entry by UUID primary key."""
+        return await self._session.get(AuditLog, audit_log_id)
+
     async def list_members_with_events(
         self,
     ) -> list[tuple[AuditBatchMember, AuditLog | None]]:
