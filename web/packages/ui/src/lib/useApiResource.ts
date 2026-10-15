@@ -35,6 +35,8 @@ export interface ApiResourceState<T> {
   reload: () => void;
   /** Silent background refresh — fetches fresh data without resetting state to 'loading' if already 'ready'. */
   refresh: () => void;
+  /** Non-blocking error message from the most recent silent background refresh, if it failed. */
+  refreshError: string | null;
 }
 
 export function useApiResource<T>(
@@ -42,7 +44,11 @@ export function useApiResource<T>(
   options?: AutoRefreshOptions,
 ): ApiResourceState<T> {
   const [resource, setResource] = useState<Resource<T>>({ status: "idle" });
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+
+  const resourceRef = useRef<Resource<T>>(resource);
+  resourceRef.current = resource;
 
   const loaderRef = useRef<Loader<T> | null>(load);
   loaderRef.current = load;
@@ -58,6 +64,7 @@ export function useApiResource<T>(
     const currentLoader = loaderRef.current;
     if (currentLoader === null) {
       setResource({ status: "idle" });
+      setRefreshError(null);
       return;
     }
 
@@ -73,6 +80,7 @@ export function useApiResource<T>(
     activeControllerRef.current = controller;
 
     if (!isSilentRefresh) {
+      setRefreshError(null);
       setResource({ status: "loading" });
     }
 
@@ -81,18 +89,27 @@ export function useApiResource<T>(
       if (controller.signal.aborted) {
         return;
       }
-      setResource(
-        result.status === "ready"
-          ? { status: "ready", data: result.data }
-          : { status: "error", message: result.message },
-      );
+      if (result.status === "ready") {
+        setResource({ status: "ready", data: result.data });
+        setRefreshError(null);
+      } else {
+        if (isSilentRefresh && resourceRef.current.status === "ready") {
+          setRefreshError(result.message);
+        } else {
+          setResource({ status: "error", message: result.message });
+        }
+      }
     } catch (err: unknown) {
       if (controller.signal.aborted) {
         return;
       }
       // Never crash on network/aborted errors; fallback to error state
       const message = err instanceof Error ? err.message : "Failed to load resource";
-      setResource({ status: "error", message });
+      if (isSilentRefresh && resourceRef.current.status === "ready") {
+        setRefreshError(message);
+      } else {
+        setResource({ status: "error", message });
+      }
     } finally {
       inFlightRef.current = false;
     }
@@ -161,5 +178,5 @@ export function useApiResource<T>(
   const reload = useCallback(() => setAttempt((count) => count + 1), []);
   const refresh = useCallback(() => void execute(true), [execute]);
 
-  return { resource, reload, refresh };
+  return { resource, reload, refresh, refreshError };
 }

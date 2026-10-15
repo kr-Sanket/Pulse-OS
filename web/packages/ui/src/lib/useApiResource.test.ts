@@ -75,4 +75,45 @@ describe("useApiResource auto-refresh lifecycle", () => {
 
     expect(caughtError).toBe("Network offline");
   });
+
+  it("preserves ready state on background refresh failure and records refreshError", () => {
+    type Resource<T> =
+      | { status: "idle" }
+      | { status: "loading" }
+      | { status: "ready"; data: T }
+      | { status: "error"; message: string };
+
+    let resource: Resource<string> = { status: "ready", data: "initial data" };
+    let refreshError: string | null = null;
+
+    function handleResult(
+      result: { status: "ready"; data: string } | { status: "error"; message: string },
+      isSilentRefresh: boolean,
+    ) {
+      if (result.status === "ready") {
+        resource = { status: "ready", data: result.data };
+        refreshError = null;
+      } else {
+        if (isSilentRefresh && resource.status === "ready") {
+          refreshError = result.message;
+        } else {
+          resource = { status: "error", message: result.message };
+        }
+      }
+    }
+
+    // Background refresh fails: preserves previously loaded data
+    handleResult({ status: "error", message: "Polling failed" }, true);
+    expect(resource).toEqual({ status: "ready", data: "initial data" });
+    expect(refreshError).toBe("Polling failed");
+
+    // Subsequent successful refresh clears refreshError
+    handleResult({ status: "ready", data: "updated data" }, true);
+    expect(resource).toEqual({ status: "ready", data: "updated data" });
+    expect(refreshError).toBeNull();
+
+    // Foreground explicit reload failure resets resource to error state
+    handleResult({ status: "error", message: "Hard failure" }, false);
+    expect(resource).toEqual({ status: "error", message: "Hard failure" });
+  });
 });

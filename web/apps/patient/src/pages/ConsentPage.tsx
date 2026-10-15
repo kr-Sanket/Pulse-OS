@@ -56,6 +56,15 @@ export function ConsentPage() {
         </Button>
       </div>
 
+      {inbox.refreshError ? (
+        <div
+          role="status"
+          className="rounded-md border border-amber-500/20 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-700 dark:text-amber-400"
+        >
+          {inbox.refreshError}. Showing previously loaded requests.
+        </div>
+      ) : null}
+
       {inbox.status === "loading" ? (
         <ConsentInboxSkeleton />
       ) : inbox.status === "error" ? (
@@ -83,7 +92,8 @@ export function ConsentPage() {
                     request={request}
                     busy={inbox.busyOn(request.id)}
                     error={inbox.errorOn(request.id)}
-                    onDecide={(kind) => inbox.decide(request.id, request.categoryCodes, kind)}
+                    partial={inbox.partialOn(request.id)}
+                    onDecide={(decisions) => inbox.decide(request.id, decisions)}
                   />
                 ))}
               </div>
