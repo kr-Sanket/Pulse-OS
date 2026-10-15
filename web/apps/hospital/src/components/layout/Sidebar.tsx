@@ -19,18 +19,20 @@ import {
   useAuth,
 } from "@pulseos/ui";
 
-import { NAV_SECTIONS, navSectionId } from "./navigation";
+import { getNavSections, navSectionId } from "./navigation";
 
 export interface SidebarProps {
   open: boolean;
   onNavigate: () => void;
+  role?: string | null;
 }
 
-export function Sidebar({ open, onNavigate }: SidebarProps) {
+export function Sidebar({ open, onNavigate, role = null }: SidebarProps) {
   const { user, signOutUser } = useAuth();
   const displayName = user?.displayName ?? null;
   const email = user?.email ?? null;
   const photoURL = user?.photoURL ?? null;
+  const sections = getNavSections(role);
 
   return (
     <aside
@@ -53,7 +55,7 @@ export function Sidebar({ open, onNavigate }: SidebarProps) {
       </div>
 
       <nav className="flex-1 space-y-8 overflow-y-auto px-3 pb-2">
-        {NAV_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const headingId = navSectionId(section.title);
           return (
             <div key={section.title}>

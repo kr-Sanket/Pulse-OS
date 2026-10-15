@@ -4,14 +4,30 @@
 // stays entirely in ProtectedRoute and the shared AuthContext.
 
 import { useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Navigate, Outlet } from "react-router-dom";
+
+import { LoadingScreen } from "@pulseos/ui";
 
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { useCurrentUserRole, type CurrentUserRoleState } from "./useCurrentUserRole";
 
-export function HospitalLayout() {
+export interface HospitalLayoutProps {
+  useRole?: () => CurrentUserRoleState;
+}
+
+export function HospitalLayout({ useRole = useCurrentUserRole }: HospitalLayoutProps = {}) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = () => setDrawerOpen(false);
+  const { role, loading } = useRole();
+
+  if (loading) {
+    return <LoadingScreen message="Checking authorization…" />;
+  }
+
+  if (role === "SYSTEM_ADMIN") {
+    return <Navigate to="/admin" replace />;
+  }
 
   return (
     <div className="bg-background min-h-svh">
@@ -24,7 +40,7 @@ export function HospitalLayout() {
         />
       ) : null}
 
-      <Sidebar open={drawerOpen} onNavigate={closeDrawer} />
+      <Sidebar open={drawerOpen} onNavigate={closeDrawer} role={role} />
 
       {/* This offset MUST equal the sidebar's width in Sidebar.tsx (w-72 / 18rem). */}
       <div className="flex min-h-svh flex-col md:pl-72">

@@ -8,16 +8,19 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AuthContextProvider, ProtectedRoute } from "@pulseos/ui";
 
-import { HospitalLayout } from "./components/layout/HospitalLayout";
+import { AdminLayout } from "./admin/AdminLayout";
+import { AdminDashboardPage } from "./pages/AdminDashboardPage";
 import { AuditPage } from "./pages/AuditPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DoctorsPage } from "./pages/DoctorsPage";
+import { HospitalLayout } from "./components/layout/HospitalLayout";
 import { HospitalPage } from "./pages/HospitalPage";
 import { LoginPage } from "./pages/LoginPage";
+import { RegisterPage } from "./pages/RegisterPage";
+import { SystemAdminVerificationPage } from "./pages/SystemAdminVerificationPage";
 import { UploadDetailPage } from "./pages/UploadDetailPage";
 import { UploadPage } from "./pages/UploadPage";
 import { UploadsPage } from "./pages/UploadsPage";
-import { RegisterPage } from "./pages/RegisterPage";
 
 export function App() {
   return (
@@ -35,6 +38,18 @@ export function App() {
               </ProtectedRoute>
             }
           />
+          {/* Dedicated System Admin experience */}
+          <Route
+            element={
+              <ProtectedRoute>
+                <AdminLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route path="/admin" element={<AdminDashboardPage />} />
+            <Route path="/admin/dashboard" element={<Navigate to="/admin" replace />} />
+            <Route path="/admin/verification" element={<SystemAdminVerificationPage />} />
+          </Route>
           {/* "/" is the canonical dashboard URL and "/dashboard" is the spelling people type.
               Redirecting rather than rendering the page twice keeps one URL authoritative, so
               the sidebar's active state, the top-bar title and the browser history cannot

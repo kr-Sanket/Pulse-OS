@@ -15,16 +15,37 @@ import { SectionCard } from "@/components/shell/SectionCard";
 import { HospitalIdentityCard } from "@/profile/components/HospitalIdentityCard";
 import { HospitalIdentitySkeleton } from "@/profile/components/HospitalIdentitySkeleton";
 import { VerificationNotice } from "@/profile/components/VerificationNotice";
+import {
+  useCurrentUserRole,
+  type CurrentUserRoleState,
+} from "@/components/layout/useCurrentUserRole";
 import { useHospitalProfile } from "@/profile/useHospitalProfile";
 import { ADMIN_LABEL, firstNameOf, toIdentityView } from "@/profile/view";
 
-export function DashboardPage() {
+export interface DashboardPageProps {
+  useRole?: () => CurrentUserRoleState;
+}
+
+export function DashboardPage({ useRole = useCurrentUserRole }: DashboardPageProps = {}) {
+  const { role, loading: roleLoading } = useRole();
   const { resource, reload } = useHospitalProfile();
+
+  if (roleLoading) {
+    return <HospitalIdentitySkeleton />;
+  }
+
+  if (role === "SYSTEM_ADMIN") {
+    return <Navigate to="/admin" replace />;
+  }
   const outcome = resource.status === "ready" ? resource.data : null;
   const identity = outcome?.kind === "registered" ? toIdentityView(outcome.profile) : null;
 
-  // An account administering no hospital has nothing to do here — onboard it instead.
-  if (outcome?.kind === "unregistered") {
+  // An account administering no hospital, or one still awaiting verification, has nothing to
+  // do on the operational dashboard yet — show onboarding / waiting state instead.
+  if (
+    outcome?.kind === "unregistered" ||
+    (outcome?.kind === "registered" && outcome.profile.hospital.verificationStatus === "PENDING")
+  ) {
     return <Navigate to="/register" replace />;
   }
 

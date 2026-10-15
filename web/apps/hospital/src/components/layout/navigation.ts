@@ -12,6 +12,7 @@ import {
   FolderOpen,
   LayoutDashboard,
   ScrollText,
+  ShieldCheck,
   Stethoscope,
   Upload,
   type LucideIcon,
@@ -57,8 +58,40 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   },
 ];
 
+export const ADMIN_NAV_SECTION: NavSection = {
+  title: "System Admin",
+  items: [
+    {
+      to: "/admin/verification",
+      label: "Hospital Verification",
+      title: "Hospital Verification",
+      icon: ShieldCheck,
+    },
+    {
+      to: "/admin",
+      label: "Dashboard",
+      title: "System Admin Dashboard",
+      icon: LayoutDashboard,
+    },
+  ],
+};
+
+/**
+ * Returns navigation sections for the authenticated role.
+ * Displays System Admin section only when role is confirmed as SYSTEM_ADMIN.
+ */
+export function getNavSections(role: string | null): readonly NavSection[] {
+  if (role === "SYSTEM_ADMIN") {
+    return [...NAV_SECTIONS, ADMIN_NAV_SECTION];
+  }
+  return NAV_SECTIONS;
+}
+
 /** Every navigable item, flattened — the order the sections declare them in. */
 export const NAV_ITEMS: readonly NavItem[] = NAV_SECTIONS.flatMap((section) => section.items);
+
+/** All potential nav items across all roles, used for page title derivation. */
+export const ALL_NAV_ITEMS: readonly NavItem[] = [...NAV_ITEMS, ...ADMIN_NAV_SECTION.items];
 
 /** A stable DOM id for a section heading, so its list can reference it. */
 export function navSectionId(title: string): string {
@@ -71,7 +104,7 @@ export function navSectionId(title: string): string {
  * section rather than by whichever entry happens to be declared first. "/" is excluded from
  * the prefix match because it prefixes everything. */
 export function titleForPath(pathname: string): string {
-  const match = NAV_ITEMS.filter(
+  const match = ALL_NAV_ITEMS.filter(
     (item) => item.to !== "/" && pathname.startsWith(item.to),
   ).reduce<NavItem | null>(
     (longest, item) => (longest === null || item.to.length > longest.to.length ? item : longest),

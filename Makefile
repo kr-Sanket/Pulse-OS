@@ -7,7 +7,7 @@ BACKEND := cd backend && . .venv/bin/activate &&
 .DEFAULT_GOAL := help
 
 .PHONY: help env up down logs install install-backend install-web \
-	dev-api dev-patient dev-doctor dev-hospital \
+	dev-api dev-patient dev-doctor dev-hospital dev-web dev-admin \
 	api-client format lint typecheck test ci
 
 help: ## Show this help
@@ -44,6 +44,14 @@ dev-doctor: ## Run the doctor portal (http://localhost:5174)
 	cd web && pnpm dev:doctor
 
 dev-hospital: ## Run the hospital portal (http://localhost:5175)
+	cd web && pnpm dev:hospital
+
+dev-web: ## Run all three portals in one terminal (ports 5173 / 5174 / 5175)
+	cd web && pnpm -r --parallel --filter "./apps/*" dev
+
+dev-admin: ## Run the hospital portal for the System Admin verification page
+	@echo "System Admin hospital verification: http://localhost:5175/admin/verification"
+	@echo "(needs the backend running — make dev-api — and a SYSTEM_ADMIN account)"
 	cd web && pnpm dev:hospital
 
 api-client: ## Regenerate web/packages/api-client from the backend OpenAPI spec (ADR-003)
