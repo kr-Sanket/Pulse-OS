@@ -464,7 +464,12 @@ async def _walk(
         if len(rows) <= page_size:
             return seen
         last = page[-1]
-        after = DateCursor(sort=sort, sort_date=last.date_of_service, item_id=last.id)
+        after = DateCursor(
+            sort=sort,
+            sort_date=last.date_of_service,
+            item_id=last.id,
+            created_at=last.created_at,
+        )
 
 
 def test_the_listing_orders_by_clinical_date_not_insertion_time() -> None:
@@ -620,5 +625,118 @@ def test_search_sort_and_category_compose() -> None:
                 limit=10,
             )
             assert [row[0].date_of_service.day for row in rows] == [1, 3]
+
+    asyncio.run(scenario())
+
+
+def test_keyset_pagination_handles_identical_timestamps_across_page_boundaries() -> None:
+    """Five records sharing the exact same clinical date AND insertion timestamp.
+
+    When timestamps are equal, the unique record ID tie-breaker must make pagination
+    deterministic so records are neither duplicated nor skipped across page boundaries.
+    """
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            patient = await _patient(session)
+            categories = RecordCategoryRepository(session)
+            cbc = await categories.add(RecordCategory(code="CBC", display_name="CBC"))
+            records = MedicalRecordRepository(session)
+            created_instant = datetime(2026, 3, 1, 10, 0, 0)
+            target_date = date(2026, 3, 1)
+            for i in range(5):
+                await _record(
+                    session,
+                    patient_id=patient.id,
+                    category=cbc,
+                    hospital_id=None,
+                    created_at=created_instant,
+                    date_of_service=target_date,
+                    description=f"record-{i}",
+                )
+
+            for sort in (SortDirection.NEWEST_FIRST, SortDirection.OLDEST_FIRST):
+                walked = await _walk(records, patient.id, sort, page_size=2)
+                ids = [r.id for r in walked]
+                assert len(ids) == 5, f"{sort}: served {len(ids)}"
+                assert len(set(ids)) == 5, f"{sort}: duplicates detected"
+
+            walked_forward = await _walk(records, patient.id, SortDirection.NEWEST_FIRST, 2)
+            forward = [r.id for r in walked_forward]
+            walked_backward = await _walk(records, patient.id, SortDirection.OLDEST_FIRST, 2)
+            backward = [r.id for r in walked_backward]
+            assert forward == list(reversed(backward))
+
+    asyncio.run(scenario())
+
+
+def test_keyset_pagination_orders_by_created_at_when_clinical_dates_match() -> None:
+    """Records sharing the same clinical date but different creation timestamps must paginate
+    in creation timestamp order."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            patient = await _patient(session)
+            categories = RecordCategoryRepository(session)
+            cbc = await categories.add(RecordCategory(code="CBC", display_name="CBC"))
+            records = MedicalRecordRepository(session)
+            target_date = date(2026, 3, 1)
+            # Three records uploaded at 10:00, 11:00, 12:00 on the same date
+            for hour in (10, 11, 12):
+                await _record(
+                    session,
+                    patient_id=patient.id,
+                    category=cbc,
+                    hospital_id=None,
+                    created_at=datetime(2026, 3, 1, hour, 0, 0),
+                    date_of_service=target_date,
+                    description=f"hour-{hour}",
+                )
+
+            walked_newest = await _walk(
+                records, patient.id, SortDirection.NEWEST_FIRST, page_size=2
+            )
+            assert [r.created_at.hour for r in walked_newest] == [12, 11, 10]
+            assert len({r.id for r in walked_newest}) == 3
+
+            walked_oldest = await _walk(
+                records, patient.id, SortDirection.OLDEST_FIRST, page_size=2
+            )
+            assert [r.created_at.hour for r in walked_oldest] == [10, 11, 12]
+            assert len({r.id for r in walked_oldest}) == 3
+
+    asyncio.run(scenario())
+
+
+def test_legacy_three_part_cursor_remains_compatible_across_page_boundaries() -> None:
+    """A legacy 3-part cursor (without created_at) must decode and paginate properly."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            patient = await _patient(session)
+            categories = RecordCategoryRepository(session)
+            cbc = await categories.add(RecordCategory(code="CBC", display_name="CBC"))
+            records = MedicalRecordRepository(session)
+            await _dated(session, patient.id, cbc, [1, 2, 3])
+
+            first_page = await records.list_page(patient_id=patient.id, limit=2)
+            assert len(first_page) == 2
+            last = first_page[-1][0]
+
+            # Construct a legacy 3-part DateCursor (created_at=None)
+            legacy_cursor = DateCursor(
+                sort=SortDirection.NEWEST_FIRST,
+                sort_date=last.date_of_service,
+                item_id=last.id,
+                created_at=None,
+            )
+            second_page = await records.list_page(
+                patient_id=patient.id,
+                after=legacy_cursor,
+                limit=2,
+            )
+            assert len(second_page) == 1
+            all_ids = {row[0].id for row in first_page} | {row[0].id for row in second_page}
+            assert len(all_ids) == 3
 
     asyncio.run(scenario())

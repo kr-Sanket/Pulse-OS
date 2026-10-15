@@ -74,31 +74,52 @@ class DateCursor:
 
     ``sort_date`` is a calendar date, not an instant, and is **not unique** — a patient
     routinely has several records on one day (39 distinct dates across 103 in the demo
-    corpus). ``item_id`` is therefore load-bearing rather than a formality: without it a
-    page boundary that lands inside a same-date run either skips the rest of that run or
-    serves it twice.
+    corpus). ``created_at`` orders same-date records by insertion time, and ``item_id``
+    is the ultimate tie-breaker when insertion times are also identical.
     """
 
     sort: SortDirection
     sort_date: date
     item_id: UUID
+    created_at: datetime | None = None
 
 
 def encode_date_cursor(cursor: DateCursor) -> str:
-    raw = (
-        f"{cursor.sort.value}{_SEPARATOR}{cursor.sort_date.isoformat()}{_SEPARATOR}{cursor.item_id}"
-    )
+    if cursor.created_at is not None:
+        raw = (
+            f"{cursor.sort.value}{_SEPARATOR}"
+            f"{cursor.sort_date.isoformat()}{_SEPARATOR}"
+            f"{cursor.created_at.isoformat()}{_SEPARATOR}"
+            f"{cursor.item_id}"
+        )
+    else:
+        raw = (
+            f"{cursor.sort.value}{_SEPARATOR}"
+            f"{cursor.sort_date.isoformat()}{_SEPARATOR}"
+            f"{cursor.item_id}"
+        )
     return base64.urlsafe_b64encode(raw.encode()).decode()
 
 
 def decode_date_cursor(token: str) -> DateCursor:
     try:
         raw = base64.urlsafe_b64decode(token.encode()).decode()
-        sort_part, date_part, id_part = raw.split(_SEPARATOR)
-        return DateCursor(
-            sort=SortDirection(sort_part),
-            sort_date=date.fromisoformat(date_part),
-            item_id=UUID(id_part),
-        )
+        parts = raw.split(_SEPARATOR)
+        if len(parts) == 4:
+            sort_part, date_part, created_at_part, id_part = parts
+            return DateCursor(
+                sort=SortDirection(sort_part),
+                sort_date=date.fromisoformat(date_part),
+                item_id=UUID(id_part),
+                created_at=datetime.fromisoformat(created_at_part),
+            )
+        if len(parts) == 3:
+            sort_part, date_part, id_part = parts
+            return DateCursor(
+                sort=SortDirection(sort_part),
+                sort_date=date.fromisoformat(date_part),
+                item_id=UUID(id_part),
+            )
+        raise ValueError("Invalid cursor segment count")
     except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
         raise InvalidCursorError() from exc

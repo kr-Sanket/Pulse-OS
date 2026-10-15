@@ -395,7 +395,12 @@ class RecordService:
         if has_more:
             last = page[-1][0]
             next_cursor = encode_date_cursor(
-                DateCursor(sort=sort, sort_date=last.date_of_service, item_id=last.id)
+                DateCursor(
+                    sort=sort,
+                    sort_date=last.date_of_service,
+                    item_id=last.id,
+                    created_at=last.created_at,
+                )
             )
         return RecordPage(items=[self._to_view(row) for row in page], next_cursor=next_cursor)
 
@@ -524,6 +529,7 @@ class RecordService:
                     sort=SortDirection.NEWEST_FIRST,
                     sort_date=last.date_of_service,
                     item_id=last.id,
+                    created_at=last.created_at,
                 )
             )
         return GrantedRecordPage(

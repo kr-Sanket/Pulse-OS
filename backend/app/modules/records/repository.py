@@ -57,17 +57,36 @@ def _keyset_filter(
 def _date_keyset_filter(after: DateCursor) -> ColumnElement[bool]:
     """WHERE clause for "strictly after ``after``" in the direction the cursor was issued for.
 
-    The comparison flips with the direction, and both halves must flip together: under
-    ``oldest`` the next page is dates *greater* than the cursor's, and within the cursor's
-    own date it is the ids *greater* than it. Getting one half right and the other wrong
-    is invisible until a page boundary lands inside a run of same-date records — which,
-    with a handful of records per clinical day, is most boundaries.
+    The comparison flips with the direction, and all three components must flip together:
+    clinical date, creation timestamp, and the unique ID tie-breaker.
 
     Spelled as an OR rather than a row-value comparison because SQLite lacks tuple
     comparison, matching ``_keyset_filter`` above.
     """
     date_col = MedicalRecord.date_of_service
+    created_col = MedicalRecord.created_at
     id_col = MedicalRecord.id
+    if after.created_at is not None:
+        if after.sort is SortDirection.OLDEST_FIRST:
+            return or_(
+                date_col > after.sort_date,
+                and_(date_col == after.sort_date, created_col > after.created_at),
+                and_(
+                    date_col == after.sort_date,
+                    created_col == after.created_at,
+                    id_col > after.item_id,
+                ),
+            )
+        return or_(
+            date_col < after.sort_date,
+            and_(date_col == after.sort_date, created_col < after.created_at),
+            and_(
+                date_col == after.sort_date,
+                created_col == after.created_at,
+                id_col < after.item_id,
+            ),
+        )
+    # Backwards compatibility for legacy 3-part cursors without created_at
     if after.sort is SortDirection.OLDEST_FIRST:
         return or_(
             date_col > after.sort_date,
@@ -423,11 +442,12 @@ class MedicalRecordRepository:
         # The Hospital column is NULL for locker uploads (outer join) — SQLAlchemy's
         # Select typing cannot express that, so RecordRow carries the honest type.
         date_col = MedicalRecord.date_of_service
+        created_col = MedicalRecord.created_at
         id_col = MedicalRecord.id
         ordering = (
-            (date_col.asc(), id_col.asc())
+            (date_col.asc(), created_col.asc(), id_col.asc())
             if sort is SortDirection.OLDEST_FIRST
-            else (date_col.desc(), id_col.desc())
+            else (date_col.desc(), created_col.desc(), id_col.desc())
         )
         query = (
             select(MedicalRecord, RecordCategory, Hospital)
