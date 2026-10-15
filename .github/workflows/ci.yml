@@ -82,7 +82,7 @@ jobs:
       - name: PostgreSQL integration tests (must run, not skip)
         shell: bash
         run: |
-          pytest -rs tests/test_audit_batches_postgres.py tests/test_alembic_postgres.py | tee pytest-postgres.log
+          pytest -rs tests/test_audit_batches_postgres.py tests/test_alembic_postgres.py tests/test_consent_postgres.py | tee pytest-postgres.log
           if grep -qE "[0-9]+ skipped" pytest-postgres.log; then
             echo "::error::PostgreSQL tests were skipped; PULSEOS_TEST_POSTGRES_URL is not reaching them"
             exit 1
