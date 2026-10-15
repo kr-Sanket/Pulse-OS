@@ -295,3 +295,57 @@ def test_profile_lookups_without_rows_raise_profile_not_found() -> None:
                 await service.list_own_hospital_doctors(uuid4(), after=None, limit=10)
 
     asyncio.run(scenario())
+
+
+def test_list_hospitals_empty_and_filtered() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            provider = FakeAuthProvider()
+            service = _service(session, provider)
+
+            # Initially empty
+            assert await service.list_hospitals() == []
+
+            # Register hospital 1 (PENDING)
+            h1 = await service.register_hospital(
+                VerifiedToken(firebase_uid="fb-h1", claims={}),
+                hospital_name="Hospital Alpha",
+                hospital_address="Alpha Street",
+                admin_full_name="Admin One",
+            )
+            # Register hospital 2 (PENDING)
+            h2 = await service.register_hospital(
+                VerifiedToken(firebase_uid="fb-h2", claims={}),
+                hospital_name="Hospital Beta",
+                hospital_address="Beta Street",
+                admin_full_name="Admin Two",
+            )
+
+            all_hospitals = await service.list_hospitals()
+            assert len(all_hospitals) == 2
+            assert {h.hid for h in all_hospitals} == {h1.hospital.hid, h2.hospital.hid}
+
+            pending_only = await service.list_hospitals(
+                verification_status=HospitalVerificationStatus.PENDING
+            )
+            assert len(pending_only) == 2
+
+            verified_only = await service.list_hospitals(
+                verification_status=HospitalVerificationStatus.VERIFIED
+            )
+            assert len(verified_only) == 0
+
+            # Verify hospital 1
+            await service.verify_hospital(h1.hospital.hid)
+
+            verified_after = await service.list_hospitals(
+                verification_status=HospitalVerificationStatus.VERIFIED
+            )
+            assert [h.hid for h in verified_after] == [h1.hospital.hid]
+
+            pending_after = await service.list_hospitals(
+                verification_status=HospitalVerificationStatus.PENDING
+            )
+            assert [h.hid for h in pending_after] == [h2.hospital.hid]
+
+    asyncio.run(scenario())

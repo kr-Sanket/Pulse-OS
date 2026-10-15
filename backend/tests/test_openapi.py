@@ -22,6 +22,7 @@ def test_walking_skeleton_paths_are_present() -> None:
 
 def test_m2_paths_are_present() -> None:
     paths = _spec()["paths"]
+    assert "get" in paths["/api/v1/hospitals"]
     assert "post" in paths["/api/v1/hospitals/register"]
     assert "get" in paths["/api/v1/hospitals/me"]
     assert "post" in paths["/api/v1/hospitals/{hid}/verify"]

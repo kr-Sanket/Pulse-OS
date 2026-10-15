@@ -139,6 +139,14 @@ class HospitalService:
         hospital.verification_status = HospitalVerificationStatus.VERIFIED
         return hospital
 
+    async def list_hospitals(
+        self,
+        *,
+        verification_status: HospitalVerificationStatus | None = None,
+    ) -> list[Hospital]:
+        """SYSTEM_ADMIN reads hospital directory / verification backlog."""
+        return await self._hospitals.list_all(verification_status=verification_status)
+
     async def get_own_hospital(self, user_id: UUID) -> tuple[HospitalAdmin, Hospital]:
         """The caller's admin profile + hospital (ADR-013 layer 2: own hospital)."""
         admin = await self._admins.get_by_user_id(user_id)

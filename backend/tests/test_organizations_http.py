@@ -253,3 +253,60 @@ def test_unprovisioned_rows_yield_404_profiles(
     fake_auth.register_user("doc", user_id=uuid4(), firebase_uid="fb-d", role=Role.DOCTOR)
     assert client.get(HOSPITAL_ME, headers=_bearer("adm")).status_code == 404
     assert client.get(DOCTORS_ME, headers=_bearer("doc")).status_code == 404
+
+
+def test_list_hospitals_system_admin_only_and_filters(
+    client: TestClient, fake_auth: FakeAuthProvider, admin_signup: str
+) -> None:
+    # 1. Unauthenticated -> 401
+    assert client.get("/api/v1/hospitals").status_code == 401
+
+    # 2. Ordinary user (e.g. PATIENT, DOCTOR, HOSPITAL_ADMIN) -> 403
+    fake_auth.register_user("pat", user_id=uuid4(), firebase_uid="fb-pat", role=Role.PATIENT)
+    assert client.get("/api/v1/hospitals", headers=_bearer("pat")).status_code == 403
+
+    admin_headers = _register_admin(client, fake_auth, admin_signup)
+    assert client.get("/api/v1/hospitals", headers=admin_headers).status_code == 403
+
+    # 3. System Admin -> 200
+    fake_auth.register_user(
+        "sysadmin", user_id=uuid4(), firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN
+    )
+    sys_headers = _bearer("sysadmin")
+
+    # The registered hospital starts PENDING
+    all_res = client.get("/api/v1/hospitals", headers=sys_headers)
+    assert all_res.status_code == 200
+    data = all_res.json()
+    assert "items" in data
+    assert len(data["items"]) == 1
+    hospital = data["items"][0]
+    assert hospital["name"] == "Sunrise Clinic"
+    assert hospital["verificationStatus"] == "PENDING"
+    hid = hospital["hid"]
+
+    # Filter ?status=PENDING -> returns 1
+    pending_res = client.get("/api/v1/hospitals?status=PENDING", headers=sys_headers)
+    assert pending_res.status_code == 200
+    assert len(pending_res.json()["items"]) == 1
+
+    # Filter ?status=VERIFIED -> returns 0
+    verified_res = client.get("/api/v1/hospitals?status=VERIFIED", headers=sys_headers)
+    assert verified_res.status_code == 200
+    assert len(verified_res.json()["items"]) == 0
+
+    # Verify hospital
+    verify_res = client.post(f"/api/v1/hospitals/{hid}/verify", headers=sys_headers)
+    assert verify_res.status_code == 200
+    assert verify_res.json()["verificationStatus"] == "VERIFIED"
+
+    # Now ?status=VERIFIED -> returns 1
+    verified_after = client.get("/api/v1/hospitals?status=VERIFIED", headers=sys_headers)
+    assert verified_after.status_code == 200
+    assert len(verified_after.json()["items"]) == 1
+    assert verified_after.json()["items"][0]["hid"] == hid
+
+    # And ?status=PENDING -> returns 0
+    pending_after = client.get("/api/v1/hospitals?status=PENDING", headers=sys_headers)
+    assert pending_after.status_code == 200
+    assert len(pending_after.json()["items"]) == 0

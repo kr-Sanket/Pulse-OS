@@ -447,6 +447,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/hospitals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Hospitals
+         * @description List registered hospitals for platform administration.
+         *
+         *     Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+         *     Failure modes: 401, 403, 422.
+         */
+        get: operations["list_hospitals_api_v1_hospitals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/hospitals/me": {
         parameters: {
             query?: never;
@@ -1822,6 +1845,11 @@ export interface components {
             /** Targetrecordid */
             targetRecordId: string | null;
         };
+        /** HospitalListResponse */
+        HospitalListResponse: {
+            /** Items */
+            items: components["schemas"]["HospitalResponse"][];
+        };
         /** HospitalRegistrationRequest */
         HospitalRegistrationRequest: {
             /** Adminfullname */
@@ -3029,6 +3057,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_hospitals_api_v1_hospitals_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by verification status (PENDING or VERIFIED). */
+                status?: components["schemas"]["HospitalVerificationStatus"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

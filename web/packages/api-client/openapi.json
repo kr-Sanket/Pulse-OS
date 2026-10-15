@@ -1335,6 +1335,22 @@
         "title": "HospitalAuditEventResponse",
         "type": "object"
       },
+      "HospitalListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HospitalResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "HospitalListResponse",
+        "type": "object"
+      },
       "HospitalRegistrationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3128,6 +3144,58 @@
         "summary": "List Granted Records",
         "tags": [
           "records"
+        ]
+      }
+    },
+    "/api/v1/hospitals": {
+      "get": {
+        "description": "List registered hospitals for platform administration.\n\nRoles: SYSTEM_ADMIN (platform operations \u2014 touches no medical content).\nFailure modes: 401, 403, 422.",
+        "operationId": "list_hospitals_api_v1_hospitals_get",
+        "parameters": [
+          {
+            "description": "Filter by verification status (PENDING or VERIFIED).",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/HospitalVerificationStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by verification status (PENDING or VERIFIED).",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Hospitals",
+        "tags": [
+          "hospitals"
         ]
       }
     },

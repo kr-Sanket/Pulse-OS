@@ -62,6 +62,10 @@ class HospitalResponse(ApiModel):
     created_at: datetime
 
 
+class HospitalListResponse(ApiModel):
+    items: list[HospitalResponse]
+
+
 class HospitalAdminProfileResponse(ApiModel):
     """A hospital admin's view of their own hospital (registration + GET /hospitals/me)."""
 

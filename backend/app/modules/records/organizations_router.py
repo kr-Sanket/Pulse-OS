@@ -20,13 +20,14 @@ from app.modules.auth.domain import AuthenticatedUser
 from app.modules.auth.errors import AuthError
 from app.modules.records.dependencies import HospitalServiceDep, parse_cursor, to_http_error
 from app.modules.records.errors import HospitalNotFoundError, RecordsError
-from app.modules.records.models import DoctorStatus
+from app.modules.records.models import DoctorStatus, HospitalVerificationStatus
 from app.modules.records.schemas import (
     DoctorListResponse,
     DoctorProfileResponse,
     DoctorRegistrationRequest,
     DoctorResponse,
     HospitalAdminProfileResponse,
+    HospitalListResponse,
     HospitalRegistrationRequest,
     HospitalResponse,
 )
@@ -88,6 +89,28 @@ async def read_own_hospital(
     except RecordsError as exc:
         raise to_http_error(exc) from exc
     return HospitalAdminProfileResponse.build(hospital, admin)
+
+
+@hospitals_router.get("", response_model=HospitalListResponse)
+async def list_hospitals(
+    user: Annotated[AuthenticatedUser, Depends(RequireSystemAdmin)],
+    service: HospitalServiceDep,
+    status: Annotated[
+        HospitalVerificationStatus | None,
+        Query(
+            description="Filter by verification status (PENDING or VERIFIED).",
+        ),
+    ] = None,
+) -> HospitalListResponse:
+    """List registered hospitals for platform administration.
+
+    Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+    Failure modes: 401, 403, 422.
+    """
+    hospitals = await service.list_hospitals(verification_status=status)
+    return HospitalListResponse(
+        items=[HospitalResponse.model_validate(hospital) for hospital in hospitals]
+    )
 
 
 @hospitals_router.post("/{hid}/verify", response_model=HospitalResponse)

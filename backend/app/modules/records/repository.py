@@ -23,6 +23,7 @@ from app.modules.records.models import (
     Doctor,
     Hospital,
     HospitalAdmin,
+    HospitalVerificationStatus,
     MedicalRecord,
     RecordCategory,
 )
@@ -131,6 +132,18 @@ class HospitalRepository:
         if not hospital_ids:
             return []
         result = await self._session.execute(select(Hospital).where(Hospital.id.in_(hospital_ids)))
+        return list(result.scalars())
+
+    async def list_all(
+        self,
+        *,
+        verification_status: HospitalVerificationStatus | None = None,
+    ) -> list[Hospital]:
+        """List all hospitals, newest first, with optional verification status filter."""
+        stmt = select(Hospital).order_by(Hospital.created_at.desc(), Hospital.hid.asc())
+        if verification_status is not None:
+            stmt = stmt.where(Hospital.verification_status == verification_status)
+        result = await self._session.execute(stmt)
         return list(result.scalars())
 
     async def add(self, hospital: Hospital) -> Hospital:
