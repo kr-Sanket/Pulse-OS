@@ -13,6 +13,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Mapping
+from pathlib import Path
 
 import firebase_admin
 from firebase_admin import auth as firebase_auth
@@ -32,11 +33,26 @@ logger = logging.getLogger("pulseos.auth")
 _FIREBASE_APP_NAME = "pulseos"
 
 
+def _resolve_credentials_file(path_str: str | None) -> str | None:
+    if not path_str:
+        return None
+    candidate = Path(path_str)
+    if candidate.is_file():
+        return str(candidate.resolve())
+    backend_dir = Path(__file__).resolve().parents[3]
+    if (backend_dir / path_str).is_file():
+        return str((backend_dir / path_str).resolve())
+    repo_root = backend_dir.parent
+    if (repo_root / path_str).is_file():
+        return str((repo_root / path_str).resolve())
+    return path_str
+
+
 class FirebaseAuthProvider(AuthenticationProvider):
     """Verifies Firebase ID tokens via the Admin SDK (service account or ADC)."""
 
     def __init__(self, settings: Settings) -> None:
-        self._credentials_file = settings.firebase_credentials_file
+        self._credentials_file = _resolve_credentials_file(settings.firebase_credentials_file)
         self._app: firebase_admin.App | None = None
         self._init_lock = threading.Lock()
 
