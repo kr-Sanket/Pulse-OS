@@ -20,7 +20,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.records.models import Doctor, DoctorStatus, Hospital, MedicalRecord
+from app.modules.records.models import (
+    Doctor,
+    DoctorStatus,
+    Hospital,
+    HospitalVerificationStatus,
+    MedicalRecord,
+)
 from app.modules.records.repository import (
     DoctorRepository,
     HospitalAdminRepository,
@@ -228,6 +234,39 @@ class RecordCategoryDirectoryService:
 # here), and keeping them in this file means a consumer imports only ``records.directory``,
 # which imports nothing outside ``records`` — so no import cycle can form between a module
 # that consumes identity and a module records asks for permission.
+
+
+class HospitalVerificationDirectoryService:
+    """Whether an account administers a VERIFIED hospital — one yes/no, nothing else.
+
+    Published for ``patients``' Health-ID lookup, which discloses a patient's name and so
+    must not answer an administrator whose hospital the platform has not verified (amends
+    ADR-021, whose rationale assumed the lookup revealed nothing an upload attempt would
+    not). The verification rule itself stays here, beside the hospitals table and the
+    upload check that applies the same rule (``RecordService.upload_for_health_id``).
+    """
+
+    def __init__(self, admins: HospitalAdminRepository, hospitals: HospitalRepository) -> None:
+        self._admins = admins
+        self._hospitals = hospitals
+
+    async def administers_verified_hospital(self, user_id: UUID) -> bool:
+        """True only if this account has an administrator profile whose hospital is
+        VERIFIED. No profile, no hospital, or any other status is False."""
+        admin = await self._admins.get_by_user_id(user_id)
+        if admin is None:
+            return False
+        hospital = await self._hospitals.get_by_id(admin.hospital_id)
+        return (
+            hospital is not None
+            and hospital.verification_status is HospitalVerificationStatus.VERIFIED
+        )
+
+
+def hospital_verification_directory(session: AsyncSession) -> HospitalVerificationDirectoryService:
+    return HospitalVerificationDirectoryService(
+        HospitalAdminRepository(session), HospitalRepository(session)
+    )
 
 
 def clinician_directory(session: AsyncSession) -> ClinicianDirectoryService:

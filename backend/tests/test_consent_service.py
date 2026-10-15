@@ -18,8 +18,10 @@ from app.modules.auth.models import User
 from app.modules.consent.dependencies import RecordsStaffDirectory
 from app.modules.consent.errors import (
     AccessDeniedError,
+    CategoryAlreadyGrantedError,
     ClinicianNotActiveError,
     ClinicianProfileNotFoundError,
+    DuplicatePendingRequestError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
     PatientProfileNotFoundError,
@@ -33,6 +35,7 @@ from app.modules.consent.models import (
     AuditLog,
     ConsentDecisionStatus,
     ConsentRequest,
+    ConsentRequestCategory,
     ConsentRequestStatus,
 )
 from app.modules.consent.repository import (
@@ -42,8 +45,6 @@ from app.modules.consent.repository import (
     ConsentRequestCategoryRepository,
     ConsentRequestRepository,
 )
-from app.modules.notifications.models import Notification, NotificationEventType
-from app.modules.notifications.repository import NotificationRepository
 from app.modules.consent.service import (
     CURRENT_HASH_SCHEME,
     HASH_SCHEME_V1,
@@ -59,6 +60,8 @@ from app.modules.consent.service import (
     recompute_event_hash,
     sha256_event_hash,
 )
+from app.modules.notifications.models import Notification, NotificationEventType
+from app.modules.notifications.repository import NotificationRepository
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
 from app.modules.patients.repository import PatientRepository
@@ -383,7 +386,11 @@ def test_inbox_pagination_walks_every_request_without_overlap() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:
             h = await _harness(session)
-            created = {await _request(h, "CBC") for _ in range(5)}
+            created = set()
+            for _ in range(5):
+                created.add(await _request(h, "CBC"))
+                # Past the 7-day TTL, so the next ask for CBC is not a duplicate open request.
+                h.clock.advance(dt.timedelta(days=8))
             seen: set[UUID] = set()
             after: CursorKey | None = None
             pages = 0
@@ -524,6 +531,17 @@ async def _granted(h: Harness) -> UUID:
     return outcome.grants[0].id
 
 
+async def _regranted(h: Harness) -> UUID:
+    """A CBC grant from a single-category request, for tests that build a grant history.
+
+    ``_granted`` leaves MRI open on its request, so it can be called once per test; this
+    can be called again after the previous CBC grant is revoked.
+    """
+    request_id = await _request(h, "CBC")
+    outcome = await h.service.approve_categories(h.patient, request_id, [h.categories["CBC"]])
+    return outcome.grants[0].id
+
+
 async def _reads(h: Harness, category: str) -> bool:
     try:
         await h.service.enforce(
@@ -588,7 +606,10 @@ def test_grant_listing_returns_every_grant_the_patient_has_ever_been_given() -> 
     async def scenario() -> None:
         async with sqlite_session() as session:
             h = await _harness(session)
-            created = {await _granted(h), await _granted(h)}
+            first = await _granted(h)
+            # Revoked before re-granting: two active grants for one category are refused.
+            await h.service.revoke_grant(h.patient, first)
+            created = {first, await _regranted(h)}
 
             page = await h.service.list_grants(h.patient, after=None, limit=10)
 
@@ -605,9 +626,9 @@ def test_each_listed_grant_carries_the_state_enforcement_would_apply() -> None:
         async with sqlite_session() as session:
             h = await _harness(session)
             revoked = await _granted(h)
-            h.clock.advance(dt.timedelta(minutes=1))
-            active = await _granted(h)
             await h.service.revoke_grant(h.patient, revoked)
+            h.clock.advance(dt.timedelta(minutes=1))
+            active = await _regranted(h)
 
             states = {
                 view.grant.id: view.state
@@ -681,7 +702,10 @@ def test_grant_pagination_walks_every_grant_without_overlap() -> None:
             h = await _harness(session)
             created = set()
             for _ in range(5):
-                created.add(await _granted(h))
+                grant_id = await _regranted(h)
+                created.add(grant_id)
+                # Revoked before the next: two active grants for one category are refused.
+                await h.service.revoke_grant(h.patient, grant_id)
                 h.clock.advance(dt.timedelta(minutes=1))
 
             seen: set[UUID] = set()
@@ -839,7 +863,8 @@ def test_trail_pagination_walks_every_event_without_overlap() -> None:
             h = await _harness(session)
             for _ in range(5):
                 await _request(h, "CBC")
-                h.clock.advance(dt.timedelta(seconds=1))
+                # Past the 7-day TTL, so the next ask for CBC is not a duplicate open request.
+                h.clock.advance(dt.timedelta(days=8))
 
             seen: set[UUID] = set()
             after: CursorKey | None = None
@@ -1183,6 +1208,45 @@ def test_a_served_listing_is_recorded_as_records_listed_with_no_target() -> None
                 and event.target_request_id is None
             )
             assert event.event_hash  # hashed like every other event
+
+    asyncio.run(scenario())
+
+
+def test_an_ai_search_is_recorded_as_records_searched_not_listed() -> None:
+    """Same scope-level shape as a listing, its own action: a search returns record text."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+
+            await h.service.record_search(
+                h.doctor,
+                patient_id=h.patient_id,
+                granted_category_ids=frozenset({h.categories["CBC"]}),
+                at=h.clock.now,
+                request_context="req-search",
+            )
+            await h.service.record_search(
+                h.doctor,
+                patient_id=h.patient_id,
+                granted_category_ids=frozenset(),
+                at=h.clock.now,
+            )
+
+            events = await h.audit.list_page_by_patient(h.patient_id, after=None, limit=9)
+            assert sorted(event.action.value for event in events) == [
+                "ACCESS_DENIED",
+                "RECORDS_SEARCHED",
+            ]
+            (searched,) = [e for e in events if e.action is AuditAction.RECORDS_SEARCHED]
+            assert searched.actor_role is Role.DOCTOR
+            assert searched.request_context == "req-search"
+            assert (
+                searched.target_record_id is None
+                and searched.target_category_id is None
+                and searched.target_request_id is None
+            )
+            assert searched.event_hash == recompute_event_hash(searched)
 
     asyncio.run(scenario())
 
@@ -1941,9 +2005,7 @@ def test_consent_notifications_contain_no_phi_or_sensitive_identifiers() -> None
                 h.patient, request_id, [h.categories["CBC"]]
             )
             await h.service.revoke_grant(h.patient, outcome.grants[0].id)
-            await h.service.reject_categories(
-                h.patient, request_id, [h.categories["MRI"]]
-            )
+            await h.service.reject_categories(h.patient, request_id, [h.categories["MRI"]])
 
             # Query all notifications in the session
             result = await session.execute(select(Notification))
@@ -1961,8 +2023,12 @@ def test_consent_notifications_contain_no_phi_or_sensitive_identifiers() -> None
 
             for n in all_notifications:
                 for term in sensitive_terms:
-                    assert term not in n.title, f"Sensitive term '{term}' leaked in title: '{n.title}'"
-                    assert term not in n.message, f"Sensitive term '{term}' leaked in message: '{n.message}'"
+                    assert term not in n.title, (
+                        f"Sensitive term '{term}' leaked in title: '{n.title}'"
+                    )
+                    assert term not in n.message, (
+                        f"Sensitive term '{term}' leaked in message: '{n.message}'"
+                    )
 
     asyncio.run(scenario())
 
@@ -2038,5 +2104,170 @@ def test_consent_mutation_and_notification_roll_back_together() -> None:
             assert len(notifs_fail) == 0
             audits_fail = (await session.execute(select(AuditLog))).scalars().all()
             assert len(audits_fail) == 0
+
+    asyncio.run(scenario())
+
+
+# -- duplicate requests and grants, and request expiry (2026-10-15) --------------------
+
+
+async def _notification_count(h: Harness) -> int:
+    return len((await h.session.execute(select(Notification))).scalars().all())
+
+
+def test_a_second_open_request_for_the_same_category_is_refused_and_writes_nothing() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC")
+            actions_before = await h.actions()
+            notifications_before = await _notification_count(h)
+
+            with pytest.raises(DuplicatePendingRequestError):
+                await _request(h, "CBC")
+
+            # Refused before anything is written: no request, audit event or notification.
+            assert await h.actions() == actions_before
+            assert await _notification_count(h) == notifications_before
+            inbox = await h.service.list_inbox(h.patient, after=None, limit=10)
+            assert len(inbox.items) == 1
+
+    asyncio.run(scenario())
+
+
+def test_overlapping_on_any_one_category_is_enough_to_refuse() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _request(h, "CBC", "MRI")
+            with pytest.raises(DuplicatePendingRequestError):
+                await _request(h, "MRI", "XRAY")
+            # A disjoint ask is not a duplicate.
+            await _request(h, "XRAY")
+
+    asyncio.run(scenario())
+
+
+def test_a_doctor_may_ask_again_after_a_rejection_or_an_expiry() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            rejected = await _request(h, "CBC", "MRI")
+            await h.service.reject_categories(h.patient, rejected, [h.categories["CBC"]])
+            # CBC was answered (rejected); MRI is still open on that PENDING request.
+            await _request(h, "CBC")
+            with pytest.raises(DuplicatePendingRequestError):
+                await _request(h, "MRI")
+
+            h.clock.advance(dt.timedelta(days=8))  # both open requests are now expired
+            await _request(h, "CBC", "MRI")
+
+    asyncio.run(scenario())
+
+
+def test_a_category_already_granted_cannot_be_requested_again_until_revoked() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            grant_id = await _granted(h)  # CBC granted; MRI still open on that request
+
+            # Both rules apply to [CBC, MRI]; the answer is deterministic: granted first.
+            with pytest.raises(CategoryAlreadyGrantedError):
+                await _request(h, "CBC", "MRI")
+            with pytest.raises(CategoryAlreadyGrantedError):
+                await _request(h, "CBC")
+
+            await h.service.revoke_grant(h.patient, grant_id)
+            await _request(h, "CBC")
+
+    asyncio.run(scenario())
+
+
+def test_an_expired_grant_does_not_block_a_new_request() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _granted(h)
+            h.clock.advance(dt.timedelta(days=91))  # past the 90-day grant TTL
+            await _request(h, "CBC")
+
+    asyncio.run(scenario())
+
+
+def test_approving_a_category_the_doctor_already_holds_is_refused() -> None:
+    """Two open requests for one category can only exist from before the creation guard
+    (or by writing past it); approving the second must not mint a second active grant."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            first = await _request(h, "CBC")
+            doctor = await session.get(Doctor, h.doctor_id)
+            assert doctor is not None
+            # Arrange the legacy state directly, bypassing the service's creation guard.
+            second = await ConsentRequestRepository(session).add(
+                ConsentRequest(
+                    patient_id=h.patient_id,
+                    requester_doctor_id=h.doctor_id,
+                    requester_hospital_id=doctor.hospital_id,
+                    purpose="legacy duplicate",
+                    status=ConsentRequestStatus.PENDING,
+                    expires_at=START + dt.timedelta(days=7),
+                )
+            )
+            await ConsentRequestCategoryRepository(session).add(
+                ConsentRequestCategory(request_id=second.id, category_id=h.categories["CBC"])
+            )
+            await h.service.approve_categories(h.patient, first, [h.categories["CBC"]])
+            actions_before = await h.actions()
+
+            with pytest.raises(CategoryAlreadyGrantedError):
+                await h.service.approve_categories(h.patient, second.id, [h.categories["CBC"]])
+
+            assert await h.actions() == actions_before
+            active = await h.grants.list_active_category_ids(
+                patient_id=h.patient_id, grantee_doctor_id=h.doctor_id, at=START
+            )
+            assert list(active) == [h.categories["CBC"]]
+            # Rejecting the redundant ask is still possible, so the request can be closed.
+            await h.service.reject_categories(h.patient, second.id, [h.categories["CBC"]])
+
+    asyncio.run(scenario())
+
+
+def test_an_expired_request_reads_as_expired_in_both_listings_before_any_decision() -> None:
+    """Listings write nothing, so the stored row stays PENDING until a decision attempt
+    persists the transition — but no reader is shown an answerable request."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+            inbox = await h.service.list_inbox(h.patient, after=None, limit=10)
+            assert inbox.items[0].status is ConsentRequestStatus.PENDING
+
+            h.clock.advance(dt.timedelta(days=7))  # exactly the deadline: expired
+
+            inbox = await h.service.list_inbox(h.patient, after=None, limit=10)
+            sent = await h.service.list_sent_requests(h.doctor, after=None, limit=10)
+            assert inbox.items[0].status is ConsentRequestStatus.EXPIRED
+            assert sent.items[0].status is ConsentRequestStatus.EXPIRED
+            stored = await session.get(ConsentRequest, request_id)
+            assert stored is not None and stored.status is ConsentRequestStatus.PENDING
+
+    asyncio.run(scenario())
+
+
+def test_repeated_decisions_on_an_expired_request_are_refused_the_same_way() -> None:
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            request_id = await _request(h, "CBC")
+            h.clock.advance(dt.timedelta(days=8))
+            for decide in (h.service.approve_categories, h.service.reject_categories):
+                with pytest.raises(RequestNotDecidableError) as excinfo:
+                    await decide(h.patient, request_id, [h.categories["CBC"]])
+                assert excinfo.value.status == "EXPIRED"
+            assert await h.actions() == ["ACCESS_REQUESTED"]
 
     asyncio.run(scenario())

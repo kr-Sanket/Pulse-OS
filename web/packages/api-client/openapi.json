@@ -349,7 +349,7 @@
         "type": "object"
       },
       "AuditAction": {
-        "description": "The audit action vocabulary of docs/DOMAIN_MODEL.md \u00a71, verbatim.\n\n``ACCESS_DENIED`` extends that list. The M3 gate requires that \"attempted unauthorized\nreads are denied AND logged\" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only\nsuccesses, so a refused read had no truthful action to write. Adding it costs nothing:\nmembers are values in a VARCHAR(32) column, so the vocabulary extends without a\nmigration.\n\n``RECORDS_LISTED`` extends it again, for the same reason and by the same precedent\n(ADR-020). A clinician asking which of a patient's records they may read is a real\naccess event \u2014 SYSTEM_ARCHITECTURE rule 3 covers \"metadata-beyond-existence\" \u2014 and no\nexisting member states it truthfully: ``RECORD_VIEWED`` means one document was read and\nis paired with a record id, so reusing it would either invent views that never happened\nor leave that pairing unfilled. It is the one member whose event has **no** target at\nall: its subject is a scope, which ``patient_id`` already carries. See the target-column\nnote on ``AuditLog``.\n\n``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own\nADR (.claude/TODO.md parking lot), and an unused member here would imply a capability\nthat docs/SECURITY.md's no-break-glass invariant denies.",
+        "description": "The audit action vocabulary of docs/DOMAIN_MODEL.md \u00a71, verbatim.\n\n``ACCESS_DENIED`` extends that list. The M3 gate requires that \"attempted unauthorized\nreads are denied AND logged\" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only\nsuccesses, so a refused read had no truthful action to write. Adding it costs nothing:\nmembers are values in a VARCHAR(32) column, so the vocabulary extends without a\nmigration.\n\n``RECORDS_LISTED`` extends it again, for the same reason and by the same precedent\n(ADR-020). A clinician asking which of a patient's records they may read is a real\naccess event \u2014 SYSTEM_ARCHITECTURE rule 3 covers \"metadata-beyond-existence\" \u2014 and no\nexisting member states it truthfully: ``RECORD_VIEWED`` means one document was read and\nis paired with a record id, so reusing it would either invent views that never happened\nor leave that pairing unfilled. It is the one member whose event has **no** target at\nall: its subject is a scope, which ``patient_id`` already carries. See the target-column\nnote on ``AuditLog``.\n\n``RECORDS_SEARCHED`` extends it a third time (ADR-020, amendment of 2026-10-15): a\nclinician's AI record search (``GET /ai/patients/{id}/search``) returns record *text*\nfrom the granted scope, which ``RECORDS_LISTED`` \u2014 a chooser of ids \u2014 understated. Same\nshape as a listing: one scope-level row, no target. Rows written before it existed keep\n``RECORDS_LISTED``; nothing is rewritten.\n\n``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own\nADR (.claude/TODO.md parking lot), and an unused member here would imply a capability\nthat docs/SECURITY.md's no-break-glass invariant denies.",
         "enum": [
           "RECORD_UPLOADED",
           "ACCESS_REQUESTED",
@@ -360,7 +360,8 @@
           "RECORD_DOWNLOADED",
           "SUMMARY_GENERATED",
           "ACCESS_DENIED",
-          "RECORDS_LISTED"
+          "RECORDS_LISTED",
+          "RECORDS_SEARCHED"
         ],
         "title": "AuditAction",
         "type": "string"
@@ -2164,7 +2165,7 @@
   "paths": {
     "/api/v1/access-requests": {
       "post": {
-        "description": "Ask a patient for access to a set of record categories.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).\nConsent requirement: none \u2014 this *asks* for consent, it reads nothing.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n422 (validation, unknown Health ID, unknown category code).",
+        "description": "Ask a patient for access to a set of record categories.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).\nConsent requirement: none \u2014 this *asks* for consent, it reads nothing.\nDuplicates are refused with 409, before anything is written: a category this clinician\nalready holds an active grant for, or one already asked for on an open (PENDING,\nunexpired) request of theirs to the same patient that has not yet been answered for it.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n409 (duplicate, as above), 422 (validation, unknown Health ID, unknown category code).",
         "operationId": "create_access_request_api_v1_access_requests_post",
         "requestBody": {
           "content": {
@@ -2204,6 +2205,12 @@
               "application/problem+json": {}
             },
             "description": "No profile for this account"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "A category is already actively granted, or already asked for on an open request"
           },
           "422": {
             "content": {
@@ -2378,7 +2385,7 @@
     },
     "/api/v1/access-requests/{request_id}/approve": {
       "post": {
-        "description": "Approve some of the categories an access request asked for.\n\nEach approval is recorded permanently and produces the grant that enforcement reads.\nRoles: PATIENT, and only for their own request \u2014 another patient's request answers 404,\nnever 403. Consent requirement: this *is* the consent decision.\nFailure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category\nalready answered), 422 (unknown code, or a category this request never asked for).",
+        "description": "Approve some of the categories an access request asked for.\n\nEach approval is recorded permanently and produces the grant that enforcement reads.\nRoles: PATIENT, and only for their own request \u2014 another patient's request answers 404,\nnever 403. Consent requirement: this *is* the consent decision.\nFailure modes: 401, 403, 404, 409 (request expired/decided/cancelled, a category\nalready answered, or a category this clinician already holds an active grant for),\n422 (unknown code, or a category this request never asked for).",
         "operationId": "approve_categories_api_v1_access_requests__request_id__approve_post",
         "parameters": [
           {
@@ -2435,7 +2442,7 @@
             "content": {
               "application/problem+json": {}
             },
-            "description": "Request closed, or category already answered"
+            "description": "Request closed, category already answered, or category already actively granted"
           },
           "422": {
             "content": {
@@ -2452,7 +2459,7 @@
     },
     "/api/v1/access-requests/{request_id}/reject": {
       "post": {
-        "description": "Refuse some of the categories an access request asked for.\n\nA rejection is recorded as permanently as an approval and grants nothing.\nRoles/failures: as for approve.",
+        "description": "Refuse some of the categories an access request asked for.\n\nA rejection is recorded as permanently as an approval and grants nothing, so it never\nmeets the \"already actively granted\" conflict an approval can.\nRoles: PATIENT, and only for their own request \u2014 another patient's request answers 404,\nnever 403. Consent requirement: this *is* the consent decision.\nFailure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category\nalready answered), 422 (unknown code, or a category this request never asked for).",
         "operationId": "reject_categories_api_v1_access_requests__request_id__reject_post",
         "parameters": [
           {
@@ -2620,6 +2627,7 @@
     },
     "/api/v1/ai/patients/{patient_id}/search": {
       "get": {
+        "description": "Ranked chunk text from this patient's records within the clinician's granted scope.\n\nRoles: DOCTOR. Consent requirement: only categories the clinician holds an active\ngrant for are searched, and patient-hidden records are excluded. Rate limited\n(``ai_search``). Audited: exactly one event per request \u2014 ``RECORDS_SEARCHED`` when a\nscope was searched, ``ACCESS_DENIED`` when there was none. The query text is never\nstored or logged by the application; note that it travels in the URL.\nFailure modes: 401, 403 (wrong role), 422 (query missing or over 500 characters), 429.",
         "operationId": "search_patient_records_api_v1_ai_patients__patient_id__search_get",
         "parameters": [
           {
@@ -2664,6 +2672,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "Search Patient Records",
@@ -3667,7 +3678,7 @@
     },
     "/api/v1/patients/lookup": {
       "get": {
-        "description": "Confirm which patient a Pulse Health ID identifies, by name.\n\nThe safety step in front of ``POST /records``: a hospital files a document against a\nHealth ID, nothing can move or delete it afterwards, and until this existed an\nadministrator had no way to check whose history they were about to write to. A valid\nHealth ID belonging to the wrong patient was therefore an unrecoverable mistake.\n\nRoles: HOSPITAL_ADMIN only. Not DOCTOR \u2014 clinicians discover patients through\n``GET /records/existence``, which has a different disclosure contract and is left\nuntouched. Not SYSTEM_ADMIN \u2014 platform operations never require patient identity\n(docs/SECURITY.md). Not PATIENT \u2014 a patient looking up other patients is the\nenumeration ADR-012 exists to prevent.\n\nDiscloses exactly the Health ID in canonical form and the patient's name, which is the\n\"existence + name confirmation only\" row of the RBAC matrix (docs/DOMAIN_MODEL.md \u00a73)\nand no more: no date of birth, no contact details, no internal id, and nothing medical.\n**This confirms an identity; it authorizes nothing.** The upload that follows is\nauthorized on its own terms by the records module, which still requires a VERIFIED\nhospital and re-resolves the Health ID itself.\n\nConsent requirement: none \u2014 no record is read, so there is nothing for\n``consent.enforce`` to rule on. Nothing here is audited, for the same reason\n``/records/existence`` is not: no record was accessed and no truthful ``AuditAction``\nmember exists. That question is open for both endpoints (.claude/TODO.md).\n\n**Rate limiting: this is a Health-ID oracle and a future rate-limiting surface**, in\nthe same family as ``POST /access-requests`` and ``GET /records/existence`` (finding\nM3-D). It is narrower than either \u2014 HOSPITAL_ADMIN only, and a malformed ID is refused\nbefore the database is touched \u2014 but it is the first endpoint that returns a *name*,\nso it belongs in the same bucket when that lands.\n\nFailure modes: 401, 403 (wrong role), 422 (malformed Health ID, or no patient matches\nit \u2014 reported distinctly, because ADR-012's check character makes \"you typed it wrong\"\nand \"this person is not on PulseOS\" genuinely different answers).",
+        "description": "Confirm which patient a Pulse Health ID identifies, by name.\n\nThe safety step in front of ``POST /records``: a hospital files a document against a\nHealth ID, nothing can move or delete it afterwards, and until this existed an\nadministrator had no way to check whose history they were about to write to. A valid\nHealth ID belonging to the wrong patient was therefore an unrecoverable mistake.\n\nRoles: HOSPITAL_ADMIN only. Not DOCTOR \u2014 clinicians discover patients through\n``GET /records/existence``, which has a different disclosure contract and is left\nuntouched. Not SYSTEM_ADMIN \u2014 platform operations never require patient identity\n(docs/SECURITY.md). Not PATIENT \u2014 a patient looking up other patients is the\nenumeration ADR-012 exists to prevent.\n\nDiscloses exactly the Health ID in canonical form and the patient's name, which is the\n\"existence + name confirmation only\" row of the RBAC matrix (docs/DOMAIN_MODEL.md \u00a73)\nand no more: no date of birth, no contact details, no internal id, and nothing medical.\n**This confirms an identity; it authorizes nothing.** The upload that follows is\nauthorized on its own terms by the records module, which still requires a VERIFIED\nhospital and re-resolves the Health ID itself.\n\nConsent requirement: none \u2014 no record is read, so there is nothing for\n``consent.enforce`` to rule on. Nothing here is audited, for the same reason\n``/records/existence`` is not: no record was accessed and no truthful ``AuditAction``\nmember exists. That question is open for both endpoints (.claude/TODO.md).\n\n**Rate limiting: this is a Health-ID oracle and a future rate-limiting surface**, in\nthe same family as ``POST /access-requests`` and ``GET /records/existence`` (finding\nM3-D). It is narrower than either \u2014 HOSPITAL_ADMIN only, and a malformed ID is refused\nbefore the database is touched \u2014 but it is the first endpoint that returns a *name*,\nso it belongs in the same bucket when that lands.\n\n**Verified hospitals only** (amends ADR-021). The original rationale \u2014 that a lookup\ntells a PENDING hospital nothing an upload attempt would not \u2014 does not hold: the\nupload refuses an unverified hospital *before* resolving the Health ID and never\nreturns a name. Self-registration grants HOSPITAL_ADMIN immediately, so without this\ngate any new account could turn Health IDs into names. Checked after the rate limit\n(an unverified caller still spends quota) and before the Health ID is parsed or\nresolved, so the refusal is identical for every ID and reveals nothing about it. 409,\nthe status every other unverified-hospital refusal uses (upload, doctor registration).\n\nFailure modes: 401, 403 (wrong role), 409 (hospital not verified), 422 (malformed\nHealth ID, or no patient matches it \u2014 reported distinctly, because ADR-012's check\ncharacter makes \"you typed it wrong\" and \"this person is not on PulseOS\" genuinely\ndifferent answers).",
         "operationId": "lookup_patient_api_v1_patients_lookup_get",
         "parameters": [
           {
@@ -3692,6 +3703,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "The caller's hospital is not verified"
           },
           "422": {
             "content": {
@@ -3956,7 +3970,7 @@
         ]
       },
       "post": {
-        "description": "Upload one medical document (multipart) and create its metadata row.\n\nRoles: HOSPITAL_ADMIN (uploads for a patient by Health ID \u2014 requires ``patientHealthId``\nand a VERIFIED hospital) or PATIENT (uploads to their own locker \u2014 ``patientHealthId``\nmust be absent). Consent requirement: none \u2014 uploading creates data, it reads nothing.\nFailure modes: 401, 403, 404 (no profile row), 409 (hospital unverified),\n413 (too large), 415 (bad type), 422 (validation / unknown Health ID or category /\nfuture date), 503 (storage down \u2014 nothing is persisted).",
+        "description": "Upload one medical document (multipart) and create its metadata row.\n\nRoles: HOSPITAL_ADMIN (uploads for a patient by Health ID \u2014 requires ``patientHealthId``\nand a VERIFIED hospital) or PATIENT (uploads to their own locker \u2014 ``patientHealthId``\nmust be absent). Consent requirement: none \u2014 uploading creates data, it reads nothing.\nFailure modes: 401, 403, 404 (no profile row), 409 (hospital unverified),\n413 (too large), 415 (bad type), 422 (validation / unknown Health ID or category /\nfuture date, file name longer than 255 characters), 503 (storage down \u2014 nothing is\npersisted).",
         "operationId": "upload_record_api_v1_records_post",
         "requestBody": {
           "content": {

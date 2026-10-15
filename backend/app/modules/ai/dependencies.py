@@ -17,6 +17,8 @@ from app.modules.ai.repository import AIRepository
 from app.modules.ai.service import AIRetrievalService
 from app.modules.consent.dependencies import get_consent_service
 from app.modules.consent.service import ConsentService
+from app.modules.patients.directory import PatientDirectoryService
+from app.modules.patients.repository import PatientRepository
 
 
 def get_request_context(request: Request) -> str | None:
@@ -39,6 +41,8 @@ def get_ai_query_service(
         retrieval=retrieval,
         consent=consent,
         auditor=consent,
+        search_auditor=consent,
+        patients=PatientDirectoryService(PatientRepository(session)),
     )
 
 

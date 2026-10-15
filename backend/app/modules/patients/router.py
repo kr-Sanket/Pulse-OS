@@ -14,7 +14,7 @@ from app.modules.auth.dependencies import (
 )
 from app.modules.auth.domain import AuthenticatedUser
 from app.modules.auth.errors import AuthError
-from app.modules.patients.dependencies import PatientServiceDep
+from app.modules.patients.dependencies import HospitalVerificationDep, PatientServiceDep
 from app.modules.patients.errors import (
     InvalidHealthIdError,
     PatientNotFoundError,
@@ -121,12 +121,16 @@ async def update_own_profile(
 @router.get(
     "/lookup",
     response_model=PatientLookupResponse,
-    responses={429: {"description": "Rate limit exceeded"}},
+    responses={
+        409: {"description": "The caller's hospital is not verified"},
+        429: {"description": "Rate limit exceeded"},
+    },
 )
 async def lookup_patient(
     user: Annotated[AuthenticatedUser, Depends(RequireHospitalAdmin)],
     _limit: Annotated[AuthenticatedUser, Depends(rate_limited("patient_lookup"))],
     service: PatientServiceDep,
+    hospitals: HospitalVerificationDep,
     health_id: Annotated[str, Query(alias="healthId", min_length=1, max_length=20)],
 ) -> PatientLookupResponse:
     """Confirm which patient a Pulse Health ID identifies, by name.
@@ -160,10 +164,25 @@ async def lookup_patient(
     before the database is touched — but it is the first endpoint that returns a *name*,
     so it belongs in the same bucket when that lands.
 
-    Failure modes: 401, 403 (wrong role), 422 (malformed Health ID, or no patient matches
-    it — reported distinctly, because ADR-012's check character makes "you typed it wrong"
-    and "this person is not on PulseOS" genuinely different answers).
+    **Verified hospitals only** (amends ADR-021). The original rationale — that a lookup
+    tells a PENDING hospital nothing an upload attempt would not — does not hold: the
+    upload refuses an unverified hospital *before* resolving the Health ID and never
+    returns a name. Self-registration grants HOSPITAL_ADMIN immediately, so without this
+    gate any new account could turn Health IDs into names. Checked after the rate limit
+    (an unverified caller still spends quota) and before the Health ID is parsed or
+    resolved, so the refusal is identical for every ID and reveals nothing about it. 409,
+    the status every other unverified-hospital refusal uses (upload, doctor registration).
+
+    Failure modes: 401, 403 (wrong role), 409 (hospital not verified), 422 (malformed
+    Health ID, or no patient matches it — reported distinctly, because ADR-012's check
+    character makes "you typed it wrong" and "this person is not on PulseOS" genuinely
+    different answers).
     """
+    if not await hospitals.administers_verified_hospital(user.user_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Your hospital is not verified yet, so it cannot look patients up.",
+        )
     try:
         patient = await service.lookup_by_health_id(health_id)
     except InvalidHealthIdError as exc:

@@ -19,8 +19,11 @@ export interface paths {
          *
          *     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
          *     Consent requirement: none — this *asks* for consent, it reads nothing.
+         *     Duplicates are refused with 409, before anything is written: a category this clinician
+         *     already holds an active grant for, or one already asked for on an open (PENDING,
+         *     unexpired) request of theirs to the same patient that has not yet been answered for it.
          *     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
-         *     422 (validation, unknown Health ID, unknown category code).
+         *     409 (duplicate, as above), 422 (validation, unknown Health ID, unknown category code).
          */
         post: operations["create_access_request_api_v1_access_requests_post"];
         delete?: never;
@@ -99,8 +102,9 @@ export interface paths {
          *     Each approval is recorded permanently and produces the grant that enforcement reads.
          *     Roles: PATIENT, and only for their own request — another patient's request answers 404,
          *     never 403. Consent requirement: this *is* the consent decision.
-         *     Failure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category
-         *     already answered), 422 (unknown code, or a category this request never asked for).
+         *     Failure modes: 401, 403, 404, 409 (request expired/decided/cancelled, a category
+         *     already answered, or a category this clinician already holds an active grant for),
+         *     422 (unknown code, or a category this request never asked for).
          */
         post: operations["approve_categories_api_v1_access_requests__request_id__approve_post"];
         delete?: never;
@@ -122,8 +126,12 @@ export interface paths {
          * Reject Categories
          * @description Refuse some of the categories an access request asked for.
          *
-         *     A rejection is recorded as permanently as an approval and grants nothing.
-         *     Roles/failures: as for approve.
+         *     A rejection is recorded as permanently as an approval and grants nothing, so it never
+         *     meets the "already actively granted" conflict an approval can.
+         *     Roles: PATIENT, and only for their own request — another patient's request answers 404,
+         *     never 403. Consent requirement: this *is* the consent decision.
+         *     Failure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category
+         *     already answered), 422 (unknown code, or a category this request never asked for).
          */
         post: operations["reject_categories_api_v1_access_requests__request_id__reject_post"];
         delete?: never;
@@ -173,7 +181,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Search Patient Records */
+        /**
+         * Search Patient Records
+         * @description Ranked chunk text from this patient's records within the clinician's granted scope.
+         *
+         *     Roles: DOCTOR. Consent requirement: only categories the clinician holds an active
+         *     grant for are searched, and patient-hidden records are excluded. Rate limited
+         *     (``ai_search``). Audited: exactly one event per request — ``RECORDS_SEARCHED`` when a
+         *     scope was searched, ``ACCESS_DENIED`` when there was none. The query text is never
+         *     stored or logged by the application; note that it travels in the URL.
+         *     Failure modes: 401, 403 (wrong role), 422 (query missing or over 500 characters), 429.
+         */
         get: operations["search_patient_records_api_v1_ai_patients__patient_id__search_get"];
         put?: never;
         post?: never;
@@ -731,9 +749,19 @@ export interface paths {
          *     before the database is touched — but it is the first endpoint that returns a *name*,
          *     so it belongs in the same bucket when that lands.
          *
-         *     Failure modes: 401, 403 (wrong role), 422 (malformed Health ID, or no patient matches
-         *     it — reported distinctly, because ADR-012's check character makes "you typed it wrong"
-         *     and "this person is not on PulseOS" genuinely different answers).
+         *     **Verified hospitals only** (amends ADR-021). The original rationale — that a lookup
+         *     tells a PENDING hospital nothing an upload attempt would not — does not hold: the
+         *     upload refuses an unverified hospital *before* resolving the Health ID and never
+         *     returns a name. Self-registration grants HOSPITAL_ADMIN immediately, so without this
+         *     gate any new account could turn Health IDs into names. Checked after the rate limit
+         *     (an unverified caller still spends quota) and before the Health ID is parsed or
+         *     resolved, so the refusal is identical for every ID and reveals nothing about it. 409,
+         *     the status every other unverified-hospital refusal uses (upload, doctor registration).
+         *
+         *     Failure modes: 401, 403 (wrong role), 409 (hospital not verified), 422 (malformed
+         *     Health ID, or no patient matches it — reported distinctly, because ADR-012's check
+         *     character makes "you typed it wrong" and "this person is not on PulseOS" genuinely
+         *     different answers).
          */
         get: operations["lookup_patient_api_v1_patients_lookup_get"];
         put?: never;
@@ -872,7 +900,8 @@ export interface paths {
          *     must be absent). Consent requirement: none — uploading creates data, it reads nothing.
          *     Failure modes: 401, 403, 404 (no profile row), 409 (hospital unverified),
          *     413 (too large), 415 (bad type), 422 (validation / unknown Health ID or category /
-         *     future date), 503 (storage down — nothing is persisted).
+         *     future date, file name longer than 255 characters), 503 (storage down — nothing is
+         *     persisted).
          */
         post: operations["upload_record_api_v1_records_post"];
         delete?: never;
@@ -1255,12 +1284,18 @@ export interface components {
          *     all: its subject is a scope, which ``patient_id`` already carries. See the target-column
          *     note on ``AuditLog``.
          *
+         *     ``RECORDS_SEARCHED`` extends it a third time (ADR-020, amendment of 2026-10-15): a
+         *     clinician's AI record search (``GET /ai/patients/{id}/search``) returns record *text*
+         *     from the granted scope, which ``RECORDS_LISTED`` — a chooser of ids — understated. Same
+         *     shape as a listing: one scope-level row, no target. Rows written before it existed keep
+         *     ``RECORDS_LISTED``; nothing is rewritten.
+         *
          *     ``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own
          *     ADR (.claude/TODO.md parking lot), and an unused member here would imply a capability
          *     that docs/SECURITY.md's no-break-glass invariant denies.
          * @enum {string}
          */
-        AuditAction: "RECORD_UPLOADED" | "ACCESS_REQUESTED" | "CONSENT_APPROVED" | "CONSENT_REJECTED" | "CONSENT_REVOKED" | "RECORD_VIEWED" | "RECORD_DOWNLOADED" | "SUMMARY_GENERATED" | "ACCESS_DENIED" | "RECORDS_LISTED";
+        AuditAction: "RECORD_UPLOADED" | "ACCESS_REQUESTED" | "CONSENT_APPROVED" | "CONSENT_REJECTED" | "CONSENT_REVOKED" | "RECORD_VIEWED" | "RECORD_DOWNLOADED" | "SUMMARY_GENERATED" | "ACCESS_DENIED" | "RECORDS_LISTED" | "RECORDS_SEARCHED";
         /** AuditEventListResponse */
         AuditEventListResponse: {
             /** Items */
@@ -2244,6 +2279,15 @@ export interface operations {
                     "application/problem+json": unknown;
                 };
             };
+            /** @description A category is already actively granted, or already asked for on an open request */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
             /** @description Validation failed */
             422: {
                 headers: {
@@ -2433,7 +2477,7 @@ export interface operations {
                     "application/problem+json": unknown;
                 };
             };
-            /** @description Request closed, or category already answered */
+            /** @description Request closed, category already answered, or category already actively granted */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2622,6 +2666,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description Rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -3407,6 +3458,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PatientLookupResponse"];
                 };
+            };
+            /** @description The caller's hospital is not verified */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

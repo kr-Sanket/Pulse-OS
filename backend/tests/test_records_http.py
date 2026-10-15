@@ -22,8 +22,9 @@ from app.modules.records.fake import FakeObjectStorage
 from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin, MedicalRecord
 from app.modules.records.repository import HospitalRepository
 from app.modules.records.seed import seed_reference_data
+from app.modules.records.service import MAX_FILENAME_LENGTH
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from tests.support import run_with_session
@@ -333,6 +334,65 @@ def test_upload_validation_over_http(client: TestClient, actors: Actors) -> None
     assert empty.status_code == 422
 
     assert client.post(RECORDS).status_code == 401  # unauthenticated
+
+
+def _upload_named(client: TestClient, headers: dict[str, str], filename: str) -> httpx.Response:
+    response: httpx.Response = client.post(
+        RECORDS,
+        data={**UPLOAD_FORM, "patientHealthId": HEALTH_ID},
+        files={"file": (filename, b"%PDF-1.7 x", "application/pdf")},
+        headers=headers,
+    )
+    return response
+
+
+def test_the_filename_limit_is_the_column_it_protects() -> None:
+    column_type = MedicalRecord.__table__.c.original_filename.type
+    assert isinstance(column_type, String)
+    assert MAX_FILENAME_LENGTH == column_type.length == 255
+
+
+def test_a_255_character_filename_is_accepted_and_stored_as_sent(
+    client: TestClient, actors: Actors, fake_storage: FakeObjectStorage
+) -> None:
+    filename = "a" * 251 + ".pdf"
+    assert len(filename) == 255
+
+    response = _upload_named(client, actors.admin_a, filename)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["originalFilename"] == filename
+    assert len(fake_storage.objects) == 1
+
+
+def test_a_256_character_filename_is_a_422_and_nothing_is_stored(
+    client: TestClient, actors: Actors, fake_storage: FakeObjectStorage
+) -> None:
+    filename = "a" * 252 + ".pdf"
+    assert len(filename) == 256
+
+    response = _upload_named(client, actors.admin_a, filename)
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert "255" in response.json()["detail"]
+    assert fake_storage.objects == {}
+    listing = client.get(RECORDS, headers=actors.admin_a)
+    assert listing.json()["items"] == []
+
+
+def test_the_filename_limit_counts_characters_not_bytes(
+    client: TestClient, actors: Actors, fake_storage: FakeObjectStorage
+) -> None:
+    """PostgreSQL's VARCHAR(255) counts characters, so 255 two-byte characters fit."""
+    accepted = "é" * 251 + ".pdf"
+    refused = "é" * 252 + ".pdf"
+    assert len(accepted.encode()) > 255
+
+    ok = _upload_named(client, actors.admin_a, accepted)
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["originalFilename"] == accepted
+    assert _upload_named(client, actors.admin_a, refused).status_code == 422
 
 
 def test_oversize_upload_is_413(

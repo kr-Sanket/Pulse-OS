@@ -57,6 +57,14 @@ test("every backend action has its own wording and tone", () => {
     tone: "destructive",
   });
   expect(actionPresentation("CONSENT_REVOKED").label).toBe("Access withdrawn");
+  // An AI search is named for what it is, not shown as a listing.
+  expect(actionPresentation("RECORDS_SEARCHED")).toEqual({
+    label: "Records searched (AI)",
+    tone: "info",
+  });
+  expect(actionPresentation("RECORDS_SEARCHED").label).not.toBe(
+    actionPresentation("RECORDS_LISTED").label,
+  );
 });
 
 test("an action added server-side after this build degrades instead of breaking", () => {
@@ -205,13 +213,15 @@ test("the same actions by a clinician are exactly what the page is for", () => {
     withEvent({ id: "doc-view", actorRole: "DOCTOR", action: "RECORD_VIEWED" }),
     withEvent({ id: "doc-download", actorRole: "DOCTOR", action: "RECORD_DOWNLOADED" }),
     withEvent({ id: "doc-listed", actorRole: "DOCTOR", action: "RECORDS_LISTED" }),
+    withEvent({ id: "doc-searched", actorRole: "DOCTOR", action: "RECORDS_SEARCHED" }),
   ];
 
-  expect(events.map(isOwnRecordAccess)).toEqual([false, false, false]);
+  expect(events.map(isOwnRecordAccess)).toEqual([false, false, false, false]);
   expect(filterAuditEntries(events, false).map((event) => event.id)).toEqual([
     "doc-view",
     "doc-download",
     "doc-listed",
+    "doc-searched",
   ]);
 });
 

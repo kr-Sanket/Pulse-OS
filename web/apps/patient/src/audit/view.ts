@@ -56,7 +56,7 @@ interface ActionPresentation {
   tone: Tone;
 }
 
-/** The ten actions the backend defines (AuditAction), and nothing more. */
+/** The eleven actions the backend defines (AuditAction), and nothing more. */
 const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   RECORD_VIEWED: { label: "Viewed", tone: "info" },
   RECORD_DOWNLOADED: { label: "Downloaded", tone: "primary" },
@@ -71,6 +71,9 @@ const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   // request, never one per record — and it is not a read: opening any of those records
   // still appears separately as "Viewed".
   RECORDS_LISTED: { label: "Records listed", tone: "info" },
+  // A clinician's AI search across the records your consent covers. Unlike a listing it
+  // returns record text, so it is named for what it is. One entry per search.
+  RECORDS_SEARCHED: { label: "Records searched (AI)", tone: "info" },
 };
 
 /** "SOMETHING_NEW" → "Something new". The graceful path for an action added server-side

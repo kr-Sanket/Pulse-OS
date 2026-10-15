@@ -166,7 +166,7 @@ def test_0008_creates_notifications_table_with_constraints(tmp_path: Path) -> No
     command.upgrade(_config(f"sqlite+aiosqlite:///{db_file}"), "0008")
 
     assert "notifications" in _table_names(db_file)
-    unique, checks, foreign = _constraints(db_file, "notifications")
+    _unique, _checks, foreign = _constraints(db_file, "notifications")
     # notifications has no unique constraints, but has foreign keys to users,
     # consent_requests, doctors, and hospitals
     assert foreign == {
@@ -181,17 +181,31 @@ def test_0008_creates_notifications_table_with_constraints(tmp_path: Path) -> No
     try:
         fks = {fk["name"]: fk for fk in inspect(engine).get_foreign_keys("notifications")}
         # recipient_user_id has NO cascade / NO ondelete rule (tombstone policy)
-        assert fks["fk_notifications_users_recipient_user_id"].get("options", {}).get("ondelete") in (None, "NO ACTION", "RESTRICT")
+        assert fks["fk_notifications_users_recipient_user_id"].get("options", {}).get(
+            "ondelete"
+        ) in (None, "NO ACTION", "RESTRICT")
         # structured references have SET NULL ondelete
-        assert fks["fk_notifications_consent_requests_reference_request_id"].get("options", {}).get("ondelete") == "SET NULL"
-        assert fks["fk_notifications_doctors_actor_doctor_id"].get("options", {}).get("ondelete") == "SET NULL"
-        assert fks["fk_notifications_hospitals_actor_hospital_id"].get("options", {}).get("ondelete") == "SET NULL"
+        assert (
+            fks["fk_notifications_consent_requests_reference_request_id"]
+            .get("options", {})
+            .get("ondelete")
+            == "SET NULL"
+        )
+        assert (
+            fks["fk_notifications_doctors_actor_doctor_id"].get("options", {}).get("ondelete")
+            == "SET NULL"
+        )
+        assert (
+            fks["fk_notifications_hospitals_actor_hospital_id"].get("options", {}).get("ondelete")
+            == "SET NULL"
+        )
     finally:
         engine.dispose()
 
 
 def test_0008_matches_model_metadata() -> None:
-    """The ORM model metadata and migration 0008 must agree on table name, columns, indexes and foreign key options."""
+    """The ORM model metadata and migration 0008 must agree on table name, columns, indexes and
+    foreign key options."""
     from app.core.db import Base
     from app.modules.notifications.models import Notification  # noqa: F401
 
@@ -235,8 +249,7 @@ def test_0008_downgrade_removes_notifications_table(tmp_path: Path) -> None:
     command.downgrade(config, "0007")
     remaining = _table_names(db_file)
     assert not (NOTIFICATION_TABLES & remaining)
-    assert BATCH_TABLES <= remaining
+    assert remaining >= BATCH_TABLES
 
     command.upgrade(config, "head")
     assert _table_names(db_file) >= NOTIFICATION_TABLES
-

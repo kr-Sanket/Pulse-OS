@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from typing import Final, Protocol
 from uuid import UUID
@@ -45,6 +45,36 @@ class SummaryAuditor(Protocol):
     ) -> None: ...
 
 
+class SearchAuditor(Protocol):
+    """How a clinician's chunk search reaches the patient's audit trail.
+
+    Implemented by ``ConsentService.record_search``: one scope-level event per request,
+    ``RECORDS_SEARCHED`` when the clinician had a scope to search and ``ACCESS_DENIED`` when
+    they had none — the one-row rule of the granted-records listing (ADR-020), with its own
+    action because a search returns record text rather than a chooser.
+    """
+
+    async def record_search(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID],
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None: ...
+
+
+class PatientIdentity(Protocol):
+    """Whether a patient id names a patient — implemented by ``PatientDirectoryService``.
+
+    Needed only to decide whether an empty-scope search can be attributed: an audit row
+    references its patient, so a probe of an id that names nobody has no trail to join.
+    """
+
+    async def health_ids_by_id(self, patient_ids: Collection[UUID]) -> Mapping[UUID, str]: ...
+
+
 class AIQueryService:
     """Coordinates consent scope, deterministic AI retrieval, and answer synthesis."""
 
@@ -53,6 +83,9 @@ class AIQueryService:
         retrieval: ChunkRetrieval,
         consent: RetrievalScope,
         auditor: SummaryAuditor | None = None,
+        *,
+        search_auditor: SearchAuditor | None = None,
+        patients: PatientIdentity | None = None,
     ) -> None:
         self._retrieval = retrieval
         self._consent = consent
@@ -61,6 +94,65 @@ class AIQueryService:
             if auditor is not None
             else (consent if hasattr(consent, "record_summary_generated") else None)
         )
+        self._search_auditor = search_auditor
+        self._patients = patients
+
+    async def search_records(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        query: str,
+        limit: int = 10,
+        request_context: str | None = None,
+    ) -> list[RetrievedChunk]:
+        """The audited clinician search behind ``GET /ai/patients/{id}/search``.
+
+        Returns the same chunks as ``search`` and writes exactly one audit event:
+
+        * a non-empty consent scope → retrieval runs, then ``RECORDS_SEARCHED`` is written
+          (also when nothing matched: the clinician still searched the granted scope);
+        * an empty scope (no live grant, inactive clinician) → nothing is retrieved and
+          ``ACCESS_DENIED`` is written, provided the id names a patient. An id that names
+          nobody returns an empty list unaudited: there is no trail to attribute it to.
+
+        Both writes share the request transaction, so a retrieval failure leaves no event
+        claiming a search that returned nothing. Neither the query text nor any chunk
+        content is written to the audit row or logged.
+        """
+        if self._search_auditor is None or self._patients is None:
+            # Fail closed: an unaudited path to record text is the defect this replaces.
+            raise RuntimeError("search_records requires a search auditor and patient identity")
+        at = datetime.now(UTC)
+        category_ids = await self._consent.granted_category_ids(
+            requester, patient_id=patient_id, at=at
+        )
+        if not category_ids:
+            if patient_id in await self._patients.health_ids_by_id([patient_id]):
+                await self._search_auditor.record_search(
+                    requester,
+                    patient_id=patient_id,
+                    granted_category_ids=category_ids,
+                    at=at,
+                    request_context=request_context,
+                )
+            return []
+
+        chunks = await self._retrieval.search(
+            patient_id=patient_id,
+            category_ids=category_ids,
+            query=query,
+            visibility=RetrievalVisibility.GRANTEE,
+            limit=limit,
+        )
+        await self._search_auditor.record_search(
+            requester,
+            patient_id=patient_id,
+            granted_category_ids=category_ids,
+            at=at,
+            request_context=request_context,
+        )
+        return chunks
 
     async def search(
         self,

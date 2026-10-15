@@ -36,7 +36,7 @@ from app.modules.records.schemas import (
     RecordMetadataResponse,
     RecordVisibilityUpdateRequest,
 )
-from app.modules.records.service import FileUpload
+from app.modules.records.service import MAX_FILENAME_LENGTH, FileUpload
 from app.shared.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, SortDirection
 
 records_router = APIRouter(prefix="/records", tags=["records"])
@@ -126,14 +126,23 @@ async def upload_record(
     must be absent). Consent requirement: none — uploading creates data, it reads nothing.
     Failure modes: 401, 403, 404 (no profile row), 409 (hospital unverified),
     413 (too large), 415 (bad type), 422 (validation / unknown Health ID or category /
-    future date), 503 (storage down — nothing is persisted).
+    future date, file name longer than 255 characters), 503 (storage down — nothing is
+    persisted).
     """
     if date_of_service > date.today():
         raise HTTPException(status_code=422, detail="dateOfService must not be in the future.")
+    # Measured on exactly the string that is stored — after Starlette's multipart decoding,
+    # with no further normalisation — so the check and the column agree.
+    filename = file.filename or "document"
+    if len(filename) > MAX_FILENAME_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The file name must be at most {MAX_FILENAME_LENGTH} characters.",
+        )
     # Read at most cap+1 bytes so an oversized body can never exhaust memory.
     data = await file.read(service.max_upload_bytes + 1)
     payload = FileUpload(
-        filename=file.filename or "document",
+        filename=filename,
         content_type=file.content_type or "",
         data=data,
     )

@@ -14,11 +14,14 @@ including the state a grant is in, which the service reads from its own clock.
 """
 
 from collections.abc import Mapping, Sequence
+from http import HTTPStatus
 from typing import Annotated, Protocol
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 
+from app.core.errors import problem_response
 from app.modules.auth.dependencies import (
     RequireDoctor,
     RequireHospitalAdmin,
@@ -39,7 +42,7 @@ from app.modules.consent.dependencies import (
     resolve_category_codes,
     to_http_error,
 )
-from app.modules.consent.errors import ConsentError
+from app.modules.consent.errors import ConsentError, RequestNotDecidableError
 from app.modules.consent.models import ConsentGrant
 from app.modules.consent.schemas import (
     AccessRequestCreateRequest,
@@ -119,7 +122,7 @@ def _to_response(view: RequestView, vocabulary: CategoryVocabulary) -> AccessReq
     request = view.request
     return AccessRequestResponse(
         id=request.id,
-        status=request.status,
+        status=view.status,
         purpose=request.purpose,
         category_codes=[
             vocabulary.by_id[category_id] for category_id in view.requested_category_ids
@@ -306,6 +309,11 @@ def _to_grant_list_response(
         **_UNAUTHENTICATED,
         403: {"description": "Not a doctor, or the clinician is not active", "content": PROBLEM},
         **_NO_PROFILE,
+        409: {
+            "description": "A category is already actively granted, or already asked for on "
+            "an open request",
+            "content": PROBLEM,
+        },
         **_INVALID,
         **_RATE_LIMITED,
     },
@@ -322,8 +330,11 @@ async def create_access_request(
 
     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
     Consent requirement: none — this *asks* for consent, it reads nothing.
+    Duplicates are refused with 409, before anything is written: a category this clinician
+    already holds an active grant for, or one already asked for on an open (PENDING,
+    unexpired) request of theirs to the same patient that has not yet been answered for it.
     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
-    422 (validation, unknown Health ID, unknown category code).
+    409 (duplicate, as above), 422 (validation, unknown Health ID, unknown category code).
     """
     try:
         view = await service.create_request(
@@ -401,28 +412,41 @@ async def list_sent_requests(
         **_UNAUTHENTICATED,
         **_WRONG_ROLE,
         404: {"description": "No such request for this patient", "content": PROBLEM},
-        409: {"description": "Request closed, or category already answered", "content": PROBLEM},
+        409: {
+            "description": "Request closed, category already answered, or category already "
+            "actively granted",
+            "content": PROBLEM,
+        },
         **_INVALID,
     },
 )
 async def approve_categories(
+    request: Request,
     request_id: UUID,
     body: CategorySelectionRequest,
     user: PatientUser,
     service: ConsentServiceDep,
     vocabulary: CategoryVocabularyDep,
     request_context: RequestContextDep,
-) -> DecisionOutcomeResponse:
+) -> DecisionOutcomeResponse | JSONResponse:
     """Approve some of the categories an access request asked for.
 
     Each approval is recorded permanently and produces the grant that enforcement reads.
     Roles: PATIENT, and only for their own request — another patient's request answers 404,
     never 403. Consent requirement: this *is* the consent decision.
-    Failure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category
-    already answered), 422 (unknown code, or a category this request never asked for).
+    Failure modes: 401, 403, 404, 409 (request expired/decided/cancelled, a category
+    already answered, or a category this clinician already holds an active grant for),
+    422 (unknown code, or a category this request never asked for).
     """
     return await _decide(
-        service.approve_categories, request_id, body, user, service, vocabulary, request_context
+        request,
+        service.approve_categories,
+        request_id,
+        body,
+        user,
+        service,
+        vocabulary,
+        request_context,
     )
 
 
@@ -438,20 +462,32 @@ async def approve_categories(
     },
 )
 async def reject_categories(
+    request: Request,
     request_id: UUID,
     body: CategorySelectionRequest,
     user: PatientUser,
     service: ConsentServiceDep,
     vocabulary: CategoryVocabularyDep,
     request_context: RequestContextDep,
-) -> DecisionOutcomeResponse:
+) -> DecisionOutcomeResponse | JSONResponse:
     """Refuse some of the categories an access request asked for.
 
-    A rejection is recorded as permanently as an approval and grants nothing.
-    Roles/failures: as for approve.
+    A rejection is recorded as permanently as an approval and grants nothing, so it never
+    meets the "already actively granted" conflict an approval can.
+    Roles: PATIENT, and only for their own request — another patient's request answers 404,
+    never 403. Consent requirement: this *is* the consent decision.
+    Failure modes: 401, 403, 404, 409 (request expired/decided/cancelled, or a category
+    already answered), 422 (unknown code, or a category this request never asked for).
     """
     return await _decide(
-        service.reject_categories, request_id, body, user, service, vocabulary, request_context
+        request,
+        service.reject_categories,
+        request_id,
+        body,
+        user,
+        service,
+        vocabulary,
+        request_context,
     )
 
 
@@ -469,6 +505,7 @@ class _DecisionOperation(Protocol):
 
 
 async def _decide(
+    http_request: Request,
     operation: _DecisionOperation,
     request_id: UUID,
     body: CategorySelectionRequest,
@@ -476,14 +513,31 @@ async def _decide(
     service: ConsentServiceDep,
     vocabulary: CategoryVocabulary,
     request_context: str | None,
-) -> DecisionOutcomeResponse:
-    """Approve and reject differ only in which service method runs, so they share this."""
+) -> DecisionOutcomeResponse | JSONResponse:
+    """Approve and reject differ only in which service method runs, so they share this.
+
+    A request that is no longer decidable is the one refusal **returned rather than
+    raised** (the ADR-017 technique). The service raises it before any decision, grant,
+    audit row or notification is written; the only state it may leave pending is the
+    request's own lazy PENDING → EXPIRED transition. Raising would roll that back and leave
+    an expired request stored as PENDING; returning lets the request transaction commit it.
+    Same status and problem+json body either way. Every other failure keeps raising, so a
+    partially applied decision still rolls back.
+    """
     try:
         outcome = await operation(
             user,
             request_id,
             resolve_category_codes(vocabulary, body.category_codes),
             request_context=request_context,
+        )
+    except RequestNotDecidableError as exc:
+        http_error = to_http_error(exc)
+        return problem_response(
+            http_request,
+            status_code=http_error.status_code,
+            title=HTTPStatus(http_error.status_code).phrase,
+            detail=http_error.detail if isinstance(http_error.detail, str) else None,
         )
     except ConsentError as exc:
         raise to_http_error(exc) from exc

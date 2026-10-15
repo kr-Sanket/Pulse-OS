@@ -78,11 +78,28 @@ class RequestNotFoundError(ConsentError):
 
 class RequestNotDecidableError(ConsentError):
     """The request is no longer open to decisions: already decided, expired, or
-    cancelled. ``status`` is safe to show the client."""
+    cancelled. ``status`` is safe to show the client.
+
+    Raised before a decision writes anything; the only state that may be pending when it is
+    raised is the request's own lazy transition to ``EXPIRED``, which the router commits by
+    returning this refusal rather than raising it (see ``consent/router.py``).
+    """
 
     def __init__(self, status: str) -> None:
         super().__init__(status)
         self.status = status
+
+
+class DuplicatePendingRequestError(ConsentError):
+    """This clinician already has an open, unexpired request to this patient that asks for
+    one of these categories and has not been answered for it — a second one would only
+    duplicate the patient's inbox."""
+
+
+class CategoryAlreadyGrantedError(ConsentError):
+    """This clinician already holds an active grant from this patient for one of these
+    categories. Asking again, or approving a second grant for it, would create a duplicate
+    active grant for the same (patient, clinician, category)."""
 
 
 class GrantNotFoundError(ConsentError):

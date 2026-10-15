@@ -7,6 +7,7 @@ a disclosure test, because the whole design of the response is what it leaves ou
 """
 
 import re
+from uuid import uuid4
 
 import pytest
 from app.core.ratelimit import InMemoryRateLimiter
@@ -41,14 +42,40 @@ def _refreshed(fake_auth: FakeAuthProvider, token: str, firebase_uid: str) -> di
     return _bearer(f"{token}-refreshed")
 
 
+def _register_hospital(
+    client: TestClient, fake_auth: FakeAuthProvider, token: str, firebase_uid: str
+) -> tuple[dict[str, str], str]:
+    """Self-register a hospital (it starts PENDING); the admin's headers and its HID."""
+    fake_auth.register_token(token, firebase_uid=firebase_uid, claims={})
+    response = client.post(HOSPITAL_REGISTER, json=HOSPITAL_BODY, headers=_bearer(token))
+    assert response.status_code == 201, response.text
+    hid = response.json()["hospital"]["hid"]
+    assert isinstance(hid, str)
+    return _refreshed(fake_auth, token, firebase_uid), hid
+
+
 @pytest.fixture
 def admin_headers(
     client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None
 ) -> dict[str, str]:
-    fake_auth.register_token("admin", firebase_uid="fb-admin", claims={})
-    response = client.post(HOSPITAL_REGISTER, json=HOSPITAL_BODY, headers=_bearer("admin"))
-    assert response.status_code == 201, response.text
-    return _refreshed(fake_auth, "admin", "fb-admin")
+    """An administrator of a VERIFIED hospital — verified through the real
+    SYSTEM_ADMIN endpoint, as the platform would."""
+    headers, hid = _register_hospital(client, fake_auth, "admin", "fb-admin")
+    fake_auth.register_user(
+        "sysadmin", user_id=uuid4(), firebase_uid="fb-sysadmin", role=Role.SYSTEM_ADMIN
+    )
+    verified = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin"))
+    assert verified.status_code == 200, verified.text
+    return headers
+
+
+@pytest.fixture
+def pending_admin_headers(
+    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None
+) -> dict[str, str]:
+    """An administrator of a self-registered hospital nobody has verified."""
+    headers, _ = _register_hospital(client, fake_auth, "pending-admin", "fb-pending-admin")
+    return headers
 
 
 @pytest.fixture
@@ -245,6 +272,72 @@ def test_a_system_admin_may_not_look_up_a_patient(
     assert client.get(
         LOOKUP, params={"healthId": patient_health_id}, headers=_bearer("sys")
     ).status_code in {403, 401}
+
+
+# -- hospital verification (amends ADR-021) --------------------------------------------
+
+
+def test_a_pending_hospital_admin_cannot_resolve_a_health_id_to_a_name(
+    client: TestClient, pending_admin_headers: dict[str, str], patient_health_id: str
+) -> None:
+    """Self-registration grants HOSPITAL_ADMIN at once; the name stays behind verification."""
+    response = client.get(
+        LOOKUP, params={"healthId": patient_health_id}, headers=pending_admin_headers
+    )
+
+    assert response.status_code == 409
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert "not verified" in response.json()["detail"]
+    assert "Asha" not in response.text
+    assert patient_health_id not in response.text
+
+
+def test_a_pending_hospital_learns_nothing_about_which_health_ids_exist(
+    client: TestClient, pending_admin_headers: dict[str, str], patient_health_id: str
+) -> None:
+    """Refused before the ID is parsed or resolved: an issued, an unissued and a malformed
+    Health ID all receive the same answer."""
+    answers = [
+        client.get(LOOKUP, params={"healthId": health_id}, headers=pending_admin_headers)
+        for health_id in (patient_health_id, _unissued_health_id(), "PHI-IND-2026-XXXXXXX")
+    ]
+
+    assert {response.status_code for response in answers} == {409}
+    assert len({response.json()["detail"] for response in answers}) == 1
+
+
+def test_the_same_admin_can_look_up_once_their_hospital_is_verified(
+    client: TestClient, fake_auth: FakeAuthProvider, patient_health_id: str
+) -> None:
+    headers, hid = _register_hospital(client, fake_auth, "late-admin", "fb-late-admin")
+    params = {"healthId": patient_health_id}
+    assert client.get(LOOKUP, params=params, headers=headers).status_code == 409
+
+    fake_auth.register_user(
+        "sysadmin-2", user_id=uuid4(), firebase_uid="fb-sysadmin-2", role=Role.SYSTEM_ADMIN
+    )
+    verified = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin-2"))
+    assert verified.status_code == 200, verified.text
+
+    response = client.get(LOOKUP, params=params, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"healthId": patient_health_id, "fullName": "Asha Rao"}
+
+
+def test_a_pending_hospital_lookup_still_spends_quota(
+    client: TestClient,
+    pending_admin_headers: dict[str, str],
+    patient_health_id: str,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    """The limiter runs before the verification gate, so refusals are throttled too."""
+    limit = rate_limiter.limit_for("patient_lookup").limit
+    _exhaust(client, pending_admin_headers, patient_health_id, limit)
+
+    refused = client.get(
+        LOOKUP, params={"healthId": patient_health_id}, headers=pending_admin_headers
+    )
+    assert refused.status_code == 429
 
 
 # -- rate limiting (ADR-024, M3-D) -----------------------------------------------------------

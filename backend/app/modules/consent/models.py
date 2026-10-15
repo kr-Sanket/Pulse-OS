@@ -120,6 +120,12 @@ class AuditAction(StrEnum):
     all: its subject is a scope, which ``patient_id`` already carries. See the target-column
     note on ``AuditLog``.
 
+    ``RECORDS_SEARCHED`` extends it a third time (ADR-020, amendment of 2026-10-15): a
+    clinician's AI record search (``GET /ai/patients/{id}/search``) returns record *text*
+    from the granted scope, which ``RECORDS_LISTED`` — a chooser of ids — understated. Same
+    shape as a listing: one scope-level row, no target. Rows written before it existed keep
+    ``RECORDS_LISTED``; nothing is rewritten.
+
     ``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own
     ADR (.claude/TODO.md parking lot), and an unused member here would imply a capability
     that docs/SECURITY.md's no-break-glass invariant denies.
@@ -135,6 +141,7 @@ class AuditAction(StrEnum):
     SUMMARY_GENERATED = "SUMMARY_GENERATED"
     ACCESS_DENIED = "ACCESS_DENIED"
     RECORDS_LISTED = "RECORDS_LISTED"
+    RECORDS_SEARCHED = "RECORDS_SEARCHED"
 
 
 class ConsentRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):

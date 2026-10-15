@@ -45,5 +45,5 @@ listed here so it is inherited deliberately rather than discovered:
   deployed environment — an ops task, not a schema one.
 - **Uphold the target-column pairing** in ``audit_logs``: at most one of the three target
   references is set for any given action, and a scope-level event such as
-  ``RECORDS_LISTED`` sets none (ADR-020).
+  ``RECORDS_LISTED`` or ``RECORDS_SEARCHED`` sets none (ADR-020).
 """

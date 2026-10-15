@@ -43,6 +43,12 @@ test("the four hospital actions read as sentences, not as codes", () => {
   expect(actionLabel("ACCESS_DENIED")).toBe("Access denied");
 });
 
+test("a clinician's AI search is labelled apart from a listing", () => {
+  expect(actionLabel("RECORDS_SEARCHED")).toBe("Records searched (AI)");
+  expect(actionLabel("RECORDS_SEARCHED")).not.toBe(actionLabel("RECORDS_LISTED"));
+  expect(actionTone("RECORDS_SEARCHED")).toBe("info");
+});
+
 test("a refusal is toned apart from a routine read", () => {
   expect(actionTone("ACCESS_DENIED")).toBe("destructive");
   expect(actionTone("RECORD_VIEWED")).toBe("info");

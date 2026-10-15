@@ -27,6 +27,7 @@ request, the decisions of one request) are returned whole, following
 so paginating them would add cursor plumbing to a fetch of at most ten rows.
 """
 
+import hashlib
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,6 +57,7 @@ from app.modules.consent.models import (
     ConsentGrant,
     ConsentRequest,
     ConsentRequestCategory,
+    ConsentRequestStatus,
 )
 from app.shared.pagination import CursorKey
 
@@ -88,6 +90,24 @@ def _is_foreign_key_violation(exc: IntegrityError) -> bool:
     return "foreign key" in str(exc.orig).lower()
 
 
+def _is_unique_violation(exc: IntegrityError) -> bool:
+    """Whether a refused write was a UNIQUE violation, read from driver metadata.
+
+    The duplicate-translating ``add`` methods below map only this to a domain conflict; any
+    other refusal (a NOT NULL, a CHECK, a foreign key a constraint does not explain) is a bug
+    or corruption and propagates as itself rather than masquerading as a 409.
+    """
+    return classify_integrity_error(exc).kind in {"unique", "primary_key"}
+
+
+def _pair_lock_key(patient_id: UUID, requester_doctor_id: UUID) -> int:
+    """A stable signed 64-bit advisory-lock key for one (patient, clinician) pair."""
+    digest = hashlib.sha256(
+        b"pulseos:consent-pair:" + patient_id.bytes + requester_doctor_id.bytes
+    ).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
 class ConsentRequestRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -101,6 +121,53 @@ class ConsentRequestRepository:
         self._session.add(request)
         await self._session.flush()
         return request
+
+    async def lock_pair(self, *, patient_id: UUID, requester_doctor_id: UUID) -> None:
+        """Serialise consent writes for one (patient, clinician) pair until commit.
+
+        The duplicate checks in ``ConsentService`` read before they write, and no single
+        constraint can express "one open request per category" across two tables. On
+        PostgreSQL, ``pg_advisory_xact_lock`` makes a concurrent creator or approver for the
+        same pair wait until this transaction ends; under READ COMMITTED its next statement
+        then sees what this one committed. Released automatically at transaction end. On
+        SQLite (the test harness) writers are already serialised, so this is a no-op —
+        the same arrangement as ``AuditBatchRepository.lock_for_sealing``.
+        """
+        if self._session.get_bind().dialect.name == "postgresql":
+            await self._session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": _pair_lock_key(patient_id, requester_doctor_id)},
+            )
+
+    async def open_category_ids(
+        self, *, patient_id: UUID, requester_doctor_id: UUID, at: datetime
+    ) -> set[UUID]:
+        """Categories this clinician has asked this patient for on a request that is still
+        open at ``at`` — PENDING, unexpired — and that the patient has not yet answered.
+
+        A category already decided on a still-PENDING request is excluded: a rejection
+        leaves the clinician free to ask again, and an approval is covered by the grant
+        check instead.
+        """
+        result = await self._session.execute(
+            select(ConsentRequestCategory.category_id)
+            .join(ConsentRequest, ConsentRequest.id == ConsentRequestCategory.request_id)
+            .outerjoin(
+                ConsentDecision,
+                and_(
+                    ConsentDecision.request_id == ConsentRequestCategory.request_id,
+                    ConsentDecision.category_id == ConsentRequestCategory.category_id,
+                ),
+            )
+            .where(
+                ConsentRequest.patient_id == patient_id,
+                ConsentRequest.requester_doctor_id == requester_doctor_id,
+                ConsentRequest.status == ConsentRequestStatus.PENDING,
+                ConsentRequest.expires_at > at,
+                ConsentDecision.id.is_(None),
+            )
+        )
+        return set(result.scalars())
 
     async def list_page_by_patient(
         self, patient_id: UUID, *, after: CursorKey | None, limit: int
@@ -143,6 +210,8 @@ class ConsentRequestCategoryRepository:
                 self._session.add(requested)
                 await self._session.flush()
         except IntegrityError as exc:
+            if not _is_unique_violation(exc):
+                raise
             raise DuplicateRequestCategoryError() from exc
         return requested
 
@@ -178,6 +247,8 @@ class ConsentDecisionRepository:
         except IntegrityError as exc:
             if _is_foreign_key_violation(exc):
                 raise UnrequestedCategoryError() from exc
+            if not _is_unique_violation(exc):
+                raise
             raise DuplicateDecisionError() from exc
         return decision
 
@@ -207,6 +278,8 @@ class ConsentGrantRepository:
                 self._session.add(grant)
                 await self._session.flush()
         except IntegrityError as exc:
+            if not _is_unique_violation(exc):
+                raise
             raise DuplicateGrantError() from exc
         return grant
 

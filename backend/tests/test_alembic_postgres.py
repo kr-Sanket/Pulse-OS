@@ -125,7 +125,8 @@ async def _tables(url: URL) -> set[str]:
 
 def test_0007_upgrade_creates_the_batch_tables_and_constraints() -> None:
     with _fresh_database() as url:
-        command.upgrade(_alembic(url), "head")
+        # Pinned to the revision under test: "head" moved on when 0008 landed.
+        command.upgrade(_alembic(url), "0007")
 
         async def inspect() -> dict[str, set[tuple[str, str]]]:
             engine = create_async_engine(url)
@@ -212,7 +213,7 @@ def test_0007_check_constraints_are_enforced(label: str, values: str) -> None:
 def test_0007_downgrade_drops_only_the_batch_tables_and_keeps_the_audit_trail() -> None:
     with _fresh_database() as url:
         config = _alembic(url)
-        command.upgrade(config, "head")
+        command.upgrade(config, "0007")
         base = dt.datetime(2026, 10, 11, 9, 0, tzinfo=dt.UTC)
 
         async def seed_and_seal() -> tuple[str, str]:
@@ -266,7 +267,71 @@ def test_0007_downgrade_drops_only_the_batch_tables_and_keeps_the_audit_trail() 
         )
         assert stored == digest  # the audit trail survives the downgrade untouched
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "0007")
         assert asyncio.run(_tables(url)) >= BATCH_TABLES
         assert asyncio.run(_scalar(url, "select count(*) from audit_batches")) == 0
         assert asyncio.run(_scalar(url, "select version_num from alembic_version")) == "0007"
+
+
+def test_the_migrated_audit_action_column_takes_records_searched_without_a_migration() -> None:
+    """``RECORDS_SEARCHED`` (ADR-020 amendment) relies on ``audit_logs.action`` being a plain
+    ``VARCHAR(32)`` with no CHECK constraint. Proven on the schema the migrations build —
+    not the one the models would — and by writing and reading the value back."""
+    with _fresh_database() as url:
+        command.upgrade(_alembic(url), "head")
+
+        column_type = asyncio.run(
+            _scalar(
+                url,
+                "select format_type(atttypid, atttypmod) from pg_attribute "
+                "where attrelid = 'audit_logs'::regclass and attname = 'action'",
+            )
+        )
+        assert column_type == "character varying(32)"
+        checks_on_audit_logs = asyncio.run(
+            _scalar(
+                url,
+                "select count(*) from pg_constraint "
+                "where conrelid = 'audit_logs'::regclass and contype = 'c'",
+            )
+        )
+        assert checks_on_audit_logs == 0
+
+        async def write_and_read() -> AuditAction:
+            engine = create_async_engine(url)
+            try:
+                factory = async_sessionmaker(engine, expire_on_commit=False)
+                async with factory() as session, session.begin():
+                    user = User(firebase_uid=f"fb-{uuid4()}", role=Role.DOCTOR)
+                    owner = User(firebase_uid=f"fb-{uuid4()}", role=Role.PATIENT)
+                    session.add_all([user, owner])
+                    await session.flush()
+                    patient = Patient(
+                        user_id=owner.id, health_id="PHI-IND-2026-1QE8DVR", full_name="P"
+                    )
+                    session.add(patient)
+                    await session.flush()
+                    event = AuditLog(
+                        actor_user_id=user.id,
+                        actor_role=Role.DOCTOR,
+                        action=AuditAction.RECORDS_SEARCHED,
+                        patient_id=patient.id,
+                        request_context=None,
+                        occurred_at=dt.datetime(2026, 10, 15, 9, 0, tzinfo=dt.UTC),
+                        actor_hospital_id=None,
+                        hash_version=HASH_SCHEME_V3,
+                        event_hash="",
+                    )
+                    event.id = uuid4()
+                    event.event_hash = recompute_event_hash(event)
+                    session.add(event)
+                    event_id = event.id
+                async with factory() as session:
+                    stored = await session.get(AuditLog, event_id)
+                    assert stored is not None
+                    assert stored.event_hash == recompute_event_hash(stored)
+                    return stored.action
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(write_and_read()) is AuditAction.RECORDS_SEARCHED

@@ -667,8 +667,11 @@ def test_access_request_creation_is_rate_limited_at_ten_per_minute(
 ) -> None:
     assert rate_limiter.limit_for("access_request_create").limit == 10
     body = {"patientHealthId": HEALTH_ID, "categoryCodes": ["CBC"], "purpose": "care"}
-    for _ in range(10):
-        assert client.post(REQUESTS, json=body, headers=cast.doctor_cmc).status_code == 201
+    assert client.post(REQUESTS, json=body, headers=cast.doctor_cmc).status_code == 201
+    for _ in range(9):
+        # The same ask again is a duplicate open request (409) — and, like every outcome,
+        # it still spends quota, so the limiter cannot be bypassed by being refused.
+        assert client.post(REQUESTS, json=body, headers=cast.doctor_cmc).status_code == 409
 
     refused = client.post(REQUESTS, json=body, headers=cast.doctor_cmc)
 

@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -311,3 +312,130 @@ def test_ai_query_service_assemble_context_missing_category_mapping_raises_key_e
                 max_tokens=500,
             )
         )
+
+
+# ==============================================================================
+# Audited clinician search (GET /ai/patients/{id}/search)
+# ==============================================================================
+
+
+class FakeSearchAuditor:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def record_search(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID],
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None:
+        self.calls.append(
+            {
+                "requester": requester,
+                "patient_id": patient_id,
+                "granted_category_ids": granted_category_ids,
+                "at": at,
+                "request_context": request_context,
+            }
+        )
+
+
+class FakePatientIdentity:
+    def __init__(self, known: set[UUID]) -> None:
+        self.known = known
+
+    async def health_ids_by_id(self, patient_ids: Collection[UUID]) -> Mapping[UUID, str]:
+        return {pid: "PHI-IND-2026-1QE8DVR" for pid in patient_ids if pid in self.known}
+
+
+def _search_service(
+    *,
+    scope: frozenset[UUID],
+    results: list[RetrievedChunk] | None = None,
+    known_patients: set[UUID] | None = None,
+) -> tuple[AIQueryService, FakeRetrieval, FakeSearchAuditor]:
+    retrieval = FakeRetrieval(results)
+    auditor = FakeSearchAuditor()
+    service = AIQueryService(
+        retrieval=retrieval,
+        consent=FakeConsentScope(scope),
+        search_auditor=auditor,
+        patients=FakePatientIdentity(known_patients or set()),
+    )
+    return service, retrieval, auditor
+
+
+def test_search_records_with_a_scope_retrieves_then_audits_one_listing() -> None:
+    patient_id = uuid4()
+    category_id = uuid4()
+    chunk = make_chunk(patient_id=patient_id, category_id=category_id)
+    service, retrieval, auditor = _search_service(
+        scope=frozenset({category_id}), results=[chunk], known_patients={patient_id}
+    )
+    doctor = make_doctor()
+
+    found = asyncio.run(
+        service.search_records(
+            doctor, patient_id=patient_id, query="diabetes", request_context="req-1"
+        )
+    )
+
+    assert found == [chunk]
+    assert len(retrieval.calls) == 1
+    assert retrieval.calls[0]["visibility"] is RetrievalVisibility.GRANTEE
+    assert len(auditor.calls) == 1
+    call = auditor.calls[0]
+    assert call["requester"] == doctor
+    assert call["patient_id"] == patient_id
+    assert call["granted_category_ids"] == frozenset({category_id})
+    assert call["request_context"] == "req-1"
+    # The audit hook carries no query text and no chunk content.
+    assert "diabetes" not in repr(call)
+    assert chunk.content not in repr(call)
+
+
+def test_search_records_with_a_scope_and_no_match_is_still_audited() -> None:
+    patient_id = uuid4()
+    service, _, auditor = _search_service(
+        scope=frozenset({uuid4()}), results=[], known_patients={patient_id}
+    )
+
+    assert (
+        asyncio.run(service.search_records(make_doctor(), patient_id=patient_id, query="x")) == []
+    )
+    assert len(auditor.calls) == 1
+    assert auditor.calls[0]["granted_category_ids"]
+
+
+def test_search_records_without_a_scope_audits_a_denial_and_retrieves_nothing() -> None:
+    patient_id = uuid4()
+    service, retrieval, auditor = _search_service(
+        scope=frozenset(), results=[make_chunk(patient_id=patient_id)], known_patients={patient_id}
+    )
+
+    found = asyncio.run(service.search_records(make_doctor(), patient_id=patient_id, query="x"))
+
+    assert found == []
+    assert retrieval.calls == []
+    assert len(auditor.calls) == 1
+    assert auditor.calls[0]["granted_category_ids"] == frozenset()
+
+
+def test_search_records_for_an_id_naming_no_patient_writes_nothing() -> None:
+    service, retrieval, auditor = _search_service(scope=frozenset(), known_patients=set())
+
+    found = asyncio.run(service.search_records(make_doctor(), patient_id=uuid4(), query="x"))
+
+    assert found == []
+    assert retrieval.calls == []
+    assert auditor.calls == []
+
+
+def test_search_records_refuses_to_run_unaudited() -> None:
+    service = AIQueryService(retrieval=FakeRetrieval([]), consent=FakeConsentScope(frozenset()))
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(service.search_records(make_doctor(), patient_id=uuid4(), query="x"))

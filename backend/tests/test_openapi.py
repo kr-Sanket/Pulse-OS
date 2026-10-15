@@ -436,7 +436,8 @@ def test_notifications_paths_are_present() -> None:
 
 
 def test_notifications_response_schema_fields() -> None:
-    """ADR-031: NotificationResponse exposes only generic metadata and structured references, zero PHI."""
+    """ADR-031: NotificationResponse exposes only generic metadata and structured references,
+    zero PHI."""
     schemas = _spec()["components"]["schemas"]
     assert set(schemas["NotificationResponse"]["properties"]) == {
         "id",
@@ -453,3 +454,19 @@ def test_notifications_response_schema_fields() -> None:
     assert set(schemas["UnreadCountResponse"]["properties"]) == {"count"}
     assert set(schemas["MarkAllReadResponse"]["properties"]) == {"count"}
     assert set(schemas["NotificationListResponse"]["properties"]) == {"items", "nextCursor"}
+
+
+def test_the_ai_search_declares_its_rate_limit_and_adds_no_parameter() -> None:
+    operation = _spec()["paths"]["/api/v1/ai/patients/{patient_id}/search"]["get"]
+    assert "429" in operation["responses"]
+    assert {parameter["name"] for parameter in operation["parameters"]} == {"patient_id", "query"}
+
+
+def test_access_request_creation_declares_the_duplicate_conflict() -> None:
+    operation = _spec()["paths"]["/api/v1/access-requests"]["post"]
+    assert "409" in operation["responses"]
+
+
+def test_the_patient_lookup_declares_the_unverified_hospital_conflict() -> None:
+    operation = _spec()["paths"]["/api/v1/patients/lookup"]["get"]
+    assert {"200", "409", "422", "429"} <= set(operation["responses"])

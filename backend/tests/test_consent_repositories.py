@@ -44,6 +44,7 @@ from app.modules.records.models import (
     RecordCategory,
 )
 from app.shared.pagination import CursorKey
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.support import sqlite_session
@@ -486,5 +487,76 @@ def test_active_category_ids_report_a_category_once_however_often_it_was_granted
                 patient_id=f.patient_id, grantee_doctor_id=f.doctor_id, at=NOW
             )
             assert found == [f.cbc_id]
+
+    asyncio.run(scenario())
+
+
+# -- duplicate guards (authorization and audit correctness, 2026-10-15) ----------------
+
+
+def test_open_category_ids_counts_only_unanswered_categories_of_open_requests() -> None:
+    """Open = PENDING and unexpired; a category already answered on it is not open."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            f = await _arrange(session)
+            request = await _add_request(f)
+            for category_id in (f.cbc_id, f.mri_id):
+                await f.categories.add(
+                    ConsentRequestCategory(request_id=request.id, category_id=category_id)
+                )
+            await f.decisions.add(
+                ConsentDecision(
+                    request_id=request.id,
+                    category_id=f.mri_id,
+                    status=ConsentDecisionStatus.REJECTED,
+                )
+            )
+
+            async def open_at(at: dt.datetime) -> set[UUID]:
+                return await f.requests.open_category_ids(
+                    patient_id=f.patient_id, requester_doctor_id=f.doctor_id, at=at
+                )
+
+            assert await open_at(NOW) == {f.cbc_id}
+            # At the deadline the request is no longer open (expiry is `now >= expires_at`).
+            assert await open_at(NOW + dt.timedelta(days=7)) == set()
+
+            request.status = ConsentRequestStatus.EXPIRED
+            await session.flush()
+            assert await open_at(NOW) == set()
+
+    asyncio.run(scenario())
+
+
+def test_the_pair_lock_is_a_no_op_on_sqlite() -> None:
+    """Only PostgreSQL takes an advisory lock; the harness must not fail on it."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            f = await _arrange(session)
+            await f.requests.lock_pair(patient_id=f.patient_id, requester_doctor_id=f.doctor_id)
+
+    asyncio.run(scenario())
+
+
+def test_a_non_unique_integrity_failure_is_not_reported_as_a_duplicate() -> None:
+    """Only a UNIQUE violation means "already recorded" (409). A grant pointing at a
+    decision that does not exist is a foreign-key failure — a bug, not a duplicate — and
+    must surface as itself."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            f = await _arrange(session)
+            with pytest.raises(IntegrityError):
+                await f.grants.add(
+                    ConsentGrant(
+                        decision_id=uuid4(),
+                        patient_id=f.patient_id,
+                        grantee_doctor_id=f.doctor_id,
+                        category_id=f.cbc_id,
+                        expires_at=NOW + dt.timedelta(days=90),
+                    )
+                )
 
     asyncio.run(scenario())

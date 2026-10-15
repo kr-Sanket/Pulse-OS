@@ -71,6 +71,9 @@ DEFAULT_LIMITS: Final[dict[str, RateLimit]] = {
     # A write, and a deliberate act: ten a minute is already beyond human.
     "access_request_create": RateLimit(limit=10, window_seconds=60),
     "ai_generate": RateLimit(limit=10, window_seconds=60),
+    # Returns record text without generation, so it is cheaper than ai_generate but is a
+    # content read: bounded like the granted-records listing it mirrors.
+    "ai_search": RateLimit(limit=30, window_seconds=60),
 }
 
 

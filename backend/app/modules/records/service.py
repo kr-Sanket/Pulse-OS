@@ -71,6 +71,11 @@ logger = logging.getLogger(__name__)
 #: Accepted medical-document formats (docs/PROJECT_OVERVIEW.md: reports are PDFs/scans).
 ALLOWED_CONTENT_TYPES: Final = ("application/pdf", "image/jpeg", "image/png")
 
+#: ``medical_records.original_filename`` is VARCHAR(255). PostgreSQL counts characters,
+#: not bytes, so a ``len()`` over the decoded filename is the same measure; validated at the
+#: upload boundary so an over-long name is a 422 rather than a database error.
+MAX_FILENAME_LENGTH: Final = 255
+
 #: Worker task emitted per upload (ADR-014); the M5 pipeline consumes it.
 RECORD_UPLOADED_TASK: Final = "record_uploaded"
 

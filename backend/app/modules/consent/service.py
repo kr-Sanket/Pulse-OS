@@ -49,8 +49,10 @@ from Crypto.Hash import keccak
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.consent.errors import (
     AccessDeniedError,
+    CategoryAlreadyGrantedError,
     ClinicianNotActiveError,
     ClinicianProfileNotFoundError,
+    DuplicatePendingRequestError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
     HospitalProfileNotFoundError,
@@ -338,6 +340,9 @@ class RequestView:
 
     request: ConsentRequest
     requested_category_ids: tuple[UUID, ...]
+    #: The status as of the instant the service read it (``request_status``): a PENDING row
+    #: whose deadline has passed reads as EXPIRED even before anything has persisted that.
+    status: ConsentRequestStatus
     requester: PersonDisplay | None = None
     #: The hospital the request was raised under, which is not necessarily where the
     #: requester practises today — the request row records the affiliation at the time.
@@ -352,6 +357,20 @@ class RequestView:
 class RequestPage:
     items: list[RequestView]
     next_cursor: str | None
+
+
+def request_status(request: ConsentRequest, now: datetime) -> ConsentRequestStatus:
+    """The request's status as a reader at ``now`` should see it.
+
+    The stored column, except that a PENDING request past its deadline reads as EXPIRED.
+    Expiry is otherwise persisted lazily, by the next decision attempt
+    (``_require_own_open_request``); listings are reads and write nothing, so without this
+    an expired request would sit in the patient's inbox as if it could still be answered.
+    The deadline test matches that decision path exactly (``now >= expires_at``).
+    """
+    if request.status is ConsentRequestStatus.PENDING and now >= as_utc(request.expires_at):
+        return ConsentRequestStatus.EXPIRED
+    return request.status
 
 
 class ConsentGrantState(StrEnum):
@@ -516,6 +535,9 @@ class ConsentService:
             raise UnknownPatientError()
 
         now = self._now()
+        await self._refuse_duplicate_request(
+            patient_id=patient.id, clinician_id=clinician.id, wanted=wanted, at=now
+        )
         request = await self._requests.add(
             ConsentRequest(
                 patient_id=patient.id,
@@ -551,7 +573,9 @@ class ConsentService:
                     actor_hospital_id=clinician.hospital_id,
                 )
             )
-        return RequestView(request=request, requested_category_ids=wanted)
+        return RequestView(
+            request=request, requested_category_ids=wanted, status=request_status(request, now)
+        )
 
     async def list_inbox(
         self, caller: AuthenticatedUser, *, after: CursorKey | None, limit: int
@@ -951,20 +975,64 @@ class ConsentService:
         see that they asked. Which action is written is decided here rather than by the
         caller — the vocabulary belongs to this module.
         """
+        await self._write_scope_event(
+            requester,
+            granted_action=AuditAction.RECORDS_LISTED,
+            patient_id=patient_id,
+            granted_category_ids=granted_category_ids,
+            at=at,
+            request_context=request_context,
+        )
+
+    async def record_search(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID],
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None:
+        """Append the single audit event for one clinician AI record search (ADR-020
+        amendments).
+
+        The listing's contract with a truthful verb: one scope-level row per request,
+        ``RECORDS_SEARCHED`` when there was a granted scope to search and ``ACCESS_DENIED``
+        when there was none. Distinct from ``RECORDS_LISTED`` because a search returns
+        record *text*, where a listing returns a chooser — the patient's trail should not
+        describe the one as the other. The query and anything returned stay off the row.
+        """
+        await self._write_scope_event(
+            requester,
+            granted_action=AuditAction.RECORDS_SEARCHED,
+            patient_id=patient_id,
+            granted_category_ids=granted_category_ids,
+            at=at,
+            request_context=request_context,
+        )
+
+    async def _write_scope_event(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        granted_action: AuditAction,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID],
+        at: datetime,
+        request_context: str | None,
+    ) -> None:
+        """One scope-level event: ``granted_action`` with a scope, ``ACCESS_DENIED`` without.
+        No target column is set — the subject is a scope, which ``patient_id`` carries."""
         # Resolved here rather than passed in: `records` knows the caller is a clinician but
         # not which hospital they act for, and ADR-016 keeps that projection on this side.
-        listing_clinician = await self._acting_clinician(requester)
+        clinician = await self._acting_clinician(requester)
         await self._write_audit(
             requester,
-            action=(
-                AuditAction.RECORDS_LISTED if granted_category_ids else AuditAction.ACCESS_DENIED
-            ),
+            action=granted_action if granted_category_ids else AuditAction.ACCESS_DENIED,
             patient_id=patient_id,
             occurred_at=at,
             request_context=request_context,
-            actor_hospital_id=listing_clinician.hospital_id
-            if listing_clinician is not None
-            else None,
+            actor_hospital_id=clinician.hospital_id if clinician is not None else None,
         )
 
     async def record_summary_generated(
@@ -1042,6 +1110,19 @@ class ConsentService:
         wanted = self._unique_categories(category_ids)
         request = await self._require_own_open_request(caller, request_id)
         now = self._now()
+        if status is ConsentDecisionStatus.APPROVED:
+            # Same pair lock as request creation, so two approvals of overlapping requests
+            # cannot both pass the check below and leave two active grants for one category.
+            await self._requests.lock_pair(
+                patient_id=request.patient_id, requester_doctor_id=request.requester_doctor_id
+            )
+            already = await self._grants.list_active_category_ids(
+                patient_id=request.patient_id,
+                grantee_doctor_id=request.requester_doctor_id,
+                at=now,
+            )
+            if set(already).intersection(wanted):
+                raise CategoryAlreadyGrantedError()
 
         decisions: list[ConsentDecision] = []
         grants: list[ConsentGrant] = []
@@ -1139,6 +1220,28 @@ class ConsentService:
             raise RequestNotDecidableError(ConsentRequestStatus.EXPIRED.value)
         return request
 
+    async def _refuse_duplicate_request(
+        self, *, patient_id: UUID, clinician_id: UUID, wanted: Sequence[UUID], at: datetime
+    ) -> None:
+        """Refuse a request that would duplicate an active grant or an open request.
+
+        Checked in that order, so the answer is deterministic when both apply: a category
+        the clinician can already read is reported as granted. Taken under the pair lock so
+        two concurrent creators for the same (patient, clinician) cannot both pass. Every
+        refusal here happens before anything is written.
+        """
+        await self._requests.lock_pair(patient_id=patient_id, requester_doctor_id=clinician_id)
+        granted = await self._grants.list_active_category_ids(
+            patient_id=patient_id, grantee_doctor_id=clinician_id, at=at
+        )
+        if set(granted).intersection(wanted):
+            raise CategoryAlreadyGrantedError()
+        open_ids = await self._requests.open_category_ids(
+            patient_id=patient_id, requester_doctor_id=clinician_id, at=at
+        )
+        if open_ids.intersection(wanted):
+            raise DuplicatePendingRequestError()
+
     async def _require_clinician(self, caller: AuthenticatedUser) -> Clinician:
         clinician = await self._clinicians.get_by_user_id(caller.user_id)
         if clinician is None:
@@ -1171,6 +1274,7 @@ class ConsentService:
         clinician's own listing; the inbox passes nothing, so its rows carry no subject and
         its response shape is unchanged."""
         page, next_cursor = _split_page(rows, limit=limit, key=_row_created_at)
+        now = self._now()
         # Two statements for the whole page, whatever its size — see StaffDirectory.
         requesters = await self._staff.clinicians_by_id({row.requester_doctor_id for row in page})
         hospitals = await self._staff.hospital_names({row.requester_hospital_id for row in page})
@@ -1181,6 +1285,7 @@ class ConsentService:
                     entry.category_id
                     for entry in await self._request_categories.list_by_request(row.id)
                 ),
+                status=request_status(row, now),
                 requester=requesters.get(row.requester_doctor_id),
                 requester_hospital_name=hospitals.get(row.requester_hospital_id),
                 patient_health_id=(

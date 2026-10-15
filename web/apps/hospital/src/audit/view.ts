@@ -33,6 +33,7 @@ const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   ACCESS_DENIED: { label: "Access denied", tone: "destructive" },
   ACCESS_REQUESTED: { label: "Access requested", tone: "warning" },
   RECORDS_LISTED: { label: "Records listed", tone: "info" },
+  RECORDS_SEARCHED: { label: "Records searched (AI)", tone: "info" },
   CONSENT_APPROVED: { label: "Consent approved", tone: "success" },
   CONSENT_REJECTED: { label: "Consent declined", tone: "destructive" },
   CONSENT_REVOKED: { label: "Access withdrawn", tone: "destructive" },

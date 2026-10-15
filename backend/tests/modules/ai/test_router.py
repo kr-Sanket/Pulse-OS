@@ -63,6 +63,27 @@ class FakeAIQueryService:
         )
         return self.results
 
+    async def search_records(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        query: str,
+        limit: int = 10,
+        request_context: str | None = None,
+    ) -> list[RetrievedChunk]:
+        """The audited search the endpoint calls; recorded like ``search``."""
+        self.calls.append(
+            {
+                "requester": requester,
+                "patient_id": patient_id,
+                "query": query,
+                "limit": limit,
+                "request_context": request_context,
+            }
+        )
+        return self.results
+
 
 @pytest.fixture
 def fake_query_service(app: FastAPI) -> Iterator[FakeAIQueryService]:
@@ -1482,3 +1503,82 @@ def test_ai_generate_rate_limiting_preserves_role_authorization(
         ).status_code
         == 403
     )
+
+
+# ==============================================================================
+# Clinician search: audit context and its own rate limit (ai_search)
+# ==============================================================================
+
+
+def test_search_passes_the_request_id_through_as_audit_context(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    fake_query_service: FakeAIQueryService,
+) -> None:
+    token = "doctor-ctx-token"
+    fake_auth.register_user(token, user_id=uuid4(), firebase_uid="fb-doc-ctx", role=Role.DOCTOR)
+
+    response = client.get(
+        f"/api/v1/ai/patients/{uuid4()}/search?query=diabetes",
+        headers={**_bearer(token), "X-Request-Id": "req-search-1"},
+    )
+
+    assert response.status_code == 200
+    assert fake_query_service.calls[0]["request_context"] == "req-search-1"
+
+
+class _RecordingSearchAuditor:
+    def __init__(self) -> None:
+        self.count = 0
+
+    async def record_search(self, *args: object, **kwargs: object) -> None:
+        self.count += 1
+
+
+class _KnownPatients:
+    async def health_ids_by_id(self, patient_ids: Any) -> dict[UUID, str]:
+        return {pid: "PHI-IND-2026-1QE8DVR" for pid in patient_ids}
+
+
+def test_ai_search_is_rate_limited_on_its_own_bucket(
+    client: TestClient,
+    app: FastAPI,
+    fake_auth: FakeAuthProvider,
+    rate_limiter: InMemoryRateLimiter,
+) -> None:
+    token = "doctor-search-rl"
+    fake_auth.register_user(token, user_id=uuid4(), firebase_uid="fb-doc-srl", role=Role.DOCTOR)
+    auditor = _RecordingSearchAuditor()
+    service = AIQueryService(
+        retrieval=FakeRetrieval([]),
+        consent=FakeConsentScope(frozenset({DEFAULT_CATEGORY_ID})),
+        auditor=FakeSummaryAuditor(),
+        search_auditor=auditor,
+        patients=_KnownPatients(),
+    )
+    app.dependency_overrides[get_ai_query_service] = lambda: service
+    app.dependency_overrides[get_answer_generator] = lambda: FakeAnswerGenerator()
+    url = f"/api/v1/ai/patients/{uuid4()}/search?query=diabetes"
+    try:
+        limit = rate_limiter.limit_for("ai_search")
+        assert (limit.limit, limit.window_seconds) == (30, 60)
+
+        for _ in range(30):
+            assert client.get(url, headers=_bearer(token)).status_code == 200
+        refused = client.get(url, headers=_bearer(token))
+
+        assert refused.status_code == 429
+        assert refused.headers["content-type"].startswith("application/problem+json")
+        assert int(refused.headers["Retry-After"]) >= 1
+        # Every served search was audited; the refused one never reached the service.
+        assert auditor.count == 30
+        # Spending the search quota leaves the answer quota untouched.
+        answer = client.post(
+            f"/api/v1/ai/patients/{uuid4()}/answer",
+            json={"query": "still allowed"},
+            headers=_bearer(token),
+        )
+        assert answer.status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_ai_query_service, None)
+        app.dependency_overrides.pop(get_answer_generator, None)

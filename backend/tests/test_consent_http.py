@@ -32,11 +32,13 @@ from app.modules.consent.dependencies import (
 )
 from app.modules.consent.errors import (
     AccessDeniedError,
+    CategoryAlreadyGrantedError,
     ClinicianNotActiveError,
     ClinicianProfileNotFoundError,
     ConsentError,
     DuplicateDecisionError,
     DuplicateGrantError,
+    DuplicatePendingRequestError,
     DuplicateRequestCategoryError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
@@ -46,6 +48,7 @@ from app.modules.consent.errors import (
     UnknownPatientError,
     UnrequestedCategoryError,
 )
+from app.modules.consent.models import ConsentDecision, ConsentRequest, ConsentRequestStatus
 from app.modules.consent.router import (
     access_requests_router,
     audit_logs_router,
@@ -438,7 +441,8 @@ def test_grant_listing_is_scoped_to_the_caller(world: World) -> None:
 
 
 def test_grant_listing_cursor_pagination_over_http(world: World) -> None:
-    created = {_grant_one(world)["id"] for _ in range(3)}
+    # One grant per category: a second active grant for the same category is refused (409).
+    created = {_grant_one(world, code)["id"] for code in ("CBC", "MRI", "XRAY")}
 
     first = world.client.get(GRANTS, params={"limit": 2}, headers=world.patient)
     assert len(first.json()["items"]) == 2
@@ -452,7 +456,8 @@ def test_grant_listing_cursor_pagination_over_http(world: World) -> None:
 
 
 def test_cursor_pagination_over_http(world: World) -> None:
-    created = {_create(world, "CBC").json()["id"] for _ in range(3)}
+    # One request per category: a second open request for the same category is refused (409).
+    created = {_create(world, code).json()["id"] for code in ("CBC", "MRI", "XRAY")}
     first = world.client.get(f"{REQUESTS}/inbox", params={"limit": 2}, headers=world.patient)
     assert len(first.json()["items"]) == 2
     cursor = first.json()["nextCursor"]
@@ -545,8 +550,8 @@ def test_the_trail_is_scoped_to_the_caller(world: World) -> None:
 
 
 def test_trail_cursor_pagination_over_http(world: World) -> None:
-    for _ in range(3):
-        _create(world, "CBC")
+    for code in ("CBC", "MRI", "XRAY"):
+        assert _create(world, code).status_code == 201
 
     first = world.client.get(AUDIT, params={"limit": 2}, headers=world.patient)
     assert len(first.json()["items"]) == 2
@@ -851,6 +856,8 @@ def test_openapi_never_exposes_internal_record_identifiers(consent_app: FastAPI)
         (DuplicateDecisionError(), 409),
         (DuplicateRequestCategoryError(), 409),
         (DuplicateGrantError(), 409),
+        (DuplicatePendingRequestError(), 409),
+        (CategoryAlreadyGrantedError(), 409),
         (UnrequestedCategoryError(), 422),
         (UnknownPatientError(), 422),
         (EmptyCategorySelectionError(), 422),
@@ -902,9 +909,7 @@ def test_consent_http_lifecycle_persists_notifications(world: World) -> None:
     # Verify ACCESS_REQUESTED notification for patient in DB
     async def check_patient_notif(session: AsyncSession) -> None:
         result = await session.execute(
-            select(Notification).where(
-                Notification.recipient_user_id == world.patient_user_id
-            )
+            select(Notification).where(Notification.recipient_user_id == world.patient_user_id)
         )
         notifs = list(result.scalars())
         assert len(notifs) == 1
@@ -927,9 +932,7 @@ def test_consent_http_lifecycle_persists_notifications(world: World) -> None:
     # Verify CONSENT_APPROVED notification for doctor in DB (exactly 1 notification)
     async def check_doctor_approval_notif(session: AsyncSession) -> None:
         result = await session.execute(
-            select(Notification).where(
-                Notification.recipient_user_id == world.doctor_user_id
-            )
+            select(Notification).where(Notification.recipient_user_id == world.doctor_user_id)
         )
         notifs = list(result.scalars())
         assert len(notifs) == 1
@@ -952,9 +955,7 @@ def test_consent_http_lifecycle_persists_notifications(world: World) -> None:
     # Verify CONSENT_REVOKED notification for doctor in DB
     async def check_doctor_revocation_notif(session: AsyncSession) -> None:
         result = await session.execute(
-            select(Notification).where(
-                Notification.recipient_user_id == world.doctor_user_id
-            )
+            select(Notification).where(Notification.recipient_user_id == world.doctor_user_id)
         )
         notifs = list(result.scalars())
         assert len(notifs) == 2
@@ -972,11 +973,127 @@ def test_consent_http_lifecycle_persists_notifications(world: World) -> None:
 
     async def check_no_duplicate_notif(session: AsyncSession) -> None:
         result = await session.execute(
-            select(Notification).where(
-                Notification.recipient_user_id == world.doctor_user_id
-            )
+            select(Notification).where(Notification.recipient_user_id == world.doctor_user_id)
         )
         notifs = list(result.scalars())
         assert len(notifs) == 2
 
     run_with_session(world.engine, check_no_duplicate_notif)
+
+
+# -- duplicate requests and request expiry over HTTP (2026-10-15) -----------------------
+
+
+def test_a_duplicate_open_request_is_a_409_problem(world: World) -> None:
+    assert _create(world, "CBC", "MRI").status_code == 201
+
+    duplicate = _create(world, "MRI")
+
+    assert duplicate.status_code == 409
+    assert duplicate.headers["content-type"].startswith(PROBLEM_JSON)
+    assert duplicate.json()["detail"] == (
+        "An open access request already asks this patient for that category."
+    )
+    inbox = world.client.get(f"{REQUESTS}/inbox", headers=world.patient).json()["items"]
+    assert len(inbox) == 1
+
+
+def test_asking_for_an_already_granted_category_is_a_409_problem(world: World) -> None:
+    _grant_one(world, "CBC")
+
+    again = _create(world, "CBC")
+
+    assert again.status_code == 409
+    assert again.json()["detail"] == "Access to that category has already been granted."
+
+
+def _expire_request(world: World, request_id: str) -> None:
+    """Move a request's deadline into the past — the HTTP world runs on the real clock."""
+    assert world.engine is not None
+
+    async def act(session: Any) -> None:
+        request = await session.get(ConsentRequest, UUID(request_id))
+        request.expires_at = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=1)
+
+    run_with_session(world.engine, act)
+
+
+def _stored_status(world: World, request_id: str) -> ConsentRequestStatus:
+    assert world.engine is not None
+
+    async def read(session: Any) -> ConsentRequestStatus:
+        request = await session.get(ConsentRequest, UUID(request_id))
+        status: ConsentRequestStatus = request.status
+        return status
+
+    return run_with_session(world.engine, read)
+
+
+def test_an_expired_request_is_shown_as_expired_and_the_transition_is_persisted(
+    world: World,
+) -> None:
+    """The regression: the EXPIRED write used to be rolled back with the 409 it raised."""
+    request_id = _create(world, "CBC").json()["id"]
+    _expire_request(world, request_id)
+
+    # Listings report it as expired before anyone tries to answer it.
+    inbox = world.client.get(f"{REQUESTS}/inbox", headers=world.patient).json()["items"]
+    assert inbox[0]["status"] == "EXPIRED"
+    sent = world.client.get(f"{REQUESTS}/sent", headers=world.doctor).json()["items"]
+    assert sent[0]["status"] == "EXPIRED"
+    assert _stored_status(world, request_id) is ConsentRequestStatus.PENDING
+
+    refused = world.client.post(
+        f"{REQUESTS}/{request_id}/approve", json={"categoryCodes": ["CBC"]}, headers=world.patient
+    )
+
+    assert refused.status_code == 409
+    assert refused.headers["content-type"].startswith(PROBLEM_JSON)
+    assert "X-Request-Id" in refused.headers
+    assert _stored_status(world, request_id) is ConsentRequestStatus.EXPIRED
+
+
+def test_repeated_answers_to_an_expired_request_get_the_same_refusal(world: World) -> None:
+    request_id = _create(world, "CBC").json()["id"]
+    _expire_request(world, request_id)
+    body = {"categoryCodes": ["CBC"]}
+
+    answers = [
+        world.client.post(f"{REQUESTS}/{request_id}/approve", json=body, headers=world.patient),
+        world.client.post(f"{REQUESTS}/{request_id}/approve", json=body, headers=world.patient),
+        world.client.post(f"{REQUESTS}/{request_id}/reject", json=body, headers=world.patient),
+    ]
+
+    assert [answer.status_code for answer in answers] == [409, 409, 409]
+    assert len({answer.json()["detail"] for answer in answers}) == 1
+    assert "EXPIRED" in answers[0].json()["detail"]
+    # Nothing but the original request event reached the trail.
+    trail = world.client.get(AUDIT, headers=world.patient).json()["items"]
+    assert [item["action"] for item in trail] == ["ACCESS_REQUESTED"]
+
+
+def test_other_decision_failures_still_roll_the_whole_decision_back(world: World) -> None:
+    """Only the not-decidable refusal is returned rather than raised. A duplicate answer
+    found midway must still undo the categories decided before it."""
+    request_id = _create(world, "CBC", "MRI").json()["id"]
+    first = world.client.post(
+        f"{REQUESTS}/{request_id}/approve", json={"categoryCodes": ["CBC"]}, headers=world.patient
+    )
+    assert first.status_code == 200
+
+    partial = world.client.post(
+        f"{REQUESTS}/{request_id}/approve",
+        json={"categoryCodes": ["MRI", "CBC"]},
+        headers=world.patient,
+    )
+    assert partial.status_code == 409
+
+    assert world.engine is not None
+
+    async def decisions(session: Any) -> int:
+        result = await session.execute(
+            select(ConsentDecision).where(ConsentDecision.request_id == UUID(request_id))
+        )
+        return len(result.scalars().all())
+
+    assert run_with_session(world.engine, decisions) == 1

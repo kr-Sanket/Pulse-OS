@@ -40,11 +40,13 @@ from app.modules.consent.batch_service import AuditBatchService
 from app.modules.consent.errors import (
     AccessDeniedError,
     AuditEventNotFoundError,
+    CategoryAlreadyGrantedError,
     ClinicianNotActiveError,
     ClinicianProfileNotFoundError,
     ConsentError,
     DuplicateDecisionError,
     DuplicateGrantError,
+    DuplicatePendingRequestError,
     DuplicateRequestCategoryError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
@@ -120,6 +122,15 @@ def to_http_error(exc: ConsentError) -> HTTPException:
         )
     if isinstance(exc, DuplicateDecisionError):
         return HTTPException(status_code=409, detail="This category has already been answered.")
+    if isinstance(exc, DuplicatePendingRequestError):
+        return HTTPException(
+            status_code=409,
+            detail="An open access request already asks this patient for that category.",
+        )
+    if isinstance(exc, CategoryAlreadyGrantedError):
+        return HTTPException(
+            status_code=409, detail="Access to that category has already been granted."
+        )
     if isinstance(exc, DuplicateRequestCategoryError | DuplicateGrantError):
         return HTTPException(status_code=409, detail="This action has already been recorded.")
     if isinstance(exc, UnrequestedCategoryError):
