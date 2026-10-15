@@ -16,7 +16,7 @@ pulse-os/
 │   │   │   ├── records/
 │   │   │   ├── consent/
 │   │   │   ├── ai/
-│   │   │   └── notifications/   # empty package (not implemented)
+│   │   │   └── notifications/   # in-app consent notifications (ADR-031)
 │   │   ├── workers/          # arq worker; only a logging record_uploaded task today
 │   │   └── main.py
 │   ├── alembic/
@@ -54,10 +54,14 @@ pulse-os/
   Docker Compose; the API reads `.env` relative to its working directory, i.e. `backend/.env`
   under `make dev-api` (there is no `backend/.env.example` yet — see TODO.md).
 - **PostgreSQL port:** Compose publishes `${POSTGRES_PORT:-5433}:5432`, and `.env.example` sets
-  `POSTGRES_PORT=5433` with a matching `PULSEOS_DATABASE_URL`. The host port defaults to 5433 to
+  `POSTGRES_PORT=5433` with a matching `PULSEOS_DATABASE_URL`; the backend's built-in default
+  (`app/core/config.py`) also targets `localhost:5433`. PostgreSQL itself still listens on 5432
+  **inside** the container; 5433 is only the host-side mapping. The host port defaults to 5433 to
   avoid collisions with local PostgreSQL instances on the standard port 5432 (e.g. other projects
   sharing the development machine). If needed, a different `POSTGRES_PORT` can be configured in the
-  root `.env` along with a matching `PULSEOS_DATABASE_URL`.
+  root `.env` along with a matching `PULSEOS_DATABASE_URL`. An existing `backend/.env` written
+  before this change may still name port 5432 — check it if the API cannot reach the database.
+  The CI `backend-postgres` job maps its own throwaway service as `5432:5432`; that is separate.
 - **AI:** the AI endpoints need a reachable Ollama with the configured model
   (`PULSEOS_OLLAMA_BASE_URL`, `PULSEOS_OLLAMA_MODEL`, default `qwen3:8b`). Set
   `PULSEOS_AI_PROVIDER=fake` to run without a model.
@@ -80,18 +84,29 @@ pulse-os/
 | Layer | Tool | What |
 |---|---|---|
 | Unit + integration | pytest on an in-memory SQLite harness (`tests/support.py`) | Domain logic, routers→DB, migrations up/down (`test_alembic.py`) |
-| PostgreSQL integration (opt-in) | pytest, `test_audit_batches_postgres.py`, `test_alembic_postgres.py` | Concurrent sealing, UUID ordering, integrity-error classification, migration 0007 on real PostgreSQL |
-| Web | vitest (logic tests; no component/DOM tests yet) | Portal view logic |
+| PostgreSQL integration (opt-in) | pytest, `test_audit_batches_postgres.py`, `test_alembic_postgres.py`, `test_consent_postgres.py` | Concurrent sealing, UUID ordering, integrity-error classification, migration 0007, concurrent duplicate consent requests/approvals (with no-lock controls), the filename column limit — on real PostgreSQL. All three files are in the CI `backend-postgres` job's explicit list |
+| Web | vitest (mostly logic tests; a few `renderToString` component tests; no jsdom/DOM tests) | Portal view logic, API modules, shared hooks |
 | Contract (not built) | generated client + schemathesis | OpenAPI spec ↔ implementation |
-| E2E (not built; planned M7) | Playwright | The 3 core journeys from CONTEXT.md |
+
+**No E2E infrastructure.** There is no Playwright/Cypress workspace, configuration, synthetic E2E
+authentication or E2E Docker setup; the experimental E2E work was removed (`281439c`) and is not
+planned for the final review. Cross-portal journeys are verified by the backend HTTP tests (e.g.
+`tests/test_m3_gate.py`) plus manual walk-throughs.
 
 **Opt-in PostgreSQL tests** are skipped unless `PULSEOS_TEST_POSTGRES_URL` names a
 `postgresql+asyncpg://` URL for a **disposable** server. They create and drop their own schemas or
-databases; never point the variable at a development or real database.
+databases; never point the variable at a development or real database. A throwaway local
+server that touches nothing else (no volume, removed on stop):
+`docker run -d --rm --pull never --name pulseos-pgtest -e POSTGRES_USER=pulseos_scratch
+-e POSTGRES_PASSWORD=<throwaway> -e POSTGRES_DB=pulseos_scratch -p 127.0.0.1:55432:5432
+--tmpfs /var/lib/postgresql/data pgvector/pgvector:pg16`, then `docker stop pulseos-pgtest`.
 
-**Recorded results (not a guarantee of the current tree):** 2026-10-11, local — backend **1088
-passed, 18 skipped** without the URL; the 18 PostgreSQL tests passed against a disposable
-PostgreSQL 16.15 container. Web: 463 tests recorded 2026-09-08 (Session 016), not re-run since.
+**Recorded results (not a guarantee of the current tree):** 2026-10-15, `72b55e2` plus the
+uncommitted authorization and audit correctness changes, local — backend **1165 passed,
+25 skipped** without the URL (the 25 skips are the opt-in PostgreSQL tests) and **1190 passed,
+0 skipped** with it, against a disposable PostgreSQL 16.15 container; web **550 passed**
+(patient 184, hospital 162, doctor 156, ui 31, api-client 17). These are local runs, not
+GitHub Actions results.
 
 Rules: consent enforcement gets *negative* tests (wrong role, revoked grant, wrong patient) for
 every endpoint that touches records. External services (LLM, chain, S3, FCM) are faked in tests —
@@ -102,11 +117,20 @@ never live calls in CI. Coverage target ≥80% on `consent` and `records`; pragm
 On every PR and push to `main` (`.github/workflows/ci.yml`), with **no path filters** (docs-only
 changes run everything):
 
-- `backend` — `ruff format --check`, `ruff check`, `mypy`, `pytest`. Repo-wide ruff/format/mypy
-  findings that predate M6 currently fail the early steps, so this job is not green.
-- `backend-postgres` — a disposable PostgreSQL 16 service plus the opt-in PostgreSQL tests; fails if
-  any of them is skipped. **Configured locally, not yet run on GitHub** (unpushed as of 2026-10-11).
-- `web` — prettier, eslint, `tsc`, vitest.
+- `backend` — `ruff format --check`, `ruff check`, `mypy`, `pytest`. The findings recorded on
+  2026-10-11 were fixed in `10bec8f`/`4d8e181`/`2cb0851`; the ruff findings `15b2d1b` added to
+  four test files are fixed in the working tree (uncommitted). Local run 2026-10-15: all four
+  steps clean. **At `72b55e2` as pushed, this job fails at `ruff format --check`** until that fix
+  is committed.
+- `backend-postgres` — a disposable PostgreSQL 16 service plus the opt-in PostgreSQL tests
+  (`test_audit_batches_postgres.py`, `test_alembic_postgres.py`, `test_consent_postgres.py` — the
+  file list is explicit; the third was added 2026-10-15, uncommitted); fails if any is skipped.
+  The same command passes locally against a disposable PostgreSQL 16.15 (25 passed, 0 skipped). **At `72b55e2` as pushed, two `test_alembic_postgres.py` tests fail**
+  (they upgraded to `head` and expected `0007`, which stopped being head when `15b2d1b` added
+  0008); pinned to `0007` in the working tree, uncommitted. GitHub run results have not been
+  checked here.
+- `web` — prettier, eslint, `tsc`, vitest. All clean locally at `72b55e2` (2026-10-14).
+- There is no E2E job (see Testing Strategy).
 
 `make ci` runs the lint, typecheck and test targets locally; it does not run the opt-in PostgreSQL
 tests. The API client is regenerated manually (`make api-client`), not in CI. No deployment job

@@ -5,9 +5,118 @@
 
 ---
 
-## Session 017 — 2026-10-11 · ← CURRENT STATE
+## Session 019 — 2026-10-15 · ← CURRENT STATE
 
 **Read this entry alone to know where the project stands.** Everything below it is history.
+
+**Branch:** `main` at `72b55e2`, level with `origin/main`. **Nothing from Sessions 018–019 is
+committed** — the working tree holds, all uncommitted and awaiting PO review: Task 0 documentation;
+the ruff cleanup of four test files; Task 1 (authorization and audit correctness: backend, tests,
+regenerated API client); Task 1.1 (PostgreSQL tests and documentation reconciliation).
+
+### Done
+- **Task 1 — TODO §0a item 1, implemented.** AI search audited (`RECORDS_LISTED` /
+  `ACCESS_DENIED`; refined to `RECORDS_SEARCHED` in Task 1.2) and rate-limited (`ai_search`); patient lookup requires a VERIFIED hospital
+  (409); duplicate open requests, already-granted categories and second active grants → 409 under
+  a per-(patient, clinician) advisory lock, with only UNIQUE violations mapped to 409; the
+  PENDING → EXPIRED transition now persists (refusal returned, not raised) and listings show
+  past-deadline requests as EXPIRED; upload file names over 255 characters → 422.
+- **Task 1.1 — PostgreSQL validation.** Ran against a disposable PostgreSQL 16.15 container
+  (`pgvector/pgvector:pg16` already present locally, `--rm`, tmpfs data, 127.0.0.1:55432; the dev
+  database on 5433 was not touched; container stopped afterwards). New
+  `tests/test_consent_postgres.py`: concurrent duplicate requests and concurrent approvals
+  (each with a no-lock control that does duplicate), SQLSTATE-based integrity mapping, and the
+  255-character multibyte filename at the column. Found and fixed two pre-existing failures in
+  `test_alembic_postgres.py` (pinned to `0007`; 0008 had moved `head`).
+- **Docs:** ADR-017, ADR-020 and ADR-021 amendments (explicit, dated, original text kept);
+  SECURITY, AI_ARCHITECTURE, API_GUIDELINES, DEVELOPMENT_GUIDE, README, ROADMAP, TODO reconciled.
+- **Task 1.2.** `AuditAction.RECORDS_SEARCHED` for the clinician AI search (ADR-020 amendment 2;
+  no migration — verified on the migrated PostgreSQL schema); patient and hospital audit views
+  label it; OpenAPI/client regenerated. `tests/test_consent_postgres.py` added to the CI
+  `backend-postgres` job. ADR amendment statuses finalized (implemented, uncommitted, PO
+  acceptance not recorded). GitHub Actions could not be checked (no `gh` / authenticated
+  integration available); nothing has run on GitHub for these changes.
+
+### Gates (2026-10-15, local — not GitHub Actions)
+Backend 1165 passed / 25 skipped without the PostgreSQL URL; 1190 passed with it; the CI
+`backend-postgres` command 25 passed, 0 skipped. Ruff format, ruff lint, mypy clean. Web 550
+passed; typecheck, ESLint, Prettier clean.
+
+### Decisions needed
+Review and commit the working tree; formally accept the three ADR amendments.
+
+### Exact next step
+PO review/commit. Then TODO §0a item 2 (per-category consent UI).
+
+---
+
+## Session 018 — 2026-10-14 · superseded by Session 019
+
+*Historical — read Session 019 for the current state.*
+
+**Branch:** `main` at **`72b55e2`**, **level with `origin/main` — everything is pushed.** The
+working tree was clean at the start of this session; the only changes made in it are the
+documentation updates listed below (uncommitted, awaiting PO review).
+
+**Phase:** M4 substantially done; M5 AI partially built; M6.1–M6.3 complete (local integrity
+only); M6.4 not authorized; M7 not started. Preparing for the final academic review.
+
+### What landed since Session 017 (from git history, verified against the code)
+
+| Commit | What |
+|---|---|
+| `5381642` | Clinician AI retrieval excludes patient-hidden records |
+| `10bec8f`, `4d8e181`, `2cb0851` | The ruff/format/mypy findings recorded in Session 017 fixed; SQLAlchemy 2.1 typing |
+| `281439c` | Experimental E2E work removed (only lockfile and a README line were tracked); no E2E infrastructure exists or is planned for the final review |
+| `15b2d1b` | **In-app notifications** (ADR-031): migration 0008, `notifications` module, four endpoints, consent integration in the same transaction, `@pulseos/ui` bell + drawer (30 s polling) in patient and doctor portals |
+| `5690a93` | Automatic consent/permission refresh (`useApiResource` polling + focus refresh, 15–30 s) on patient consent inbox, grants, dashboard and doctor sent-requests, granted-records |
+| `13e2034` | Doctor portal: granted categories marked and not re-requestable; AI assistant above granted records |
+| `72b55e2` | PostgreSQL host port standardized to **5433** (container port stays 5432): compose, `.env.example`, `config.py` default, DEVELOPMENT_GUIDE |
+
+### Work this session
+
+1. Read-only initialization and a full read-only audit (identity, FHIR, consent, AI, audit
+   integrity, portals, security, deployment). Key findings, all verified in code:
+   - AI clinician search endpoint: raw chunk text, no audit event, no rate limit.
+   - `GET /patients/lookup` works for PENDING-hospital admins (name disclosure).
+   - v3 audit events always verify as `NOT_ANCHORED`; sealing/reconciliation run only in tests.
+   - No SYSTEM_ADMIN provisioning, no admin UI; patient UI cannot decide per category; no backend
+     duplicate-request guard; expired requests linger as PENDING; FHIR is import-only; QR missing.
+2. **Documentation update (Task 0, docs only):** DECISIONS (ADR-031 status + implementation notes;
+   ADR-008 note), CLAUDE, SESSION, ROADMAP (new §Final review priorities), TODO (new §0a), CONTEXT,
+   README, and docs/{SYSTEM_ARCHITECTURE, DEVELOPMENT_GUIDE, BLOCKCHAIN_ARCHITECTURE,
+   AI_ARCHITECTURE, API_GUIDELINES, DATABASE_DESIGN, TECH_STACK, SECURITY}. No application code,
+   migration, dependency, container or database was touched.
+
+### Decisions recorded
+
+None new. ADR-031 marked **Implemented** (shipped; formal acceptance of its text not recorded).
+ADR-030 remains **Proposed**. ADR-009, ADR-010 and ADR-026 remain placeholders.
+
+### Quality gates (measured 2026-10-14 at `72b55e2`, local)
+
+| Gate | Result |
+|---|---|
+| `pytest` (backend, no PostgreSQL URL) | **1127 passed, 18 skipped** (opt-in PostgreSQL tests; not re-run this session) |
+| `mypy` | clean (162 source files) |
+| `ruff format --check` / `ruff check` | **3 files / 12 findings — all in test files from `15b2d1b`**; CI `backend` job will fail until fixed |
+| Web `format:check` / `lint` / `typecheck` | clean |
+| Web tests | **549 passed** (patient 184, hospital 161, doctor 156, ui 31, api-client 17) |
+| GitHub Actions | not checked this session |
+
+### Exact next step
+
+PO reviews and commits the documentation changes. Then, with authorization, implement the final
+review priorities in order (ROADMAP §Final review priorities, TODO §0a): (1) authorization and
+audit correctness, (2) per-category consent UI, (3) SYSTEM_ADMIN provisioning + hospital
+verification, (4) demonstrable local audit integrity, (5) FHIR R4 export. Fixing the ruff
+findings (TODO §0) is a cheap prerequisite.
+
+---
+
+## Session 017 — 2026-10-11 · superseded by Session 018
+
+*Historical — its branch, push and lint statements are out of date (see Session 018).*
 
 **Branch:** `main` at **`155cbf1`**, **38 commits ahead of `origin/main`, none pushed** (pushing is
 a Product Owner action). **The working tree is not clean** — uncommitted, awaiting PO review:

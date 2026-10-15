@@ -53,7 +53,8 @@
 | web3 client library | Backend → chain submission | **Not chosen, not a dependency** |
 | EasyOCR / Tesseract | OCR of uploaded documents | **Not implemented** (original plan) |
 | pgvector + LangChain | Embedding retrieval | **Deferred** (ADR-029) |
-| Firebase Cloud Messaging | Push notifications | **Not implemented**; `notifications` module is empty |
+| Firebase Cloud Messaging | Push notifications | **Not planned** — notifications are in-app only, polled by the portals (ADR-031) |
+| Playwright / Cypress | End-to-end browser tests | **Not used** — E2E infrastructure removed (`281439c`); not planned for the final review |
 | Flutter | Patient mobile app | **Not started**; timing pending **ADR-010** |
 | Render or AWS | Hosting | Pending **ADR-009** |
 | Sentry | Error tracking | **Not implemented** (placeholder variable only) |
@@ -67,4 +68,4 @@
   scale (ADR-001).
 - **Hyperledger** — rejected in the original plan.
 - **A real FHIR server (HAPI etc.)** — we align to FHIR shapes (ADR-006) and import FHIR R4
-  bundles (proposed ADR-030) without running one.
+  bundles (proposed ADR-030) without running one. FHIR export is not built.

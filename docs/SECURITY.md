@@ -3,7 +3,8 @@
 > **Canonical source for security controls.** PulseOS handles synthetic medical data, but its
 > research claims rest on the security design being credible, so every control below is marked
 > **Implemented**, **Partial**, **Planned** or **Absent** as verified against the code on
-> 2026-10-11. A planned control is *not* a protection. Per-PR checks: `.claude/CHECKLIST.md`.
+> 2026-10-11 (notification and lookup rows added 2026-10-14; lookup, AI-search and consent
+> rows updated 2026-10-15 after the authorization and audit correctness fixes). A planned control is *not* a protection. Per-PR checks: `.claude/CHECKLIST.md`.
 > Informed by HIPAA-style practice and India's DPDP Act 2023.
 
 ## Threat model and control status
@@ -18,10 +19,13 @@
 | Data in transit | HTTPS | **Absent locally** (plain HTTP in development); production TLS depends on ADR-009 |
 | Account takeover | Firebase Auth (ADR-011), server-side ID-token verification on every request | **Implemented**; rate limiting of auth endpoints is **Absent** |
 | Role forgery | Role taken from the verified token's PulseOS custom claim (`pulseos_role`), never from request payloads | **Implemented** |
-| ID enumeration / discovery abuse | Random Health IDs (ADR-012); per-user rate limits on `patient_lookup` (20/60 s), `record_existence`, `granted_records`, `access_request_create` (10/60 s) (ADR-024) | **Partial** — authenticated limits only; **pre-auth throttling Absent**; limiter **fails open** if Redis is unavailable |
+| ID enumeration / discovery abuse | Random Health IDs (ADR-012); per-user rate limits on `patient_lookup` (20/60 s), `record_existence`, `granted_records`, `access_request_create` (10/60 s) (ADR-024) | **Partial** — authenticated limits only; **pre-auth throttling Absent**; limiter **fails open** if Redis is unavailable. `GET /patients/lookup` (which returns a name) requires a VERIFIED hospital since 2026-10-15 — a self-registered PENDING admin gets 409 before the Health ID is even parsed (ADR-021 amendment); the lookup is still unaudited |
+| Notification leakage | In-app notifications carry fixed generic text (no names, Health IDs, categories or diagnoses); recipient-scoped queries; 404 for another user's notification; PATIENT/DOCTOR only (ADR-031) | **Implemented** (`tests/test_notifications_*`, `test_consent_notifications_contain_no_phi_or_sensitive_identifiers`) |
 | PHI sent to third parties | No external LLM; generation is local Ollama (ADR-028) | **Partial** — no redaction layer exists; only Health IDs and phone numbers are stripped from the *question*. Adding any external provider requires a new redaction decision first |
 | Prompt injection via record content | Evidence passed as structured context; model output constrained to a JSON schema; AI endpoints are read-only (no tool or action surface) | **Partial** — no content filtering or injection testing |
-| AI abuse / cost | `ai_generate` rate limit (10/60 s) on both answer endpoints | **Partial** — the clinician search endpoint is not rate-limited; no per-user quota |
+| AI abuse / cost | `ai_generate` rate limit (10/60 s) on both answer endpoints; `ai_search` (30/60 s) on the clinician search | **Partial** — per-user windows only; no longer-term quota |
+| Duplicate or racing consent writes | 409 for a request that duplicates an active grant or an open unanswered request, and for approving a category already actively granted; a per-(patient, clinician) PostgreSQL advisory lock serialises those checks; only UNIQUE violations map to 409 | **Implemented** — races validated on PostgreSQL 16 (`tests/test_consent_postgres.py`, opt-in; added to the CI `backend-postgres` job, which has not yet run with it on GitHub) |
+| Stale consent requests answered late | Expiry enforced on every decision; the PENDING → EXPIRED transition is committed by the refusal (ADR-017 amendment); listings report a past-deadline request as EXPIRED | **Implemented** — expiry is still lazy (no sweep); the stored row changes only when someone tries to answer it |
 | Secrets exposure | Environment variables only; `.env` and service-account files git-ignored; `.env.example` holds names and placeholders | **Implemented** |
 | Dependency / supply chain | Lockfiles, Dependabot, CI audit step | **Partial** — `web/pnpm-lock.yaml` is committed; **no Python lockfile, no Dependabot, no CI dependency audit** |
 
@@ -71,9 +75,13 @@ See AI_ARCHITECTURE.md. Implemented: consent-scoped retrieval as a SQL predicate
 limited to own records, `SUMMARY_GENERATED` audit event on generated answers, rate-limited answer
 endpoints, local-only generation, and exclusion of patient-hidden records from clinician
 retrieval. The patient's own copilot still includes their hidden records (owner access). An
-answer already delivered cannot be recalled after a record is hidden. **Still open:** the clinician
-search endpoint returns raw chunk text with no audit event and no rate limit. Not implemented:
-redaction layer, medical-advice refusal policy beyond the prompt, AI quotas.
+answer already delivered cannot be recalled after a record is hidden. The clinician search
+endpoint (raw chunk text) is rate-limited (`ai_search`) and writes one audit event per request
+(`RECORDS_SEARCHED` — its own action, distinct from a granted-records listing — or
+`ACCESS_DENIED` with no scope; ADR-020 amendments). **Still open:** the search query travels in
+the URL query string — the application's access log omits query strings, but intermediaries may
+log them. Not implemented: redaction layer, medical-advice refusal policy
+beyond the prompt, AI quotas.
 
 ## Break-glass / emergency QR (Phase 2 — design before build)
 

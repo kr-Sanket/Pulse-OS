@@ -22,8 +22,9 @@ and every access is permanently logged where the patient can see it.
    (*QR not built*).
 2. **Interoperability + Consent (the thesis):** Hospital A uploads records → doctor at Hospital B
    searches ID → sees records *exist* but are locked → requests categories (CBC, MRI,
-   Prescriptions) → patient sees the request (*push notification not built*) → approves per
-   category → every decision and access is audited and later sealed into a tamper-evident batch
+   Prescriptions) → patient gets an in-app notification and sees the request (ADR-031; no push)
+   → approves per category (*the API supports per-category decisions; the patient portal
+   currently answers all requested categories at once*) → every decision and access is audited and later sealed into a tamper-evident batch
    (*public-chain publication not built*, ADR-027) → doctor reads only approved categories →
    access logged, visible to patient → patient can revoke anytime.
 3. **Intelligence:** granted records → consent-scoped retrieval → AI answers with citations for

@@ -2,8 +2,12 @@
 
 > Core decisions: ADR-004 (hash-only, asynchronous, non-blocking; decision 2 amended) and
 > **ADR-027** (Merkle-batched anchoring of verified v3 audit events). PostgreSQL is authoritative;
-> the chain provides **tamper-evidence**, not storage. Built at M6 against an interface that
-> exists from M3.
+> the chain provides **tamper-evidence**, not storage. **Current state (2026-10-14): only the
+> local, database-side integrity layer is built** — versioned audit digests, Merkle batches and
+> commitments, database-only reconciliation, and a network-free simulated anchor adapter. Nothing
+> is submitted to Polygon Amoy or any other chain; no contract exists; M6.4 is not authorized.
+> Sealing and reconciliation are library code exercised by tests only — no scheduler, CLI, API or
+> UI runs them yet.
 
 ## What Goes On-Chain (and what never does)
 
@@ -50,8 +54,11 @@ Status as of 2026-10-11: **built** — the port, the local adapter, migration 00
 M6.1–M6.3 accepted with deferred items** — batch persistence (migration 0007), sealing,
 commitments, database-only reconciliation; validation (2026-10-11): full backend run 1088
 passed, 18 skipped, the 18 opt-in PostgreSQL tests (including migration 0007) passing against a
-disposable scratch database; CI job `backend-postgres` is configured to run them but has not
-yet run on GitHub (unpushed). **Deferred** — everything
+disposable scratch database; CI job `backend-postgres` runs them (commits pushed; GitHub results
+not checked here). **Patient-facing verification gap:** `GET /audit-logs/{id}/verification` and
+the integrity field on `GET /audit-logs` read only per-event anchors, which v3 events never
+receive, so every current event reports `NOT_ANCHORED`; batch membership is not surfaced by any
+API, and the patient portal does not display the integrity status. **Deferred** — everything
 chain-facing: on-chain batch submission, receipts, chain-side verification. The M6 gate is not
 complete; M6.4 is not authorized.
 
@@ -107,7 +114,9 @@ complete; M6.4 is not authorized.
 
 ## Verification Story (for the paper & demo)
 
-Demo script: show a consent grant → its batch membership and leaf index → the batch commitment and
+*Target, not current capability:* no step involving receipts or the Amoy explorer exists, and the
+database-only reconciliation step has no runnable entry point yet (see ROADMAP §Final review
+priorities). Demo script: show a consent grant → its batch membership and leaf index → the batch commitment and
 its receipt → the tx on the Amoy explorer → manually tamper a copy of the audit row → run
 reconciliation → tampering flagged. Experiment for RC-2: compare detection guarantees + overhead
 (latency, cost per event amortised over a batch) vs a plain DB-log baseline.

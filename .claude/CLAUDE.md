@@ -19,11 +19,10 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase (2026-10-11, Session 017):** M4 substantially done; M5 AI **partially built**;
-  **M6.1–M6.3 complete** (local audit integrity; no public chain); M6.4 **not authorized**. `main`
-  at `155cbf1`, **38 commits ahead of `origin/main`, none pushed** — pushing is a Product Owner
-  action. The working tree also holds uncommitted prerequisite and documentation changes; see
-  [SESSION.md](SESSION.md) §Session 017 for the exact state.
+- **Phase (2026-10-14, Session 018):** M4 substantially done; M5 AI **partially built**;
+  **M6.1–M6.3 complete** (local audit integrity; no public chain); M6.4 **not authorized**.
+  Preparing for the final review. `main` at `72b55e2`, **level with `origin/main` (pushed)**.
+  Pushing remains a Product Owner action. See [SESSION.md](SESSION.md) §Session 019.
 - **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (PR #1);
   M2 backend (onboarding per ADR-015, upload → S3 port, presigned downloads, arq worker per
   ADR-014, seed); **M3** (request → per-category decision → grant → revoke, `consent.enforce()`
@@ -33,13 +32,17 @@ health timelines, a report explainer, and a Health Copilot chat.
   (migration 0005, ADR-022/023/025), authenticated rate limiting (ADR-024), Synthea FHIR R4
   Phase A (10 patients / 889 records), patient record browsing (sort, server-side search,
   category filter, cursor paging), patient audit grouping, patient profile editing
-  (`PATCH /patients/me`), and patient record hide/unhide (`PATCH /records/{id}/visibility`).
-- **Next:** the **`notifications` module** (access requests still arrive silently — the last M4
-  backend item), then **SYSTEM_ADMIN provisioning** (nothing can call `POST /hospitals/{hid}/verify`,
-  so a self-registered hospital is stranded `PENDING`), then **QR identity**. A first Playwright
-  E2E over the consent journey is the cheapest demo insurance. **Partially built:** M5 AI/RAG —
-  `app/modules/ai` exists (ingestion, consent-scoped retrieval, Ollama-only generation, clinical
-  assistant, patient copilot) but `workers/tasks.py` still only logs; M6 blockchain per
+  (`PATCH /patients/me`), patient record hide/unhide (`PATCH /records/{id}/visibility`),
+  **in-app notifications** (ADR-031, migration 0008, `15b2d1b`), automatic consent/permission
+  refresh by polling (`5690a93`) and granted-category indicators in the doctor portal (`13e2034`).
+- **Next — final review priorities** ([ROADMAP.md](ROADMAP.md) §Final review priorities,
+  [TODO.md](TODO.md) §0a; each needs PO authorization): (1) authorization and audit correctness
+  — **implemented 2026-10-15, uncommitted** (ADR-017/020/021 amendments); (2) per-category consent decisions in the patient UI; (3) SYSTEM_ADMIN provisioning + hospital
+  verification; (4) demonstrable local audit integrity; (5) FHIR R4 export. QR identity is still
+  open. **There is no E2E suite and none is to be rebuilt** (removed in `281439c`).
+  **Partially built:** M5 AI/RAG — `app/modules/ai` exists (FHIR ingestion, consent-scoped
+  substring-lexical retrieval, Ollama/Qwen3:8B-only generation, clinical assistant, patient
+  copilot) but `workers/tasks.py` still only logs, so uploads are never indexed; M6 blockchain per
   **ADR-027** (Merkle-batched v3 anchoring) — the `AuditAnchor` port, network-free
   `LocalChainAuditAnchor`, migration 0006, Keccak-256 v3 digests (M6.1), `consent/merkle.py`
   (M6.2/M6.2.1) and M6.3 (migration 0007 batch/membership tables, deterministic sealing,
@@ -49,15 +52,14 @@ health timelines, a report explainer, and a Health Copilot chat.
   describe as working:** on-chain batch submission, receipts, chain-side verification,
   contract, chain adapter, scheduler, reconciliation CLI; M7 hardening/deploy. **M6.4 is not
   authorized.**
-- **Health (2026-10-11):** most recent full backend run **1088 passed, 18 skipped** (the 18 skips
-  are the opt-in PostgreSQL tests, run only when `PULSEOS_TEST_POSTGRES_URL` is set); those 18
-  — batch sealing/classification and migration 0007 — passed against a disposable scratch
-  PostgreSQL 16. CI job `backend-postgres` runs them; configured but not yet run on GitHub
-  (unpushed). Repo-wide `ruff check` (39), `ruff format --check`
-  (20 files) and `mypy` (158 lines, mostly AI tests) report pre-existing findings, so those CI
-  steps are not green. Web figures last recorded at session 016 and not re-run since: 463 web
-  tests, tsc + eslint + prettier clean, 3/3 builds.
-- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 017 — read this second, update it before ending every session.
+- **Health (2026-10-15, `72b55e2` + uncommitted work, local):** backend **1165 passed,
+  25 skipped** (the 25 skips are the opt-in PostgreSQL tests, run only when
+  `PULSEOS_TEST_POSTGRES_URL` is set) and **1190 passed** with them against a disposable
+  PostgreSQL 16.15; ruff format/lint and `mypy` clean. Web: **550 tests passed**, prettier +
+  eslint + tsc clean (builds not re-run). As pushed, `72b55e2` still fails CI's ruff step and two
+  `backend-postgres` tests; both are fixed in the uncommitted tree (DEVELOPMENT_GUIDE §CI).
+  GitHub Actions results not yet checked.
+- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 019 — read this second, update it before ending every session.
 - **Status is owned by [ROADMAP.md](ROADMAP.md)** (milestones, dated validation) and the handoff by
   SESSION.md; the summary above must not grow into a second copy of either.
 
@@ -65,15 +67,16 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 A **modular monolith** FastAPI backend (NOT six microservices — see ADR-001) with six internal
 modules matching the original service boundaries: `auth`, `patients`, `records`, `consent`, `ai`,
-`notifications` (the last is an empty package). PostgreSQL (no pgvector use — retrieval is
-lexical, ADR-029), Redis (rate limits + arq queue; the worker only logs today), S3-compatible
+`notifications` (in-app only, ADR-031). PostgreSQL (no pgvector use — retrieval is
+lexical, ADR-029; host port 5433 → container 5432), Redis (rate limits + arq queue; the worker
+only logs today), S3-compatible
 object storage (MinIO locally, ADR-005), and a **local Ollama** model for AI generation
 (ADR-028). Audit integrity: versioned digests and Merkle batches with an opaque commitment behind
 a pluggable anchor port; only hashes would ever go on-chain, and **nothing is submitted yet**
 (ADR-004, ADR-027). Frontends: one pnpm/React monorepo with three apps (patient, doctor,
 hospital) sharing a UI kit and a typed API client (ADR-003); the Flutter patient app has not
 started (ADR-010). Record metadata is **FHIR-aligned** (ADR-006), with Synthea FHIR R4 import
-(proposed ADR-030). Full picture: [docs/SYSTEM_ARCHITECTURE.md](../docs/SYSTEM_ARCHITECTURE.md).
+via CLI (proposed ADR-030); there is no FHIR export. Full picture: [docs/SYSTEM_ARCHITECTURE.md](../docs/SYSTEM_ARCHITECTURE.md).
 
 ## Where Everything Lives
 

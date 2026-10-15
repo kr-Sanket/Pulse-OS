@@ -20,7 +20,7 @@
               │  │ modules/                │  │
               │  │  auth  patients records │  │
               │  │  consent  ai            │  │
-              │  │  (notifications: empty) │  │
+              │  │  notifications (in-app) │  │
               │  └─────────────────────────┘  │
               └──┬─────────┬────────┬────┬────┘
                  │         │        │    │ HTTP (local)
@@ -34,7 +34,8 @@
         └───────────┘             └─────────────┘
 
    Planned, not implemented: public-chain submission of batch commitments (ADR-027;
-   M6.4+ not authorized) · OCR/embedding workers (ADR-029) · push notifications.
+   M6.4+ not authorized) · OCR/embedding workers (ADR-029) · FHIR export.
+   Out of scope by decision: push/email/SMS notifications (ADR-031 is in-app only).
 ```
 
 **Deploy units:** `api` (FastAPI) and `worker` (same codebase, arq consumer; currently only a
@@ -47,10 +48,10 @@ wherever `PULSEOS_OLLAMA_BASE_URL` points. No deployment target is decided yet (
 |---|---|---|
 | `auth` | Firebase token verification, role claims (patient/doctor/hospital_admin), RBAC dependencies | Business logic |
 | `patients` | Patient profile, Health ID issuance (ADR-012), health profile data; patient lookup by Health ID (ADR-021). QR identity is **planned, not built** | Reading record content |
-| `records` | Upload, FHIR-aligned metadata (DocumentReference-shaped), categorization, presigned URL issuance, hide/unhide, Synthea FHIR R4 import (proposed ADR-030) | Deciding *whether* access is allowed |
+| `records` | Upload, FHIR-aligned metadata (DocumentReference-shaped), categorization, presigned URL issuance, hide/unhide, Synthea FHIR R4 **import** via CLI (proposed ADR-030). There is no FHIR export or FHIR API | Deciding *whether* access is allowed |
 | `consent` | Request → per-category grant/reject → revoke lifecycle; **the consent-enforcement dependency**; append-only audit log with versioned digests; `AuditAnchor` port + local adapter; Merkle batch sealing and database-only reconciliation (ADR-027) | Storing files or record content |
 | `ai` | FHIR-resource ingestion into chunks, deterministic consent-scoped lexical retrieval, clinical assistant and patient copilot answers via the `AnswerGenerator` protocol (Ollama). See AI_ARCHITECTURE.md for what is **not** built (OCR, embeddings, summaries, timeline, explainer, redaction) | Bypassing consent to fetch content |
-| `notifications` | **Not implemented** (empty package). Intended: in-app alerts, push, reminders | Anything else |
+| `notifications` | In-app notifications for the four consent events (ADR-031): `notifications` table (migration 0008), rows written by `consent` in the same transaction as the consent change, four `/notifications` endpoints for patients and doctors. No push, email, SMS or reminders | Holding audit evidence (notifications are mutable convenience rows) |
 
 ## Module Isolation Rules (enforced in review)
 
@@ -69,10 +70,13 @@ wherever `PULSEOS_OLLAMA_BASE_URL` points. No deployment target is decided yet (
 
 1. Doctor (Hospital B) searches Health ID → `patients` confirms existence; `records` returns only
    *category-level existence* per hospital (no content, no filenames).
-2. Doctor creates an access request (categories: e.g. CBC, MRI) → `consent` stores it. The
-   patient sees it in their inbox; **no notification is sent** (`notifications` is not built).
-3. Patient approves/rejects per category → `consent` writes decisions, grants and audit events in
-   one transaction. Audit events are later sealed into Merkle batches **asynchronously** (v3
+2. Doctor creates an access request (categories: e.g. CBC, MRI) → `consent` stores it, its audit
+   event and an `ACCESS_REQUESTED` in-app notification for the patient in one transaction
+   (ADR-031). The patient portal polls for it (no push).
+3. Patient approves/rejects per category → `consent` writes decisions, grants, audit events and one
+   `CONSENT_APPROVED`/`CONSENT_REJECTED` notification for the doctor in one transaction. The API
+   accepts a subset of the requested categories per call; the patient portal currently sends all
+   of them at once. Audit events are later sealed into Merkle batches **asynchronously** (v3
    events; ADR-027) — nothing is submitted on-chain yet, and no clinical request waits on it.
 4. Doctor lists what the grant covers (`GET /granted-records`, ADR-020) — the step that turns an
    approval into reachable record ids. The page is *filtered* by the granted categories, audited
@@ -80,8 +84,11 @@ wherever `PULSEOS_OLLAMA_BASE_URL` points. No deployment target is decided yet (
 5. Doctor reads: every fetch passes `consent.enforce(...)`; allowed reads get metadata and, for
    files, a short-lived presigned URL; every read/download appends an audit event (eligible for
    batch sealing like every v3 event).
-6. Revocation deactivates grants immediately; subsequent reads 403 and are logged — including
-   ids the clinician already holds from step 4, because a listing permits nothing.
+6. Revocation deactivates grants immediately and notifies the doctor (`CONSENT_REVOKED`);
+   subsequent reads are refused as 404 (never 403, so existence is not disclosed) and logged as
+   `ACCESS_DENIED` — including ids the clinician already holds from step 4, because a listing
+   permits nothing. Consent-related portal screens refresh by polling every 15–30 s and on window
+   focus.
 
 ## Cross-Cutting Concerns
 

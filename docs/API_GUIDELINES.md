@@ -22,7 +22,9 @@
   raise domain exceptions, never construct HTTP responses in services.
 - Status codes: 200/201/204 conventionally; 401 unauthenticated; **403 vs 404 rule:** if the
   caller may not even know the resource exists (e.g. records of a patient with no consent),
-  return 404, not 403. 409 for state conflicts (approving an already-revoked request); 422 validation.
+  return 404, not 403. 409 for state conflicts (approving an already-revoked or expired request,
+  a duplicate access request, an already-granted category, an unverified hospital); 422 validation
+  (including an upload file name over 255 characters).
 - Pagination: cursor-based, `?cursor=&limit=` (max 100), response `{items, nextCursor}`.
   Offset pagination is not used.
 - Filtering/sorting: explicit whitelisted query params only; sorting via `?sort=field` /
@@ -40,8 +42,9 @@
   the consent-enforcement dependency (SYSTEM_ARCHITECTURE.md §Isolation rule 3).
 - Rate limiting per user at the **dependency** layer (Redis), declared per route beside the
   role gates — middleware runs before authentication, so per-user keying is impossible there
-  (ADR-024). Buckets exist for the Health-ID/discovery surfaces, access-request creation and the
-  two AI answer endpoints (`ai_generate`). Rate-limited operations declare `429` in the spec.
+  (ADR-024). Buckets exist for the Health-ID/discovery surfaces, access-request creation, the
+  two AI answer endpoints (`ai_generate`) and the clinician AI search (`ai_search`).
+  Rate-limited operations declare `429` in the spec.
   Unauthenticated routes are not rate-limited, and the limiter fails open if Redis is down.
 
 ## Consistency & Safety
@@ -63,9 +66,9 @@
   unintentional, the PR is wrong.
 - Every endpoint has a docstring: purpose, roles allowed, consent requirement, failure modes.
 
-## Current surface (from the generated OpenAPI, 2026-10-11)
+## Current surface (from the generated OpenAPI, 2026-10-14)
 
-34 operations under `/api/v1`, plus `GET /health` and `GET /ready`. Roles and consent requirements
+38 operations under `/api/v1`, plus `GET /health` and `GET /ready`. Roles and consent requirements
 are in each operation's OpenAPI description.
 
 | Area | Operations |
@@ -77,7 +80,8 @@ are in each operation's OpenAPI description.
 | consent | `POST /access-requests` · `GET /access-requests/inbox` · `GET /access-requests/sent` · `POST /access-requests/{request_id}/approve` · `POST /access-requests/{request_id}/reject` · `GET /consent-grants` · `POST /consent-grants/{grant_id}/revoke` |
 | audit | `GET /audit-logs` · `GET /audit-logs/{audit_log_id}/verification` · `GET /hospitals/me/audit-logs` |
 | ai | `GET /ai/patients/{patient_id}/search` · `POST /ai/patients/{patient_id}/answer` · `POST /ai/me/answer` |
+| notifications (ADR-031) | `GET /notifications` · `GET /notifications/unread-count` · `POST /notifications/{id}/read` · `POST /notifications/mark-all-read` |
 
-There are no notification, QR, summary/timeline, batch or receipt endpoints. The audit
+There are no QR, FHIR export, admin listing, summary/timeline, batch or receipt endpoints. The audit
 `verification` endpoint reports **per-event** anchors only; batch membership is not exposed yet.
 

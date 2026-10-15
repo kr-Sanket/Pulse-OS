@@ -5,7 +5,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+*Newest batch first. The batch below is uncommitted working-tree work (2026-10-14/15), validated
+locally only (SQLite and a disposable PostgreSQL 16.15); it has not run in GitHub Actions.*
+
+### Security
+- **Patient lookup requires a VERIFIED hospital.** `GET /patients/lookup` answers 409 to an
+  administrator of a PENDING hospital, before the Health ID is parsed, so a self-registered
+  account can no longer resolve Health IDs to names (ADR-021 amendment).
+- **Clinician AI search is audited and rate-limited.** `GET /ai/patients/{patient_id}/search`
+  writes one event per request — the new `RECORDS_SEARCHED` action, or `ACCESS_DENIED` with no
+  granted scope — and has its own `ai_search` bucket (30 / 60 s). Query and record text are never
+  stored (ADR-020 amendments 1 and 2). The query still travels in the URL query string.
+
+### Added
+- **`RECORDS_SEARCHED` audit action** for AI-assisted record searches, labelled
+  "Records searched (AI)" in the patient and hospital audit views. No migration (`audit_logs.action`
+  is `VARCHAR(32)` with no CHECK, verified on the migrated PostgreSQL schema); existing rows keep
+  `RECORDS_LISTED`. OpenAPI spec and generated client regenerated.
+- **PostgreSQL concurrency regression tests** (`tests/test_consent_postgres.py`, opt-in):
+  concurrent duplicate request creation and concurrent approvals (each with a no-lock control),
+  unique-versus-other integrity-error mapping, and the 255-character multibyte filename at the
+  column; plus a migrated-schema check for `RECORDS_SEARCHED`. Added to the existing
+  `backend-postgres` CI job's file list.
+
+### Fixed
+- **Duplicate consent requests and grants** now return 409 deterministically: a request for a
+  category already actively granted, or already asked for on an open unanswered request, and an
+  approval that would create a second active grant. Checks run under a per-(patient, clinician)
+  PostgreSQL advisory lock; only UNIQUE violations map to 409.
+- **Expired consent requests** — the PENDING → EXPIRED transition is now persisted (the refusal
+  is returned rather than raised, ADR-017 amendment) and listings report a past-deadline request
+  as EXPIRED. Expiry is still lazy; there is no sweep.
+- **Upload file names over 255 characters** return 422 instead of failing at the database.
+- **Backend lint and tests:** ruff format/lint findings in four test files added by `15b2d1b`;
+  two `test_alembic_postgres.py` tests pinned to revision `0007` after 0008 moved `head`.
+
+### Added
+- **In-app notifications (`15b2d1b`, ADR-031).** Migration 0008 (`notifications`); notifications
+  for access requested / approved / rejected / revoked written in the consent transaction with
+  generic no-PHI text; `GET /notifications`, `GET /notifications/unread-count`,
+  `POST /notifications/{id}/read`, `POST /notifications/mark-all-read` (patient and doctor);
+  shared bell + drawer polling every 30 s in the patient and doctor portals.
+- **Automatic consent/permission refresh (`5690a93`)** — polling and focus refresh on the patient
+  consent inbox, grants and dashboard and the doctor sent-requests and granted-records screens.
+- **Granted-category indicators (`13e2034`)** — the doctor portal marks already-granted
+  categories and prevents re-requesting them; the AI assistant sits above the granted records.
+
 ### Changed
+- **PostgreSQL host port defaults to 5433 (`72b55e2`);** the container still listens on 5432.
+- **Experimental E2E work removed (`281439c`);** no E2E suite exists or is planned for the final
+  review.
+- **Documentation brought up to date with `72b55e2` (2026-10-14).** Status, roadmap and TODO
+  reflect the pushed notifications work; ADR-031 marked Implemented with implementation notes;
+  README separates the implemented local hash/Merkle integrity from the unbuilt Polygon anchoring;
+  the five final-review priorities are recorded in ROADMAP.md and TODO.md.
 - **Documentation aligned with the implementation (2026-10-11; lands with this change set).**
   AI, security, tech-stack, architecture, domain, database, development, API and status documents
   now describe what is built separately from what is planned. New ADR-028 (local Ollama as the

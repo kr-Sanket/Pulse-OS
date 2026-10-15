@@ -29,9 +29,11 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
 
 ### Retrieval — deterministic lexical scoring, consent-scoped
 
-- `ai/retrieval.py` scores chunks by **token overlap** with the normalized query, expanded by a
-  fixed **clinical-synonym** table, with deterministic ranking. No vector similarity, no
-  LangChain, no external search service.
+- `ai/retrieval.py` normalizes the query into terms (lower-cased, punctuation stripped, a naive
+  singular form, expanded by a fixed **clinical-synonym** table) and scores each chunk by **how
+  many distinct terms occur in its text as substrings** (`lexical_score`). There is no stopword
+  list, TF-IDF or BM25. Ranking is deterministic (score, then date of service, with a recency tier
+  for "latest/recent" questions). No vector similarity, no LangChain, no external search service.
 - **Scope is decided before retrieval, in SQL** (`ai/repository.py`): only chunks with
   `patient_id = P` **and** `category_id IN (allowed categories)`.
   - **Clinician:** allowed categories come from `ConsentService.granted_category_ids` — the same
@@ -63,13 +65,23 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
 
 | Endpoint | Role | Rate limit | Notes |
 |---|---|---|---|
-| `GET /api/v1/ai/patients/{patient_id}/search` | DOCTOR | none | Returns ranked chunk text within granted categories, hidden records excluded; not audited |
+| `GET /api/v1/ai/patients/{patient_id}/search` | DOCTOR | `ai_search` (30 / 60 s) | Returns ranked chunk text within granted categories, hidden records excluded; one audit event per request (see Audit) |
 | `POST /api/v1/ai/patients/{patient_id}/answer` | DOCTOR | `ai_generate` (10 / 60 s) | Clinical assistant answer with citations |
 | `POST /api/v1/ai/me/answer` | PATIENT | `ai_generate` (10 / 60 s) | Patient Health Copilot over own records |
 
-- UI: doctor portal `AIAssistantPanel` (patient records page); patient portal `HealthCopilotPanel`.
+- UI: doctor portal `AIAssistantPanel`, placed above the granted-records list on the patient
+  records page (`13e2034`); patient portal `HealthCopilotPanel` on the records page. No UI calls
+  the search endpoint.
+- **Citations:** the model returns `cited_indices`; only indices that match supplied evidence are
+  kept and mapped to record ids server-side. `[N]` markers inside the answer text itself are not
+  checked against that set.
 - **Audit:** a successful generated answer writes a `SUMMARY_GENERATED` audit event for the
-  patient (search does not).
+  patient. The search writes one scope-level event per request (ADR-020 amendments,
+  2026-10-15): `RECORDS_SEARCHED` when the clinician had a granted scope (after retrieval, also
+  when nothing matched), `ACCESS_DENIED` when the scope was empty, nothing when the id names no
+  patient. The patient and hospital audit views label it "Records searched (AI)". The query and
+  chunk text are never stored or logged. Limitations: the query is sent in the URL query string;
+  an answer that finds no evidence, or whose generation fails, is still not audited.
 - **Query sanitization:** `sanitize_clinical_query` replaces Health IDs and phone numbers in the
   question with placeholders. This is **not** a redaction layer: evidence text sent to the model
   is not redacted (see Privacy below).

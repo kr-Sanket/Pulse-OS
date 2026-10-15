@@ -5,29 +5,103 @@
 > Owner codes: FE (frontend lead), BE (backend lead), AI (AI+blockchain lead), PO (product owner), ANY (whoever/Claude).
 
 **Milestones:** M0 ✅ · M2 ✅ · M3 ✅ (gate criteria met in code) · **M4 substantially
-done — `notifications`, QR and SYSTEM_ADMIN provisioning remain** · **M5 (AI) partially built**
-· **M6.1–M6.3 ✅** (M6.4+ **not authorized**) · M7 (hardening/deploy/paper) **not started**.
+done — notifications shipped; QR, SYSTEM_ADMIN provisioning and per-category decisions in the
+patient UI remain** · **M5 (AI) partially built** · **M6.1–M6.3 ✅** (local only; M6.4+ **not
+authorized**) · M7 (hardening/deploy/paper) **not started**.
 
-State as of `155cbf1` plus uncommitted prerequisite and documentation changes, 2026-10-11.
-Full picture: [SESSION.md](SESSION.md) §Session 017. Milestone status is owned by ROADMAP.md.
+State as of `72b55e2` (2026-10-14): `main` is level with `origin/main` (everything pushed).
+Full picture: [SESSION.md](SESSION.md) §Session 018. Milestone status is owned by ROADMAP.md.
 
 ---
 
 ## 0. Immediate — small, unblocked, cheap
 
-*(The 79-uncommitted-files item that stood here is done: everything is committed. The branch is
-~20 commits ahead of `origin/main` and entirely unpushed — pushing is a PO action.)*
-
+- [x] ANY: **fix the ruff findings introduced by `15b2d1b`** (3 files to format, 12 lint
+      findings, test files only) — fixed in the working tree 2026-10-14, uncommitted; CI stays red
+      on `72b55e2` until committed.
+- [x] ANY: two `tests/test_alembic_postgres.py` tests asserted `0007` after upgrading to `head`,
+      which 0008 (`15b2d1b`) broke — pinned to `0007`, uncommitted (2026-10-15).
+- [ ] PO/ANY: check the GitHub Actions results for the pushed commits, including the first run
+      of `backend-postgres` (it must run, not skip).
 - [ ] ANY: add **`backend/.env.example`**. `backend/.env` is read relative to the process CWD
       (`make dev-api` runs from `backend/`), while the root `.env` is docker-compose only. The
       absence of an example is what makes that invisible; it has cost debugging time twice.
+
+## 0a. Final review priorities (audit of 2026-10-14; each needs PO authorization)
+
+Recommended order 1 → 2 → 3 → 4 → 5 (2 is frontend-only and can run alongside 3). Summary in
+ROADMAP.md §Final review priorities. Item 1 is implemented (uncommitted, 2026-10-15); 2–5 are
+not started.
+
+1. [x] BE: **Authorization and audit correctness** — implemented 2026-10-15 (uncommitted;
+   ADR-017/020/021 amendments). AI search audited + `ai_search` rate limit; patient lookup
+   requires a VERIFIED hospital (409); duplicate open requests / already-granted categories /
+   second active grant → 409 under a per-pair advisory lock, with only UNIQUE violations mapped
+   to 409; the EXPIRED transition now persists and listings show past-deadline requests as
+   EXPIRED; upload file names over 255 characters → 422. Validated on SQLite and, for the races,
+   the integrity mapping and the filename column, on a disposable PostgreSQL 16.15
+   (`tests/test_consent_postgres.py`). Follow-ups that remain open:
+   - [x] ANY: add `tests/test_consent_postgres.py` to the `backend-postgres` CI job's file list
+         — done 2026-10-15 (uncommitted); the exact command passes locally on a disposable
+         PostgreSQL 16.15. No GitHub run observed yet.
+   - [x] BE/FE: a dedicated audit action for the AI search — `RECORDS_SEARCHED`, done 2026-10-15
+         (uncommitted; ADR-020 amendment 2). No migration (verified on the migrated PostgreSQL
+         schema); OpenAPI/client regenerated; patient and hospital audit views labelled.
+   - [ ] BE: the AI search query travels in the URL query string (GET); a POST body would keep it
+         out of intermediary logs but is a v1 contract change.
+   - [ ] BE: request expiry is lazy — no sweep; the stored row becomes EXPIRED only when someone
+         tries to answer it (listings already show it as EXPIRED).
+   - [ ] BE: the patient lookup is still unaudited (operational-log question, §1).
+   - [ ] ANY: watch the first GitHub Actions run of `backend-postgres` with
+         `tests/test_consent_postgres.py`. Its two no-lock control tests rely on a widened race
+         window (0.3 s) to force the duplicate, so a slow runner could make them flaky; the
+         locked tests do not depend on timing. Locally they passed in every run (3/3 repeats).
+   - [ ] BE: an intermittent `aiosqlite` "Event loop is closed" thread warning (a warning, not a
+         failure) appeared once in the full suite run with the PostgreSQL URL set, from the SQLite HTTP
+         fixture in
+         `tests/test_consent_http.py`; it did not recur in three reruns. Likely the fixture's
+         engine outliving its event loop — not investigated.
+   - [ ] FE: the doctor portal marks already-granted categories but not categories that already
+         have an open (pending) request from the same doctor; asking again is refused with 409,
+         and the API's message is shown.
+   - [ ] BE/FE: a legacy pair of open requests for the same category (only possible from data
+         written before the duplicate guard) makes approving the second one a 409 for the whole
+         multi-category approval, because the patient portal approves every category at once;
+         the patient must reject the duplicate. Item 2 (per-category decisions) would let the
+         patient approve the rest.
+   - [ ] ANY: stale comment in `.github/workflows/ci.yml` above the `backend-postgres` job — it
+         says the backend job's lint/type steps fail on pre-existing findings, which the ruff
+         cleanup fixed (uncommitted).
+   - [ ] ANY: ROADMAP §M4's gate status still cites the 2026-10-14 figures (1127 backend / 549
+         web); current local figures are in DEVELOPMENT_GUIDE.md (1165 / 1190 with PostgreSQL;
+         550 web).
+2. [ ] FE: **Granular consent decisions** — patient `PendingRequestCard` lets the patient choose
+   categories to approve and decline (the approve/reject API already takes a subset); confirm
+   before revoking. Acceptance: partial approval → the doctor's granted list and AI scope show
+   only approved categories.
+3. [ ] BE/FE: **SYSTEM_ADMIN provisioning and hospital verification** — see §1's SYSTEM_ADMIN
+   item. Scope: a guarded local provisioning script that stamps claims; a pending-hospital
+   listing; record who verified and when; a minimal admin screen (layout to be decided by the
+   PO; no separate admin app is authorized). Acceptance: register hospital → admin verifies →
+   doctor registers → hospital uploads, all through the UI.
+4. [ ] BE/FE: **Demonstrable audit integrity (local only)** — a runnable seal/reconcile entry
+   point (replacing the docstring reference to the non-existent
+   `scripts/anchor_audit_events.py`); v3 verification through batch membership and Merkle proof
+   instead of always `NOT_ANCHORED`; integrity status rendered in the patient audit trail
+   (today it shows a "Verification hash" with no verdict). Optional: DB-level append-only
+   trigger (needs an ADR). Out of scope: contract, chain adapter, scheduler (M6.4).
+5. [ ] BE: **FHIR R4 export** — consent-enforced, audited, read-only Bundle of granted,
+   non-hidden records (stored resources + DocumentReference metadata for uploads), validated
+   against R4 in tests; add a `subject`-matches-bundle-Patient check to the importer. Out of
+   scope: FHIR server, SMART on FHIR, FHIR write-back. Supersedes the §1b "FHIR export" item.
 
 ## 1. M4 — Core Features Complete (current milestone, substantially done)
 
 Shipped and **not** listed below: all three portals, the doctor consent workflow, the hospital
 portal and its audit history, authenticated rate limiting, Synthea Phase A, patient record
-browsing/search/sort/paging, patient audit grouping, patient profile editing, and patient record
-hide/unhide. See ROADMAP.md §M4 for the full ✅ list.
+browsing/search/sort/paging, patient audit grouping, patient profile editing, patient record
+hide/unhide, in-app notifications (ADR-031, `15b2d1b`), automatic consent/permission refresh
+(`5690a93`) and granted-category indicators (`13e2034`). See ROADMAP.md §M4 for the full ✅ list.
 
 What is left, ordered by dependency. Each item is demonstrable on its own.
 
@@ -46,13 +120,13 @@ What is left, ordered by dependency. Each item is demonstrable on its own.
       Deferred records the reasoning. Needs its own ADR before any schema.
 - [ ] BE: **no code path provisions `Role.SYSTEM_ADMIN`**, so `POST /hospitals/{hid}/verify`
       has no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in
-      demos because the three simulated hospitals are seeded `VERIFIED`.
-- [ ] BE: **`notifications` module** — in-app notification on request created / decided /
-      revoked. Architecture decided in **ADR-031** (in-app delivery, transactional persistence
-      in consent transaction, polling; arq dropped for notifications). ADR-031 is finalized and
-      awaiting Product Owner review. Implementation is pending approval (currently an empty
-      `__init__.py`; access requests arrive silently).
-- [ ] FE: QR identity generation + scanning (ROADMAP M4 scope).
+      demos because the three simulated hospitals are seeded `VERIFIED`. Scheduled as §0a item 3.
+- [x] BE/FE: **`notifications` module** — shipped in `15b2d1b` per ADR-031 (in-app only,
+      written in the consent transaction, polled by the patient and doctor portals). Follow-ups,
+      not scheduled: notification items do not link to the referenced request; the hospital
+      portal has no notifications (out of scope in ADR-031).
+- [ ] FE: QR identity generation + scanning (ROADMAP M4 scope; format fixed by ADR-012,
+      `pulseos://p/v1/<healthId>`). Not among the five final-review priorities.
 
 ### Deferred from patient hide/unhide (shipped 2026-09-08)
 
@@ -98,7 +172,8 @@ Phase A shipped ten pinned patients and 889 records; these are the parts deliber
 - [ ] BE: **full-corpus import via arq** for the other 1,170 patients; the mapping layer is
       already pure so the worker can reuse it unchanged.
 - [ ] BE: **FHIR export** — ADR-006 promised the mapping is trivial in both directions and
-      only the import half now exists. A reviewer will notice the asymmetry.
+      only the import half now exists. A reviewer will notice the asymmetry. *Promoted to §0a
+      item 5.*
 - [ ] BE/PO: **`SYNTHETIC_IMPORT` record origin.** Phase A reuses `PATIENT_LOCKER` (OD-S1,
       zero ripple). A truthful value costs the backend enum + OpenAPI + client regen + the
       exhaustive `ORIGIN_LABELS` map in `@pulseos/ui`.
@@ -138,19 +213,24 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
       api/worker Dockerfile without it.
 - [ ] PO: **ADR-010** Flutter timing — still a placeholder; `mobile/` is a README.
 - [ ] PO: **Accept or amend proposed ADR-030** (Synthea FHIR import as built; open questions in
-      the ADR).
+      the ADR). Still Proposed as of 2026-10-14.
+- [ ] PO: **Formally accept ADR-031's text** (optional bookkeeping) — the implementation shipped
+      in `15b2d1b`, and the ADR status now says "Implemented", but no explicit acceptance of the
+      written decision is recorded; its implementation notes list one deviation (no
+      `NotificationDispatcher` interface).
+- [ ] PO: **Amend ADR-021** if §0a item 1 makes the patient lookup require a VERIFIED hospital.
 - [ ] PO: Resolve the Review-1 deck conflict — Spring Boot + Synthea (slide 20) vs ADR-001
       FastAPI + the 3-simulated-hospital plan. Amend the ADRs or fix the slide.
 
 ## 4. Testing debt
 
-- [ ] FE: **no component or DOM tests exist.** All 463 web tests are pure logic (`view.ts`
-      mappers and `api.ts` modules with a stubbed client); no test would catch a broken button,
-      a bad conditional render or a layout regression. Add jsdom + Testing Library for the
-      interactive paths.
-- [ ] ANY: **no end-to-end coverage.** The first-login flow was proven with a throwaway script,
-      not a committed test. One Playwright run — login → register → upload → request → approve
-      → read — would guard the whole thesis of the product.
+- [ ] FE: **no DOM tests exist.** The 550 web tests (2026-10-15) are almost all pure logic
+      (`view.ts` mappers, `api.ts` modules with a stubbed client, shared hooks); the few component
+      tests use `renderToString`. No test would catch a broken button, a bad conditional render
+      or a layout regression. Add jsdom + Testing Library for the interactive paths.
+- **No end-to-end suite, by decision.** The E2E infrastructure was removed (`281439c`) and is not
+  to be rebuilt for the final review. Cross-portal journeys rely on the backend HTTP tests
+  (`tests/test_m3_gate.py` and others) and manual walk-throughs (§6).
 - [ ] BE: move the consent OpenAPI contract pins from `test_consent_http.py` (which still
       builds a throwaway app) into `test_openapi.py`; the routers are mounted in `app.main` now.
 
@@ -170,8 +250,8 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
       the query; the patient copilot is unchanged. Regression tests in
       `tests/modules/ai/test_hidden_record_retrieval.py`, validated on SQLite and on a disposable
       PostgreSQL 16.15.*
-- [ ] BE: **Clinician AI search returns raw chunk text with no audit event and no rate limit**
-      (`GET /api/v1/ai/patients/{id}/search`; SECURITY.md). Needs a decision before code changes.
+- [x] BE: **Clinician AI search returns raw chunk text with no audit event and no rate limit** —
+      fixed 2026-10-15 (§0a item 1).
 - [ ] BE: The hidden-record regression tests use the SQLite harness only, so the
       `backend-postgres` CI job does not run them; the PostgreSQL run was a one-off local
       validation.
@@ -183,11 +263,10 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
       `records/models.py` processing status) and the `scripts/anchor_audit_events.py` reference in
       `consent/router.py` → regenerate the OpenAPI/client after fixing. Code + generated
       artefacts; not done by the documentation task.
-- [ ] ANY: Repo-wide ruff (39), ruff format (20 files) and mypy (158 lines) findings that appeared
-      after Session 016 — the `backend` CI job cannot go green until they are fixed.
+- [x] ANY: Repo-wide ruff (39), ruff format (20 files) and mypy (158 lines) findings recorded
+      2026-10-11 — fixed in `10bec8f`/`4d8e181`/`2cb0851`; mypy is clean at `72b55e2`. New ruff
+      findings from `15b2d1b` are tracked in §0.
 - [ ] PO: Database-level append-only enforcement for audit/consent/batch tables (M7 hardening).
-- [ ] ANY: First GitHub Actions run of the new `backend-postgres` job after pushing; verify it
-      actually runs and does not skip.
 
 ## 6. Ops / demo readiness
 

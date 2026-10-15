@@ -74,7 +74,7 @@ portal now *creates* access requests and reads granted records, which was the on
 that the M0.3 and M2 gates carry: a live browser walk-through against running infrastructure.
 Deferred backend findings are in TODO.md.
 
-## M4 — Core Features Complete (Month 4) — substantially done, status 2026-09-08 (`ea2ebd5`)
+## M4 — Core Features Complete (Month 4) — substantially done, status 2026-10-14 (`72b55e2`)
 
 **Carried forward from M3, all shipped:**
 
@@ -110,12 +110,25 @@ Deferred backend findings are in TODO.md.
 - ✅ **Patient record hide/unhide**: `PATCH /api/v1/records/{id}/visibility`, any record the
   patient owns; removes it from every grantee surface and revokes nothing.
 - ✅ Record download via presigned URLs, audited, in all three portals.
+- ✅ **In-app notifications** (ADR-031, `15b2d1b`, 2026-10-13): migration 0008, `notifications`
+  module, four `/notifications` endpoints; `ACCESS_REQUESTED` → patient, `CONSENT_APPROVED` /
+  `CONSENT_REJECTED` / `CONSENT_REVOKED` → doctor, written in the consent transaction with generic
+  no-PHI text; bell + drawer with unread count in the patient and doctor portals (30 s polling,
+  refresh on focus). Not arq-based; no push/email; no hospital-portal notifications.
+- ✅ **Automatic consent/permission refresh** (`5690a93`): `useApiResource` polling + focus
+  refresh on the patient consent inbox, grants and dashboard and the doctor sent-requests and
+  granted-records screens (15–30 s). Audit, records and hospital screens do not poll.
+- ✅ **Granted-record indicators** (`13e2034`): already-granted categories are marked and cannot
+  be re-requested in the doctor portal; the Clinical AI Assistant sits above the granted-records
+  list. (The backend itself does not yet refuse duplicate requests — see §Final review priorities.)
 
 **Still open in M4:**
 
-- ⬜ **`notifications` module** — in-app notification on request created / decided / revoked, via
-  arq. Still an empty `__init__.py`; access requests arrive silently.
-- ⬜ **QR identity generation and scanning.**
+- ⬜ **QR identity generation and scanning.** Designed in ADR-012 (`pulseos://p/v1/<healthId>`,
+  no PHI); no code exists.
+- ⬜ **Per-category decisions in the patient portal** — the API accepts a subset of categories per
+  approve/reject call, but the portal always answers every requested category together; revoke has
+  no confirmation step.
 - ⬜ Hospital portal **bulk upload** (single-record upload is done) and **request management on
   behalf of their doctors** (the `⭕` dual-consent cell in DOMAIN_MODEL §3) — both were in this
   milestone's original scope and neither is built.
@@ -126,9 +139,10 @@ Deferred backend findings are in TODO.md.
   timing (ADR-010 is still a placeholder); `mobile/` is a README.*
 
 **Gate:** all three web portals demo the full interoperability story end-to-end with seed data,
-including the M3 consent journey. *Status (as of 2026-09-08, `ea2ebd5`): the portals and the
-journey exist and were covered by 653 backend / 463 web tests at that date; the gate's live demo
-run is the same PO ops task as M0.3 and M2.*
+including the M3 consent journey. *Status (2026-10-14, `72b55e2`): the portals and the journey
+exist; local run 1127 backend passed / 18 skipped and 549 web tests passed. The gate's live demo
+run is the same PO ops task as M0.3 and M2; QR identity and SYSTEM_ADMIN provisioning are still
+missing.*
 
 ## M5 — AI Layer (Month 5)
 
@@ -151,9 +165,11 @@ auditing; the doctor `AIAssistantPanel` and patient `HealthCopilotPanel`. **Not 
 uploads and the worker pipeline, embeddings/pgvector, cached patient summary, timeline, report
 explainer, redaction layer. Hidden-record fix (2026-10-11): clinician retrieval now excludes
 patient-hidden records in the query; the patient copilot keeps owner access (AI_ARCHITECTURE.md).
-It was validated locally on SQLite and a disposable PostgreSQL 16.15; GitHub CI has not run on
-it. Still open: the clinician search endpoint is neither audited nor rate-limited
-(SECURITY.md). The gate as written (timeline, summary, redaction, uploaded reports) needs either
+It was validated locally on SQLite and a disposable PostgreSQL 16.15 and is now pushed. Still
+open: uploaded
+files are never indexed (the worker only logs); `[N]` citation markers in answer text are not
+validated. Retrieval is substring-based lexical matching (AI_ARCHITECTURE.md). No test exercises a
+real model. The gate as written (timeline, summary, redaction, uploaded reports) needs either
 the missing features or a PO-approved restatement; no evaluation results exist (RC-3).
 
 ## M6 — Blockchain Anchoring (Month 6)
@@ -177,8 +193,9 @@ commitment per batch on-chain (amends ADR-004 decision 2; no per-event on-chain 
   events refused by the old per-event workflow; migration and concurrency/idempotency tests. No
   chain, scheduler, API or CLI. Validation (2026-10-11): full backend run 1088 passed, 18 skipped;
   the 18 opt-in PostgreSQL tests (batch sealing/classification and migration 0007) passed against
-  a disposable scratch PostgreSQL 16, and CI job `backend-postgres` runs them (not yet run on
-  GitHub).
+  a disposable scratch PostgreSQL 16, and CI job `backend-postgres` runs them (commits pushed;
+  GitHub results not yet checked). Sealing and reconciliation are invoked only by tests, and the
+  patient verification endpoint reports every v3 event as `NOT_ANCHORED` (per-event anchors only).
 - **M6.4 — not authorized.**
 - **Later (deferred by ADR-027):** receipts and retry-safe submission; Solidity commitment registry
   and `PolygonAuditAnchor` on Amoy; scheduler; reconciliation CLI with chain-side checks; integrity
@@ -192,12 +209,38 @@ row is detectable; consent flow still works with the chain offline. **Gate statu
 
 ## M7 — Hardening, Deploy, Paper (Month 7)
 
-E2E test suite over the 3 core journeys; performance pass (LLM caching, N+1 queries); security
+~~E2E test suite over the 3 core journeys~~ — *dropped: the E2E infrastructure was removed
+(`281439c`) and is not to be rebuilt for the final review; journeys are covered by backend HTTP
+tests and manual walk-throughs*; performance pass (LLM caching, N+1 queries); security
 review against SECURITY.md checklist; cloud deployment; SRS + final documentation; research paper
 draft with the RAG-summary and audit-trail experiments; demo script + fallback recording.
 
 **Gate:** live deployed demo passes the full script twice consecutively; paper draft submitted to
 the guide; all docs current.
+
+---
+
+## Final review priorities (from the read-only audit of 2026-10-14, `72b55e2`)
+
+The remaining major implementations, in the recommended order. **Item 1 is implemented
+(2026-10-15, uncommitted); items 2–5 are not started.** Each needs Product Owner authorization before code changes. Detail and acceptance
+criteria: TODO.md §0a.
+
+1. ✅ **Authorization and audit correctness** (implemented 2026-10-15; open follow-ups in TODO
+   §0a) — audit + rate-limit (or remove) the unaudited
+   clinician AI search endpoint; require a VERIFIED hospital for `GET /patients/lookup`; refuse
+   duplicate pending requests / already-granted categories in the backend; make request expiry
+   visible in the inbox; 422 (not 500) for over-long upload filenames.
+2. **Granular consent decisions** in the patient portal — choose categories to approve/decline per
+   request; confirm before revoking.
+3. **SYSTEM_ADMIN provisioning and hospital verification** — a guarded provisioning path, a list
+   of pending hospitals, verification recorded with who/when, a minimal admin screen (no
+   separate admin app is authorized).
+4. **Demonstrable audit integrity (local)** — a runnable seal/reconcile entry point, v3
+   verification through batch membership, integrity status shown in the patient audit trail.
+   Public-chain anchoring stays out of scope (M6.4 not authorized).
+5. **FHIR R4 export** — a consent-enforced, audited, read-only Bundle export of granted, non-hidden
+   records, validated against R4 in tests; plus a `subject` consistency check in the importer.
 
 ---
 

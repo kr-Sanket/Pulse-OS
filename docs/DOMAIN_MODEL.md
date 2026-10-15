@@ -74,12 +74,14 @@ historical per-event anchors (v1/v2) or membership of a sealed Merkle batch (v3)
 published on-chain yet (BLOCKCHAIN_ARCHITECTURE.md).
 Action vocabulary: `RECORD_UPLOADED · ACCESS_REQUESTED · CONSENT_APPROVED · CONSENT_REJECTED ·
 CONSENT_REVOKED · RECORD_VIEWED · RECORD_DOWNLOADED · SUMMARY_GENERATED · EMERGENCY_ACCESS
-(Phase 2)`, plus two the implementation added with their own ADRs: `ACCESS_DENIED` (ADR-018 — a
-refused read must be logged, and no success verb states that) and `RECORDS_LISTED` (ADR-020 — a
-clinician listing what a grant covers). Audit events are written in the same transaction as the
+(Phase 2)`, plus three the implementation added with their own ADRs: `ACCESS_DENIED` (ADR-018 —
+a refused read must be logged, and no success verb states that), `RECORDS_LISTED` (ADR-020 — a
+clinician listing what a grant covers) and `RECORDS_SEARCHED` (ADR-020 amendment 2, 2026-10-15 —
+a clinician's AI search over the granted scope, which returns record text). Audit events are written in the same transaction as the
 action they record.
 **At most one** target is set per event: exactly one for every action naming an object, and
-**none** for `RECORDS_LISTED`, whose subject is a scope rather than an object — `patient_id`,
+**none** for `RECORDS_LISTED` and `RECORDS_SEARCHED`, whose subject is a scope rather than an
+object — `patient_id`,
 never nullable, carries it (ADR-020).
 
 ## 2. Relationship Diagram

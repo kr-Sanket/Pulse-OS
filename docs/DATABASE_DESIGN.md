@@ -60,7 +60,7 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
 - **Processing status** on DocumentReference: `UPLOADED → PROCESSING → INDEXED | FAILED` is
   modeled (ADR-008), but only `UPLOADED` is ever written — no worker advances it yet.
 
-## Physical tables (from migrations and models, 2026-10-11)
+## Physical tables (from migrations and models, 2026-10-14)
 
 | Migration | Tables |
 |---|---|
@@ -72,8 +72,10 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
 | `0006` | `audit_anchors` (per-event anchors) |
 | `aedb0169a4eb` | `ai_documents`, `ai_chunks` |
 | `0007` | `audit_batches`, `audit_batch_members` (ADR-027) |
+| `0008` | `notifications` (ADR-031) |
 
-17 tables in total; there are no notification, timeline, summary or embedding tables. Batch
+18 tables in total; there are no timeline, summary or embedding tables. `notifications` is a
+mutable convenience table (`is_read`, `read_at`), not audit evidence. Batch
 constraints that the sealing design depends on — UNIQUE `batch_number`, `commitment`,
 `audit_log_id` and `(batch_id, leaf_index)`, plus CHECKs on `batch_number`, `leaf_count`,
 `hash_version` and `leaf_index` — are listed in BLOCKCHAIN_ARCHITECTURE.md and pinned by

@@ -153,7 +153,9 @@ paper-worthy implementation detail.
 ## ADR-008 — Redis-backed async job queue for OCR, embeddings, notifications, anchoring
 **Date:** 2026-07-20 · **Status:** Accepted — library chosen by ADR-014 (arq). **Note
 (2026-10-11):** only the queue and a logging `record_uploaded` task exist; OCR, embedding,
-notification and anchoring jobs are not implemented (see ADR-027, ADR-029).
+notification and anchoring jobs are not implemented (see ADR-027, ADR-029). **Note
+(2026-10-14):** notifications no longer belong to this queue — ADR-031 replaced that part with
+in-app notifications written in the consent transaction (implemented, `15b2d1b`).
 
 **Context:** OCR of a scanned PDF takes seconds-to-minutes; embeddings and LLM calls are slow;
 the plan has no async story, which would mean request-thread OCR (timeouts, terrible UX).
@@ -356,6 +358,25 @@ DOMAIN_MODEL §1 and need their own ADR.
 documented invariant, deferred); commit-before-raise (not expressible with a dependency-scoped
 transaction); accepting the loss (fails a stated gate criterion on the most sensitive path).
 
+**Amendment (2026-10-15 — implemented in the working tree, not yet committed; validated locally
+on SQLite and a disposable PostgreSQL 16.15; reviewed against the code 2026-10-15; formal
+Product Owner acceptance not recorded):** a third use of the same technique, on a write path.
+`POST /access-requests/{id}/approve` and `/reject` now **return** the 409 for a request that is
+no longer decidable instead of raising it (`consent/router.py::_decide`). Cause: expiry is
+persisted lazily — the service sets `status = EXPIRED` when a decision arrives after the deadline
+and then refuses — and raising rolled that transition back, so an expired request stayed stored
+as PENDING indefinitely. Why it is safe here: the refusal (`RequestNotDecidableError`) is raised
+by `_require_own_open_request` before any decision, grant, audit row or notification is written,
+so the only pending state is the request's own PENDING → EXPIRED transition; committing commits
+exactly that. Every other decision failure (duplicate answer, unrequested category, duplicate
+grant) still raises and rolls back the whole decision. No service or repository commits; the
+request-scoped transaction still owns the commit. Wire contract unchanged (409, same
+problem+json body, `X-Request-Id`). Expiry stays lazy — there is no sweep — so listings derive
+the status instead: a PENDING row past its deadline is reported as EXPIRED (`request_status`)
+without writing during the read. Tests: `test_an_expired_request_is_shown_as_expired_and_the_
+transition_is_persisted`, `test_other_decision_failures_still_roll_the_whole_decision_back`
+(`tests/test_consent_http.py`).
+
 ---
 
 ## ADR-018 — `ACCESS_DENIED` added to the audit action vocabulary
@@ -497,11 +518,59 @@ owned by the `records` module, DOCTOR-only, requiring an ACTIVE clinician (ADR-0
   Health-ID oracle the way `/access-requests` and `/records/existence` are (finding M3-D), but
   the bucket those two need should cover it too.
 
+**Amendment 1 (2026-10-15 — implemented in the working tree, not yet committed; formal Product
+Owner acceptance not recorded): the clinician AI search reuses this listing's audit events.**
+*(Its action was refined by Amendment 2 below; kept as written.)* `GET /ai/patients/{patient_id}/search` returned
+ranked chunk text inside the clinician's granted scope with no audit row and no rate limit. It
+now writes exactly one scope-level event per request through the same writer
+(`ConsentService.record_listing`): `RECORDS_LISTED` when a scope was searched (written after
+retrieval succeeds, also when nothing matched), `ACCESS_DENIED` when the scope was empty, and
+nothing when the patient id names no patient (an audit row must reference a patient). The query
+text and chunk content are never written to the row or logged. It has its own bucket,
+`ai_search` (30 / 60 s), independent of `ai_generate`. The endpoint was kept rather than removed
+because no `/api/v2` exists (API_GUIDELINES) and removing it would break v1; no portal calls it.
+**Known limitation:** the trail cannot tell an AI search from an ordinary granted-records
+listing — both are `RECORDS_LISTED` with no target column, and `request_context` is only a
+correlation id — so the patient's "Records listed" understates a search that returned record
+text. A dedicated action (e.g. `RECORDS_SEARCHED`) needs no migration (`VARCHAR(32)`, no CHECK)
+but does need its own ADR, the backend enum member, OpenAPI/client regeneration and an entry in
+the exhaustive action maps of the patient and hospital audit views; not done. Also open: the
+query travels in the URL query string (the application's access log omits query strings;
+proxies may not).
+On the "Not addressed" note above: `/granted-records` has had its own `granted_records` bucket
+since ADR-024.
+
+**Amendment 2 (2026-10-15, same day — implemented in the working tree, not yet committed;
+validated locally on SQLite and a disposable PostgreSQL 16.15; formal Product Owner acceptance
+not recorded): the AI search gets its own action, `RECORDS_SEARCHED`.** This resolves the
+"known limitation" of Amendment 1. Decision:
+
+- `AuditAction.RECORDS_SEARCHED` — same shape as `RECORDS_LISTED`: one scope-level row per
+  request, no target column, `patient_id` carries the subject. Written by
+  `ConsentService.record_search`, which shares one private helper with `record_listing`; an
+  empty scope is still `ACCESS_DENIED`, and an id naming no patient still writes nothing.
+- **No migration.** Verified, not assumed: on the schema the migrations build (PostgreSQL,
+  `alembic upgrade head`), `audit_logs.action` is `character varying(32)` with no CHECK
+  constraint, and the ORM enum is `native_enum=False`
+  (`test_the_migrated_audit_action_column_takes_records_searched_without_a_migration`). The
+  value is 16 characters.
+- **Backward compatible.** Rows written before this keep `RECORDS_LISTED`; nothing is
+  rewritten (the table is append-only, and the action is part of the hashed payload). The
+  ADR-018/ADR-020 precedent for extending the vocabulary applies unchanged.
+- **Clients:** the OpenAPI spec and generated client were regenerated with
+  `scripts/generate-api-client.sh`; the patient and hospital audit views map the new action
+  ("Records searched (AI)"). Both views already render unknown actions safely (a humanized
+  label in the patient view, "Audit event" in the hospital view), so an older build shows the
+  row rather than dropping it.
+- Still open: the query is sent in the URL query string (GET).
+
 ---
 
 ## ADR-021 — Hospital patient lookup: a `patients`-owned identity endpoint, role-gated only
 
-**Date:** 2026-09-07 · **Status:** Accepted (M4) · **Extends:** ADR-012, ADR-013, ADR-015
+**Date:** 2026-09-07 · **Status:** Accepted (M4) — **amended 2026-10-15**: decision 3 (role gate
+only) is superseded by a VERIFIED-hospital requirement; see *Amendment* at the end. The original
+text is kept as written. · **Extends:** ADR-012, ADR-013, ADR-015
 
 **Context:** `POST /records` files a document against a Health ID, and no endpoint edits or
 deletes a record afterwards. A hospital administrator had no way to check whose history they
@@ -565,6 +634,32 @@ HOSPITAL_ADMIN-only, answering `{healthId, fullName}` and nothing else. Four par
 - The `patients` module gains its first non-patient caller. Its dependency direction is
   unchanged: it still imports only `auth`, and nothing imports it except through the
   directory.
+
+**Amendment (2026-10-15 — implemented in the working tree, not yet committed; validated locally;
+reviewed against the code 2026-10-15; formal Product Owner acceptance not recorded): verified
+hospitals only.** Decision 3's rationale does not hold. It said a PENDING hospital's lookup
+"tells it nothing it could not learn by attempting the upload" — but the upload refuses an
+unverified hospital (409) *before* resolving the Health ID and never returns a name. Because
+`POST /hospitals/register` grants HOSPITAL_ADMIN immediately, any new account could therefore
+turn Health IDs into names. Change:
+
+- `GET /patients/lookup` now requires the caller to administer a VERIFIED hospital; otherwise
+  **409** "Your hospital is not verified yet, so it cannot look patients up." — the status every
+  other unverified-hospital refusal uses (upload, doctor registration).
+- The check runs after the role gate and the rate limit (an unverified caller still spends
+  `patient_lookup` quota) and **before** the Health ID is parsed or resolved, so issued,
+  unissued and malformed IDs all receive the identical refusal.
+- The rule stays in `records`, which owns hospitals: a read-only seam,
+  `records.directory.HospitalVerificationDirectoryService.administers_verified_hospital`,
+  composed in `patients/dependencies.py`. This adds the `patients → records` edge decision 3
+  avoided — through the published directory only, the same pattern `consent` already uses. The
+  `patients` service still performs no authorization (route-level gate).
+- Unchanged: the two-field response allow-list, the 422 distinction between malformed and
+  unknown Health IDs, and that the lookup authorizes nothing. Still **not audited** (no truthful
+  `AuditAction`; the operational-log question in TODO.md stands).
+- Tests: `tests/test_patient_lookup_http.py` (PENDING refused, identical answer for any ID,
+  succeeds once verified, quota still spent); the fixture now verifies its hospital through the
+  real SYSTEM_ADMIN endpoint.
 
 ---
 
@@ -1143,8 +1238,11 @@ records long term; whether Phase B of the import (deferred, TODO.md) changes any
 ---
 
 ## ADR-031 — Notifications Module: in-app delivery, transactional persistence, and polling
-**Date:** 2026-10-12 · **Status:** Proposed — awaiting Product Owner review · **Supersedes in part:**
-ADR-008 (the async notification delivery assumption)
+**Date:** 2026-10-12 · **Status:** **Implemented** — shipped in `15b2d1b` (2026-10-13, pushed
+to `origin/main`) at the Product Owner's direction. Written as "Proposed — awaiting Product Owner
+review"; no separate formal acceptance of the ADR text is recorded. The decision text below is
+unchanged; see *Implementation notes* at the end for where the shipped code differs from it.
+· **Supersedes in part:** ADR-008 (the async notification delivery assumption)
 
 **Context:** The consent lifecycle consists of critical workflow handoffs: a clinician petitions
 for patient records (`ACCESS_REQUESTED`), a patient reviews and decides per category
@@ -1380,6 +1478,24 @@ Client (Doctor / Patient)
 - Passive grant expiry notifications or undecided request lapse notifications.
 - Administrative (Hospital Admin / System Admin) notification streams.
 - Emergency break-glass notifications (deferred to Phase 2 with its own ADR).
+
+**Implementation notes (as shipped in `15b2d1b`; recorded 2026-10-14, verified against the code):**
+
+- Migration `0008` creates `notifications`; the four endpoints, role gates (PATIENT and DOCTOR
+  only), recipient scoping and the four event types match decisions 3, 6 and 7. A multi-category
+  decision emits one notification (decision 3).
+- **Deviation from the "Module coupling" consequence:** there is no `NotificationDispatcher`
+  interface. `ConsentService` imports `notifications.models.Notification` and
+  `notifications.repository.NotificationRepository` directly and receives the repository through
+  `consent/dependencies.py`. The writes still share the request session and transaction.
+- `CONSENT_REVOKED` sets no `reference_request_id` and records the grantee doctor as
+  `actor_doctor_id`.
+- The `notifications` module writes no log lines, which satisfies decision 5's logging rule
+  trivially.
+- Frontend: `@pulseos/ui` `NotificationBell` / `NotificationDrawer` / `useNotifications` poll
+  every 30 s and refresh on window focus and visibility change. Used in the patient and doctor
+  top bars; the hospital portal has none (out of scope above). Notification items do not link to
+  the referenced request.
 
 ---
 
