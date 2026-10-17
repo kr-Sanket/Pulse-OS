@@ -2,12 +2,13 @@
 
 > Core decisions: ADR-004 (hash-only, asynchronous, non-blocking; decision 2 amended) and
 > **ADR-027** (Merkle-batched anchoring of verified v3 audit events). PostgreSQL is authoritative;
-> the chain provides **tamper-evidence**, not storage. **Current state (2026-10-14): only the
+> the chain provides **tamper-evidence**, not storage. **Current state (2026-10-17): only the
 > local, database-side integrity layer is built** — versioned audit digests, Merkle batches and
-> commitments, database-only reconciliation, and a network-free simulated anchor adapter. Nothing
-> is submitted to Polygon Amoy or any other chain; no contract exists; M6.4 is not authorized.
-> Sealing and reconciliation are library code exercised by tests only — no scheduler, CLI, API or
-> UI runs them yet.
+> commitments, database-only reconciliation, a network-free simulated anchor adapter, and a
+> developer CLI workflow (`scripts/audit_integrity.py` supporting `seal`, `verify-batch`, `verify-event`, `reconcile`).
+> Nothing is submitted to Polygon Amoy or any other chain; no contract exists; M6.4 is not authorized. The CLI
+> currently lacks an environment safety guard; scheduled background sealing, API v3 verification endpoints
+> (`GET /audit-logs/{id}/verification` currently queries only legacy per-event `audit_anchors`), and UI integration remain deferred.
 
 ## What Goes On-Chain (and what never does)
 
@@ -87,7 +88,7 @@ complete; M6.4 is not authorized.
   `abi.encodePacked` exactly as above; must **not** use OpenZeppelin `MerkleProof` /
   `StandardMerkleTree` (sorted pairs, no node prefix — incompatible); any on-chain proof check must
   handle promoted nodes and reject `leafCount == 0` / `leafIndex >= leafCount`.
-- **Reconciliation** (database-only library at M6.3; CLI and chain-side checks deferred): reports
+- **Reconciliation** (database-only library at M6.3; developer CLI workflow in `scripts/audit_integrity.py`; chain-side checks deferred): reports
   v3 events unbatched beyond the backlog threshold (initially 900 s), per-batch membership
   integrity (count, contiguous indices, rows recompute to sealed digests, root and `C` rebuild),
   `batch_number` gaps, backdated (late-arriving) events, and unbatched events of any version that
@@ -114,9 +115,9 @@ complete; M6.4 is not authorized.
 
 ## Verification Story (for the paper & demo)
 
-*Target, not current capability:* no step involving receipts or the Amoy explorer exists, and the
-database-only reconciliation step has no runnable entry point yet (see ROADMAP §Final review
-priorities). Demo script: show a consent grant → its batch membership and leaf index → the batch commitment and
-its receipt → the tx on the Amoy explorer → manually tamper a copy of the audit row → run
-reconciliation → tampering flagged. Experiment for RC-2: compare detection guarantees + overhead
+*Target, not current capability:* no step involving receipts or the Amoy explorer exists. Local
+batch sealing and verification can be exercised via the developer CLI (`scripts/audit_integrity.py`),
+but API v3 verification and patient UI integration remain outstanding. Demo script: show a consent
+grant → its batch membership and leaf index → the batch commitment and its receipt → the tx on the
+Amoy explorer → manually tamper a copy of the audit row → run reconciliation → tampering flagged. Experiment for RC-2: compare detection guarantees + overhead
 (latency, cost per event amortised over a batch) vs a plain DB-log baseline.

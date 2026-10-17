@@ -5,40 +5,56 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
-*Newest batch first. The batch below is uncommitted working-tree work (2026-10-14/15), validated
-locally only (SQLite and a disposable PostgreSQL 16.15); it has not run in GitHub Actions.*
-
-### Security
-- **Patient lookup requires a VERIFIED hospital.** `GET /patients/lookup` answers 409 to an
-  administrator of a PENDING hospital, before the Health ID is parsed, so a self-registered
-  account can no longer resolve Health IDs to names (ADR-021 amendment).
-- **Clinician AI search is audited and rate-limited.** `GET /ai/patients/{patient_id}/search`
-  writes one event per request — the new `RECORDS_SEARCHED` action, or `ACCESS_DENIED` with no
-  granted scope — and has its own `ai_search` bucket (30 / 60 s). Query and record text are never
-  stored (ADR-020 amendments 1 and 2). The query still travels in the URL query string.
+### Fixed
+- **Medical record keyset pagination ordering (`d09d721`).** Resolved flaky test ordering and
+  non-deterministic page walks across equal timestamps. `MedicalRecordRepository._context_rows` now
+  orders by `(date_of_service, created_at, id)` in both directions (`NEWEST_FIRST` and `OLDEST_FIRST`).
+  Keyset filtering in `_date_keyset_filter` enforces matching composite comparison with unique ID
+  tie-breakers, ensuring zero skips or duplicates across page boundaries. `DateCursor` extended with
+  `created_at`, preserving backwards compatibility for legacy 3-part tokens.
+- **Hospital registration token-refresh recovery (`e48017a`).** Mirrored the doctor portal recovery
+  fix: on a 403 profile error after verification, forces one Firebase ID token refresh and retries the
+  profile request before falling back, preventing verified hospital administrators from being returned to
+  the registration screen.
+- **Duplicate consent requests and grants (`a09d41f`).** Return 409 deterministically for a request
+  for an already-granted category or open unanswered request, and approvals creating duplicate active
+  grants. Protected under a per-(patient, clinician) advisory lock with UNIQUE violations mapped to 409.
+- **Expired consent requests (`a09d41f`).** Persist PENDING → EXPIRED transition (refusal returned,
+  not raised; ADR-017 amendment); listings report past-deadline requests as EXPIRED. Expiry is lazy.
+- **Upload file names over 255 characters (`a09d41f`).** Return 422 before reaching the database column.
+- **Backend lint and test alignment (`a09d41f`).** Fixed ruff format/lint findings in test files and
+  pinned migration tests to revision `0007` in `test_alembic_postgres.py`.
 
 ### Added
-- **`RECORDS_SEARCHED` audit action** for AI-assisted record searches, labelled
-  "Records searched (AI)" in the patient and hospital audit views. No migration (`audit_logs.action`
-  is `VARCHAR(32)` with no CHECK, verified on the migrated PostgreSQL schema); existing rows keep
-  `RECORDS_LISTED`. OpenAPI spec and generated client regenerated.
-- **PostgreSQL concurrency regression tests** (`tests/test_consent_postgres.py`, opt-in):
-  concurrent duplicate request creation and concurrent approvals (each with a no-lock control),
-  unique-versus-other integrity-error mapping, and the 255-character multibyte filename at the
-  column; plus a migrated-schema check for `RECORDS_SEARCHED`. Added to the existing
-  `backend-postgres` CI job's file list.
+- **Dedicated System Admin dashboard and role-aware navigation (`96a2191`).** Dedicated `AdminLayout`
+  with admin navigation, live hospital directory verification metrics, audit log links, and
+  client-side authorization routing protecting `/admin` and redirecting non-admin users.
+- **Local System Admin provisioning and credentials resolver (`b045f10`).** Developer CLI script
+  `scripts/dev_provision_system_admin.py` for promoting existing user accounts to `Role.SYSTEM_ADMIN`
+  with transactional Firebase custom claims; added project and relative credentials path resolution in
+  `backend/app/modules/auth/firebase.py`.
+- **Audit integrity CLI workflow (`e350b2a`).** Developer CLI tool `scripts/audit_integrity.py`
+  supported by `AuditBatchService` in `backend/app/modules/consent/batch_service.py` and
+  `backend/app/modules/consent/repository.py` for manual batch sealing (`seal`), batch verification
+  (`verify-batch`), individual event Merkle proof verification (`verify-event`), and database
+  reconciliation (`reconcile`).
+- **System Admin hospital directory API (`98f3b33`).** `GET /api/v1/hospitals` endpoint with status
+  filtering and pagination, restricted to `SYSTEM_ADMIN` (`RequireSystemAdmin`). Regenerated OpenAPI
+  schema (39 operations under `/api/v1`) and TypeScript SDK.
+- **Partial per-category consent decisions and grant reconciliation (`b08ba2a`).** Enabled patient
+  consent inbox to approve/reject individual requested categories, persisted partial decisions across
+  form submissions, and reconciled active grants across page reloads.
+- **`RECORDS_SEARCHED` audit action (`a09d41f`).** Dedicated audit action for clinician AI searches,
+  labelled in patient and hospital audit views without storing search query or record text.
+- **PostgreSQL concurrency regression tests (`7c27aa0`).** Added `tests/test_consent_postgres.py`
+  covering concurrent request creation, concurrent approvals, SQLSTATE integrity mapping, and filename
+  length constraints in the `backend-postgres` CI job.
 
-### Fixed
-- **Duplicate consent requests and grants** now return 409 deterministically: a request for a
-  category already actively granted, or already asked for on an open unanswered request, and an
-  approval that would create a second active grant. Checks run under a per-(patient, clinician)
-  PostgreSQL advisory lock; only UNIQUE violations map to 409.
-- **Expired consent requests** — the PENDING → EXPIRED transition is now persisted (the refusal
-  is returned rather than raised, ADR-017 amendment) and listings report a past-deadline request
-  as EXPIRED. Expiry is still lazy; there is no sweep.
-- **Upload file names over 255 characters** return 422 instead of failing at the database.
-- **Backend lint and tests:** ruff format/lint findings in four test files added by `15b2d1b`;
-  two `test_alembic_postgres.py` tests pinned to revision `0007` after 0008 moved `head`.
+### Security
+- **Patient lookup requires a VERIFIED hospital (`a09d41f`).** `GET /patients/lookup` answers 409 to
+  administrators of PENDING hospitals, preventing unverified accounts from probing patient names.
+- **Clinician AI search is audited and rate-limited (`a09d41f`).** `GET /ai/patients/{patient_id}/search`
+  writes `RECORDS_SEARCHED` or `ACCESS_DENIED` and is throttled by the `ai_search` rate-limit bucket.
 
 ### Added
 - **In-app notifications (`15b2d1b`, ADR-031).** Migration 0008 (`notifications`); notifications

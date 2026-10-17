@@ -5,61 +5,53 @@
 > Owner codes: FE (frontend lead), BE (backend lead), AI (AI+blockchain lead), PO (product owner), ANY (whoever/Claude).
 
 **Milestones:** M0 ✅ · M2 ✅ · M3 ✅ (gate criteria met in code) · **M4 substantially
-done — notifications shipped; QR, SYSTEM_ADMIN provisioning and per-category decisions in the
-patient UI remain** · **M5 (AI) partially built** · **M6.1–M6.3 ✅** (local only; M6.4+ **not
-authorized**) · M7 (hardening/deploy/paper) **not started**.
+done — notifications, per-category consent decisions, and System Admin provisioning/directory/dashboard shipped; QR and verification audit metadata remain** · **M5 (AI) partially built** · **M6.1–M6.3 ✅** (local only, CLI sealing workflow available; M6.4+ **not authorized**) · M7 (hardening/deploy/paper) **not started**.
 
-State as of `72b55e2` (2026-10-14): `main` is level with `origin/main` (everything pushed).
-Full picture: [SESSION.md](SESSION.md) §Session 018. Milestone status is owned by ROADMAP.md.
+State as of `d09d721` (2026-10-17): `main` is level with `origin/main` (commits `a09d41f` through `d09d721` pushed, CI workflow run #17 reported green via user-provided evidence).
+Full picture: [SESSION.md](SESSION.md) §Session 020. Milestone status is owned by ROADMAP.md.
 
 ---
 
 ## 0. Immediate — small, unblocked, cheap
 
 - [x] ANY: **fix the ruff findings introduced by `15b2d1b`** (3 files to format, 12 lint
-      findings, test files only) — fixed in the working tree 2026-10-14, uncommitted; CI stays red
-      on `72b55e2` until committed.
+      findings, test files only) — fixed and committed in `a09d41f`.
 - [x] ANY: two `tests/test_alembic_postgres.py` tests asserted `0007` after upgrading to `head`,
-      which 0008 (`15b2d1b`) broke — pinned to `0007`, uncommitted (2026-10-15).
-- [ ] PO/ANY: check the GitHub Actions results for the pushed commits, including the first run
-      of `backend-postgres` (it must run, not skip).
+      which 0008 (`15b2d1b`) broke — pinned to `0007`, committed in `a09d41f`.
+- [x] PO/ANY: check the GitHub Actions results for the pushed commits, including the first run
+      of `backend-postgres` (it must run, not skip) — workflow for `d09d721` was reported green (run #17, user-provided evidence).
 - [ ] ANY: add **`backend/.env.example`**. `backend/.env` is read relative to the process CWD
       (`make dev-api` runs from `backend/`), while the root `.env` is docker-compose only. The
       absence of an example is what makes that invisible; it has cost debugging time twice.
 
-## 0a. Final review priorities (audit of 2026-10-14; each needs PO authorization)
+## 0a. Final review priorities (status 2026-10-17, `d09d721`)
 
-Recommended order 1 → 2 → 3 → 4 → 5 (2 is frontend-only and can run alongside 3). Summary in
-ROADMAP.md §Final review priorities. Item 1 is implemented (uncommitted, 2026-10-15); 2–5 are
-not started.
+Recommended order 1 → 2 → 3 → 4 → 5. Summary in ROADMAP.md §Final review priorities.
+Items 1 and 2 are implemented and committed; Items 3 and 4 are partially implemented;
+Item 5 is outstanding.
 
-1. [x] BE: **Authorization and audit correctness** — implemented 2026-10-15 (uncommitted;
-   ADR-017/020/021 amendments). AI search audited + `ai_search` rate limit; patient lookup
-   requires a VERIFIED hospital (409); duplicate open requests / already-granted categories /
-   second active grant → 409 under a per-pair advisory lock, with only UNIQUE violations mapped
-   to 409; the EXPIRED transition now persists and listings show past-deadline requests as
-   EXPIRED; upload file names over 255 characters → 422. Validated on SQLite and, for the races,
-   the integrity mapping and the filename column, on a disposable PostgreSQL 16.15
-   (`tests/test_consent_postgres.py`). Follow-ups that remain open:
+1. [x] BE: **Authorization and audit correctness** — implemented in `a09d41f`, `7c27aa0`
+   (ADR-017/020/021 amendments). AI search audited (`AuditAction.RECORDS_SEARCHED`) + `ai_search`
+   rate limit; patient lookup requires a VERIFIED hospital (409); duplicate open requests /
+   already-granted categories / second active grant → 409 under a per-pair advisory lock, with only
+   UNIQUE violations mapped to 409; the EXPIRED transition now persists and listings show past-deadline
+   requests as EXPIRED; upload file names over 255 characters → 422. Validated on SQLite and
+   PostgreSQL (`tests/test_consent_postgres.py`). Follow-ups:
    - [x] ANY: add `tests/test_consent_postgres.py` to the `backend-postgres` CI job's file list
-         — done 2026-10-15 (uncommitted); the exact command passes locally on a disposable
-         PostgreSQL 16.15. No GitHub run observed yet.
-   - [x] BE/FE: a dedicated audit action for the AI search — `RECORDS_SEARCHED`, done 2026-10-15
-         (uncommitted; ADR-020 amendment 2). No migration (verified on the migrated PostgreSQL
-         schema); OpenAPI/client regenerated; patient and hospital audit views labelled.
+         — committed in `7c27aa0`; verified in CI (run #17, user-provided evidence).
+   - [x] BE/FE: a dedicated audit action for the AI search — `RECORDS_SEARCHED`, committed in
+         `a09d41f` (ADR-020 amendment 2). No migration; OpenAPI/client regenerated; patient and
+         hospital audit views labelled.
    - [ ] BE: the AI search query travels in the URL query string (GET); a POST body would keep it
          out of intermediary logs but is a v1 contract change.
    - [ ] BE: request expiry is lazy — no sweep; the stored row becomes EXPIRED only when someone
          tries to answer it (listings already show it as EXPIRED).
    - [ ] BE: the patient lookup is still unaudited (operational-log question, §1).
-   - [ ] ANY: watch the first GitHub Actions run of `backend-postgres` with
-         `tests/test_consent_postgres.py`. Its two no-lock control tests rely on a widened race
-         window (0.3 s) to force the duplicate, so a slow runner could make them flaky; the
-         locked tests do not depend on timing. Locally they passed in every run (3/3 repeats).
+   - [x] ANY: watch the first GitHub Actions run of `backend-postgres` with
+         `tests/test_consent_postgres.py` — verified passed in CI (run #17, user-provided evidence).
    - [ ] BE: an intermittent `aiosqlite` "Event loop is closed" thread warning (a warning, not a
          failure) appeared once in the full suite run with the PostgreSQL URL set, from the SQLite HTTP
-         fixture in
-         `tests/test_consent_http.py`; it did not recur in three reruns. Likely the fixture's
+         fixture in `tests/test_consent_http.py`; it did not recur in three reruns. Likely the fixture's
          engine outliving its event loop — not investigated.
    - [ ] FE: the doctor portal marks already-granted categories but not categories that already
          have an open (pending) request from the same doctor; asking again is refused with 409,
@@ -67,29 +59,25 @@ not started.
    - [ ] BE/FE: a legacy pair of open requests for the same category (only possible from data
          written before the duplicate guard) makes approving the second one a 409 for the whole
          multi-category approval, because the patient portal approves every category at once;
-         the patient must reject the duplicate. Item 2 (per-category decisions) would let the
-         patient approve the rest.
-   - [ ] ANY: stale comment in `.github/workflows/ci.yml` above the `backend-postgres` job — it
-         says the backend job's lint/type steps fail on pre-existing findings, which the ruff
-         cleanup fixed (uncommitted).
-   - [ ] ANY: ROADMAP §M4's gate status still cites the 2026-10-14 figures (1127 backend / 549
-         web); current local figures are in DEVELOPMENT_GUIDE.md (1165 / 1190 with PostgreSQL;
-         550 web).
-2. [ ] FE: **Granular consent decisions** — patient `PendingRequestCard` lets the patient choose
-   categories to approve and decline (the approve/reject API already takes a subset); confirm
-   before revoking. Acceptance: partial approval → the doctor's granted list and AI scope show
-   only approved categories.
-3. [ ] BE/FE: **SYSTEM_ADMIN provisioning and hospital verification** — see §1's SYSTEM_ADMIN
-   item. Scope: a guarded local provisioning script that stamps claims; a pending-hospital
-   listing; record who verified and when; a minimal admin screen (layout to be decided by the
-   PO; no separate admin app is authorized). Acceptance: register hospital → admin verifies →
-   doctor registers → hospital uploads, all through the UI.
-4. [ ] BE/FE: **Demonstrable audit integrity (local only)** — a runnable seal/reconcile entry
-   point (replacing the docstring reference to the non-existent
-   `scripts/anchor_audit_events.py`); v3 verification through batch membership and Merkle proof
-   instead of always `NOT_ANCHORED`; integrity status rendered in the patient audit trail
-   (today it shows a "Verification hash" with no verdict). Optional: DB-level append-only
-   trigger (needs an ADR). Out of scope: contract, chain adapter, scheduler (M6.4).
+         the patient must reject the duplicate.
+   - [x] ANY: stale comment in `.github/workflows/ci.yml` above the `backend-postgres` job —
+         resolved in DOC-01.
+   - [x] ANY: ROADMAP §M4's gate status still cites the 2026-10-14 figures — resolved in DOC-01.
+2. [x] FE: **Granular consent decisions** — implemented and committed in `b08ba2a`. Patient
+   `PendingRequestCard` lets the patient choose categories to approve and decline; confirms
+   before revoking; grants reconcile cleanly across page reloads.
+3. [-] BE/FE: **SYSTEM_ADMIN provisioning and hospital verification** — partially implemented
+   in `b045f10`, `98f3b33`, `e48017a`, `96a2191`. Local provisioning script sets Firebase custom claims;
+   `GET /api/v1/hospitals` lists directory for `Role.SYSTEM_ADMIN`; dedicated System Admin dashboard and
+   `AdminLayout` with metrics and verification controls in hospital portal.
+   *Remaining gaps:* verifier user ID and verification timestamp not recorded on row; administrative
+   audit event not emitted; hospital rejection/suspension lifecycle is not implemented.
+4. [-] BE/FE: **Demonstrable audit integrity (local only)** — developer CLI workflow implemented
+   in `e350b2a` (`scripts/audit_integrity.py` supporting `seal`, `verify-batch`, `verify-event`, `reconcile`).
+   *Remaining gaps:* production-safety environment guard for CLI, scheduled background sealing daemon,
+   API v3 Merkle verification endpoint (`GET /audit-logs/{id}/verification` currently checks only
+   legacy per-event `audit_anchors`), and patient UI integration remain outstanding.
+   Public-chain anchoring stays deferred (Polygon Amoy / M6.4 not authorized).
 5. [ ] BE: **FHIR R4 export** — consent-enforced, audited, read-only Bundle of granted,
    non-hidden records (stored resources + DocumentReference metadata for uploads), validated
    against R4 in tests; add a `subject`-matches-bundle-Patient check to the importer. Out of
@@ -118,9 +106,11 @@ What is left, ordered by dependency. Each item is demonstrable on its own.
       `GET /records/existence` (only *successful* probes are representable, so the
       patient-visible log would miss the enumeration it would exist to catch). ADR-023 §
       Deferred records the reasoning. Needs its own ADR before any schema.
-- [ ] BE: **no code path provisions `Role.SYSTEM_ADMIN`**, so `POST /hospitals/{hid}/verify`
-      has no reachable caller and self-registered hospitals are stranded `PENDING`. Masked in
-      demos because the three simulated hospitals are seeded `VERIFIED`. Scheduled as §0a item 3.
+- [x] BE: **SYSTEM_ADMIN provisioning and directory** — implemented in `b045f10`
+      (`scripts/dev_provision_system_admin.py`) and `98f3b33` (`GET /api/v1/hospitals`). Dedicated
+      System Admin dashboard and `AdminLayout` in hospital portal implemented in `96a2191`.
+      Remaining gaps: verifier user ID and verification timestamp not persisted on row;
+      administrative audit event not emitted; rejection/suspension lifecycle not implemented.
 - [x] BE/FE: **`notifications` module** — shipped in `15b2d1b` per ADR-031 (in-app only,
       written in the consent transaction, polled by the patient and doctor portals). Follow-ups,
       not scheduled: notification items do not link to the referenced request; the hospital

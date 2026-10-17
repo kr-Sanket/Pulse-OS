@@ -66,22 +66,23 @@
   unintentional, the PR is wrong.
 - Every endpoint has a docstring: purpose, roles allowed, consent requirement, failure modes.
 
-## Current surface (from the generated OpenAPI, 2026-10-14)
+## Current surface (from the generated OpenAPI, 2026-10-17)
 
-38 operations under `/api/v1`, plus `GET /health` and `GET /ready`. Roles and consent requirements
+39 operations under `/api/v1`, plus `GET /health` and `GET /ready` (41 operations total). Roles and consent requirements
 are in each operation's OpenAPI description.
 
 | Area | Operations |
 |---|---|
 | auth | `GET /auth/me` |
 | patients | `POST /patients/register` · `GET`/`PATCH /patients/me` · `GET /patients/lookup` |
-| hospitals / doctors | `POST /hospitals/register` · `GET /hospitals/me` · `GET /hospitals/me/doctors` · `POST /hospitals/me/doctors/{doctor_id}/activate` · `POST /hospitals/me/doctors/{doctor_id}/deactivate` · `POST /hospitals/{hid}/verify` · `POST /doctors/register` · `GET /doctors/me` |
+| hospitals / doctors | `GET /hospitals` · `POST /hospitals/register` · `GET /hospitals/me` · `GET /hospitals/me/doctors` · `POST /hospitals/me/doctors/{doctor_id}/activate` · `POST /hospitals/me/doctors/{doctor_id}/deactivate` · `POST /hospitals/{hid}/verify` · `POST /doctors/register` · `GET /doctors/me` |
 | records | `GET /record-categories` · `POST`/`GET /records` · `GET /records/existence` · `GET /records/{record_id}` · `POST /records/{record_id}/download-url` · `PATCH /records/{record_id}/visibility` · `GET /granted-records` |
 | consent | `POST /access-requests` · `GET /access-requests/inbox` · `GET /access-requests/sent` · `POST /access-requests/{request_id}/approve` · `POST /access-requests/{request_id}/reject` · `GET /consent-grants` · `POST /consent-grants/{grant_id}/revoke` |
 | audit | `GET /audit-logs` · `GET /audit-logs/{audit_log_id}/verification` · `GET /hospitals/me/audit-logs` |
 | ai | `GET /ai/patients/{patient_id}/search` · `POST /ai/patients/{patient_id}/answer` · `POST /ai/me/answer` |
 | notifications (ADR-031) | `GET /notifications` · `GET /notifications/unread-count` · `POST /notifications/{id}/read` · `POST /notifications/mark-all-read` |
 
-There are no QR, FHIR export, admin listing, summary/timeline, batch or receipt endpoints. The audit
-`verification` endpoint reports **per-event** anchors only; batch membership is not exposed yet.
+There are no QR, FHIR export, summary/timeline, batch or receipt endpoints. The hospital directory listing
+(`GET /hospitals`) is restricted to `SYSTEM_ADMIN`. The audit `verification` endpoint reports **per-event**
+anchors only; batch membership is not exposed yet.
 

@@ -19,10 +19,10 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase (2026-10-14, Session 018):** M4 substantially done; M5 AI **partially built**;
-  **M6.1–M6.3 complete** (local audit integrity; no public chain); M6.4 **not authorized**.
-  Preparing for the final review. `main` at `72b55e2`, **level with `origin/main` (pushed)**.
-  Pushing remains a Product Owner action. See [SESSION.md](SESSION.md) §Session 019.
+- **Phase (2026-10-17, Session 020):** M4 substantially done; M5 AI **partially built**;
+  **M6.1–M6.3 complete** (local audit integrity; CLI sealing/verification; no public chain); M6.4 **not authorized**.
+  Preparing for the final review. `main` at `d09d721`, **level with `origin/main` (pushed)**.
+  GitHub Actions workflow is reported **GREEN** (workflow run #17, user-provided evidence). See [SESSION.md](SESSION.md) §Session 020.
 - **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (PR #1);
   M2 backend (onboarding per ADR-015, upload → S3 port, presigned downloads, arq worker per
   ADR-014, seed); **M3** (request → per-category decision → grant → revoke, `consent.enforce()`
@@ -31,35 +31,37 @@ health timelines, a report explainer, and a Health Copilot chat.
   complete, doctor's full consent workflow, hospital portal), hospital audit attribution
   (migration 0005, ADR-022/023/025), authenticated rate limiting (ADR-024), Synthea FHIR R4
   Phase A (10 patients / 889 records), patient record browsing (sort, server-side search,
-  category filter, cursor paging), patient audit grouping, patient profile editing
+  category filter, composite keyset cursor pagination), patient audit grouping, patient profile editing
   (`PATCH /patients/me`), patient record hide/unhide (`PATCH /records/{id}/visibility`),
   **in-app notifications** (ADR-031, migration 0008, `15b2d1b`), automatic consent/permission
-  refresh by polling (`5690a93`) and granted-category indicators in the doctor portal (`13e2034`).
+  refresh by polling (`5690a93`), granted-category indicators in the doctor portal (`13e2034`),
+  **authorization and audit correctness** (`a09d41f`, `7c27aa0`), **granular per-category consent decisions**
+  and recovery (`b08ba2a`), **local SYSTEM_ADMIN provisioning** (`b045f10`), **hospital directory API**
+  (`98f3b33`, 39 operations under `/api/v1`), **dedicated System Admin dashboard** (`96a2191`),
+  **hospital token-refresh recovery** (`e48017a`), **medical record keyset pagination stabilization** (`d09d721`),
+  and **audit-integrity CLI workflow** (`e350b2a`).
 - **Next — final review priorities** ([ROADMAP.md](ROADMAP.md) §Final review priorities,
-  [TODO.md](TODO.md) §0a; each needs PO authorization): (1) authorization and audit correctness
-  — **implemented 2026-10-15, uncommitted** (ADR-017/020/021 amendments); (2) per-category consent decisions in the patient UI; (3) SYSTEM_ADMIN provisioning + hospital
-  verification; (4) demonstrable local audit integrity; (5) FHIR R4 export. QR identity is still
+  [TODO.md](TODO.md) §0a): (1) authorization and audit correctness — ✅ **done** (`a09d41f`); (2) per-category
+  consent decisions in the patient UI — ✅ **done** (`b08ba2a`); (3) SYSTEM_ADMIN provisioning + hospital
+  verification — 🟡 **partially implemented** (`b045f10`, `98f3b33`, `96a2191`, `e48017a`; verifier/timestamp recording and
+  rejection lifecycle open); (4) demonstrable local audit integrity — 🟡 **CLI done** (`e350b2a`; scheduler,
+  missing CLI safety guard, API v3 Merkle verification, and UI open); (5) FHIR R4 export — ⬜ **not started**. QR identity is still
   open. **There is no E2E suite and none is to be rebuilt** (removed in `281439c`).
   **Partially built:** M5 AI/RAG — `app/modules/ai` exists (FHIR ingestion, consent-scoped
   substring-lexical retrieval, Ollama/Qwen3:8B-only generation, clinical assistant, patient
   copilot) but `workers/tasks.py` still only logs, so uploads are never indexed; M6 blockchain per
   **ADR-027** (Merkle-batched v3 anchoring) — the `AuditAnchor` port, network-free
   `LocalChainAuditAnchor`, migration 0006, Keccak-256 v3 digests (M6.1), `consent/merkle.py`
-  (M6.2/M6.2.1) and M6.3 (migration 0007 batch/membership tables, deterministic sealing,
-  commitments, database-only reconciliation, v3 refused by the per-event workflow) are committed
-  in `e3c0fe1` (implementation), with the opt-in PostgreSQL integration tests in `1ce4c14`.
+  (M6.2/M6.2.1), M6.3 batch persistence, and `scripts/audit_integrity.py` CLI workflow (`e350b2a`).
   M6.1–M6.3 are accepted with deferred items. **The M6 gate is not complete. Not built, do not
   describe as working:** on-chain batch submission, receipts, chain-side verification,
-  contract, chain adapter, scheduler, reconciliation CLI; M7 hardening/deploy. **M6.4 is not
+  contract, chain adapter, scheduler, patient verification API/UI; M7 hardening/deploy. **M6.4 is not
   authorized.**
-- **Health (2026-10-15, `72b55e2` + uncommitted work, local):** backend **1165 passed,
-  25 skipped** (the 25 skips are the opt-in PostgreSQL tests, run only when
-  `PULSEOS_TEST_POSTGRES_URL` is set) and **1190 passed** with them against a disposable
-  PostgreSQL 16.15; ruff format/lint and `mypy` clean. Web: **550 tests passed**, prettier +
-  eslint + tsc clean (builds not re-run). As pushed, `72b55e2` still fails CI's ruff step and two
-  `backend-postgres` tests; both are fixed in the uncommitted tree (DEVELOPMENT_GUIDE §CI).
-  GitHub Actions results not yet checked.
-- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 019 — read this second, update it before ending every session.
+- **Health (2026-10-17, commit `d09d721`, verified local & GitHub Actions CI reported green via user-provided evidence):** backend **1209 passed,
+  25 skipped** (the 25 skips are the opt-in PostgreSQL tests; the PostgreSQL CI job was reported passed in GitHub Actions run #17, user-provided evidence);
+  ruff format/lint and `mypy` clean (166 source files). Web: **611 tests passed** across 6 packages, prettier +
+  eslint + tsc clean. GitHub Actions is reported green across all jobs (workflow run #17, user-provided evidence).
+- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 020 — read this second, update it before ending every session.
 - **Status is owned by [ROADMAP.md](ROADMAP.md)** (milestones, dated validation) and the handoff by
   SESSION.md; the summary above must not grow into a second copy of either.
 

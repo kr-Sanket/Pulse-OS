@@ -5,9 +5,66 @@
 
 ---
 
-## Session 019 — 2026-10-15 · ← CURRENT STATE
+## Session 020 — 2026-10-17 · ← CURRENT STATE
 
 **Read this entry alone to know where the project stands.** Everything below it is history.
+
+**Branch:** `main` at `d09d721`, synchronized with `origin/main` (`ahead 0, behind 0`).
+**CI Status:** GitHub Actions workflow for commit `d09d721` is **GREEN** (workflow run #17, user-provided evidence; run logs not in-repo).
+
+### What landed since Session 019 (commits `a09d41f` through `d09d721`)
+
+| Commit | What |
+|---|---|
+| `a09d41f` | **Authorization & audit correctness:** AI search audited (`AuditAction.RECORDS_SEARCHED`) and rate-limited (`ai_search`); patient lookup requires VERIFIED hospital (409); concurrent consent requests guarded with advisory locks and UNIQUE constraints; expired requests cleanly handled; 255-character upload filename validation |
+| `7c27aa0` | **CI:** Run consent concurrency regression tests in `backend-postgres` job |
+| `fd42b80` | **Docs:** Historical documentation reconciliation |
+| `b08ba2a` | **Consent UI:** Patient portal partial per-category consent decisions and reload recovery |
+| `98f3b33` | **Admin API:** Expose `GET /api/v1/hospitals` (requires `SYSTEM_ADMIN`); regenerated OpenAPI (39 operations under `/api/v1`) and `@pulseos/api-client` |
+| `e350b2a` | **Audit integrity CLI:** Developer workflow (`scripts/audit_integrity.py`) for batch sealing and verification |
+| `b045f10` | **Auth provisioning:** Local System Admin provisioning script (`scripts/dev_provision_system_admin.py`) and credentials path resolver |
+| `e48017a` | **Auth recovery:** Hospital portal forced token refresh on profile 403 to preserve verified registration state |
+| `96a2191` | **Admin UI:** Dedicated System Admin dashboard, layout (`AdminLayout`), metrics, and role-aware navigation |
+| `d09d721` | **Record pagination:** Keyset pagination stabilized with deterministic composite ordering `(date_of_service, created_at, id)` and robust cursor encoding/decoding |
+
+### Quality gates (measured 2026-10-17 at `d09d721`, local)
+
+| Gate | Result |
+|---|---|
+| `pytest` (backend, no PostgreSQL URL) | **1209 passed, 25 skipped** (opt-in PostgreSQL tests; verified clean) |
+| `mypy` | **clean** (166 source files) |
+| `ruff format --check` / `ruff check` | **clean** (0 findings) |
+| Web `typecheck` / `lint` / `format:check` | **clean** across all 6 packages |
+| Web tests (Vitest) | **611 passed** (hospital 199, patient 188, doctor 166, ui 34, api-client 24) |
+| GitHub Actions CI (`d09d721`) | **GREEN** (workflow run #17 succeeded; user-provided evidence) |
+
+*Note: PostgreSQL integration tests were not run locally in Session 020; they run in CI under the `backend-postgres` job (run #17 result user-provided).*
+
+### Verified implementation status & remaining gaps
+
+1. **System Admin & Hospital Verification:**
+   - Provisioning script (`scripts/dev_provision_system_admin.py`) sets custom user claims `{"role": "SYSTEM_ADMIN", "system_admin": True}` via Firebase Admin SDK.
+   - Endpoint `GET /api/v1/hospitals` lists all hospitals for `Role.SYSTEM_ADMIN`.
+   - Verification endpoint `POST /api/v1/hospitals/{hid}/verify` flips `is_verified=True`.
+   - *Remaining gap:* Verification does not yet persist verifier user ID or timestamp on the row, nor emit an administrative audit log event. Hospital rejection/suspension is not implemented.
+2. **Audit Integrity:**
+   - Developer CLI (`scripts/audit_integrity.py`) supports `seal`, `verify-batch`, `verify-event`, and `reconcile` (backed by `AuditBatchService`).
+   - *Remaining gaps:* CLI lacks production-safety guard; scheduled background sealing daemon, API v3 Merkle verification endpoint (`GET /audit-logs/{id}/verification` currently evaluates only legacy per-event `audit_anchors`), and patient UI integration remain outstanding. External anchoring (Polygon Amoy / M6.4) is deferred/not authorized.
+3. **FHIR:**
+   - Synthea R4 Phase A import works.
+   - *Remaining gap:* FHIR export is still outstanding.
+4. **Patient Identity:**
+   - Patient QR identity remains open.
+
+### Exact next step
+
+Complete DOC-01 documentation reconciliation and validation report. Next roadmap candidates: FHIR R4 export, hospital verification metadata & administrative audit logging, scheduled audit sealing, or patient QR identity.
+
+---
+
+## Session 019 — 2026-10-15 · superseded by Session 020
+
+*Historical — read Session 020 for the current state.*
 
 **Branch:** `main` at `72b55e2`, level with `origin/main`. **Nothing from Sessions 018–019 is
 committed** — the working tree holds, all uncommitted and awaiting PO review: Task 0 documentation;

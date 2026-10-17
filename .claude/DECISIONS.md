@@ -225,6 +225,17 @@ matrix: docs/DOMAIN_MODEL.md §3. Two invariants: System Admin can never read me
 (no admin break-glass exists), and AI features inherit exactly the caller's consent scope.
 Consent grants are per **individual doctor** and per **category** (not hospital-wide) in MVP.
 
+**Implementation Addendum (2026-10-17 — commits `b045f10`, `98f3b33`, `e48017a`, `96a2191`):**
+- **System Admin Provisioning:** A local CLI script `scripts/dev_provision_system_admin.py` stamps
+  Firebase custom claims `{"role": "SYSTEM_ADMIN", "system_admin": True}` on specified Firebase UID or email.
+- **Hospital Directory Endpoint:** `GET /api/v1/hospitals` (requires `Role.SYSTEM_ADMIN`) lists all hospitals
+  in the platform (both PENDING and VERIFIED), unblocking administrative verification.
+- **Dedicated Admin UI:** The hospital portal frontend now provides an `AdminLayout` and dedicated dashboard
+  (`web/apps/hospital/src/pages/AdminDashboardPage.tsx`) with platform-level metrics and verification controls.
+- **Known Remaining Gaps:** `POST /api/v1/hospitals/{hid}/verify` sets `is_verified=True` but does not yet
+  record the verifier's user ID or timestamp on the hospital row, nor emit an administrative audit event.
+  Rejection/suspension lifecycle is not implemented.
+
 ---
 
 ## ADR-014 — Async job queue library: arq
@@ -358,9 +369,8 @@ DOMAIN_MODEL §1 and need their own ADR.
 documented invariant, deferred); commit-before-raise (not expressible with a dependency-scoped
 transaction); accepting the loss (fails a stated gate criterion on the most sensitive path).
 
-**Amendment (2026-10-15 — implemented in the working tree, not yet committed; validated locally
-on SQLite and a disposable PostgreSQL 16.15; reviewed against the code 2026-10-15; formal
-Product Owner acceptance not recorded):** a third use of the same technique, on a write path.
+**Amendment (2026-10-15 — implemented and committed in `a09d41f`; validated locally
+on SQLite and PostgreSQL 16.15; formal Product Owner acceptance not recorded):** a third use of the same technique, on a write path.
 `POST /access-requests/{id}/approve` and `/reject` now **return** the 409 for a request that is
 no longer decidable instead of raising it (`consent/router.py::_decide`). Cause: expiry is
 persisted lazily — the service sets `status = EXPIRED` when a decision arrives after the deadline
@@ -518,7 +528,7 @@ owned by the `records` module, DOCTOR-only, requiring an ACTIVE clinician (ADR-0
   Health-ID oracle the way `/access-requests` and `/records/existence` are (finding M3-D), but
   the bucket those two need should cover it too.
 
-**Amendment 1 (2026-10-15 — implemented in the working tree, not yet committed; formal Product
+**Amendment 1 (2026-10-15 — implemented and committed in `a09d41f`; formal Product
 Owner acceptance not recorded): the clinician AI search reuses this listing's audit events.**
 *(Its action was refined by Amendment 2 below; kept as written.)* `GET /ai/patients/{patient_id}/search` returned
 ranked chunk text inside the clinician's granted scope with no audit row and no rate limit. It
@@ -540,8 +550,8 @@ proxies may not).
 On the "Not addressed" note above: `/granted-records` has had its own `granted_records` bucket
 since ADR-024.
 
-**Amendment 2 (2026-10-15, same day — implemented in the working tree, not yet committed;
-validated locally on SQLite and a disposable PostgreSQL 16.15; formal Product Owner acceptance
+**Amendment 2 (2026-10-15, same day — implemented and committed in `a09d41f`;
+validated locally on SQLite and PostgreSQL 16.15; formal Product Owner acceptance
 not recorded): the AI search gets its own action, `RECORDS_SEARCHED`.** This resolves the
 "known limitation" of Amendment 1. Decision:
 
@@ -563,6 +573,13 @@ not recorded): the AI search gets its own action, `RECORDS_SEARCHED`.** This res
   label in the patient view, "Audit event" in the hospital view), so an older build shows the
   row rather than dropping it.
 - Still open: the query is sent in the URL query string (GET).
+
+**Implementation Addendum (2026-10-17 — commit `d09d721`): Keyset pagination stabilization.**
+Medical record keyset pagination (`GET /api/v1/records` and `GET /api/v1/granted-records`) was stabilized
+with a deterministic composite order: `(date_of_service, created_at, id)` with `id` as tie-breaker. Keyset
+filtering applies row-value comparison across `(date_of_service, created_at, id)` for both `NEWEST_FIRST`
+and `OLDEST_FIRST` directions, preventing skipping or duplicating records across page boundaries when
+timestamps collide.
 
 ---
 
@@ -635,9 +652,8 @@ HOSPITAL_ADMIN-only, answering `{healthId, fullName}` and nothing else. Four par
   unchanged: it still imports only `auth`, and nothing imports it except through the
   directory.
 
-**Amendment (2026-10-15 — implemented in the working tree, not yet committed; validated locally;
-reviewed against the code 2026-10-15; formal Product Owner acceptance not recorded): verified
-hospitals only.** Decision 3's rationale does not hold. It said a PENDING hospital's lookup
+**Amendment (2026-10-15 — implemented and committed in `a09d41f`; validated locally;
+formal Product Owner acceptance not recorded): verified hospitals only.** Decision 3's rationale does not hold. It said a PENDING hospital's lookup
 "tells it nothing it could not learn by attempting the upload" — but the upload refuses an
 unverified hospital (409) *before* resolving the Health ID and never returns a name. Because
 `POST /hospitals/register` grants HOSPITAL_ADMIN immediately, any new account could therefore
@@ -1156,6 +1172,18 @@ commitments plus unavoidable sender and timing metadata; every v3 event is verif
 against persisted, authoritative metadata; completeness is a reconciliation result, never a proof
 property; the ADR-004 anchor port is unchanged.
 
+**Implementation Addendum (2026-10-17 — commit `e350b2a`): developer audit-integrity CLI.**
+A runnable CLI workflow (`scripts/audit_integrity.py`) was introduced to provide local batch sealing
+and verification against the database:
+- `seal`: Seals unbatched v3 audit events into a deterministic Merkle batch with Keccak-256 root (`--limit`).
+- `verify-batch`: Verifies batch Merkle root and leaf memberships (`--batch-number` or `--all`).
+- `verify-event`: Generates and verifies a Merkle membership proof for an individual audit event (`--event-id`).
+- `reconcile`: Reconciles all audit batches and events across the database to detect tampering.
+*Remaining gaps & deferred items:* The CLI currently lacks an environment safety guard; scheduled background
+sealing daemon/scheduler, API v3 Merkle verification endpoint (`GET /audit-logs/{id}/verification` currently
+checks only legacy per-event `audit_anchors`), patient UI verification integration, and external blockchain
+anchoring (Polygon Amoy / M6.4 not authorized) remain deferred.
+
 ---
 
 ## ADR-028 — Local Ollama is the sole AI generation provider; redaction revisited
@@ -1238,7 +1266,7 @@ records long term; whether Phase B of the import (deferred, TODO.md) changes any
 ---
 
 ## ADR-031 — Notifications Module: in-app delivery, transactional persistence, and polling
-**Date:** 2026-10-12 · **Status:** **Implemented** — shipped in `15b2d1b` (2026-10-13, pushed
+**Date:** 2026-10-12 · **Status:** **Implemented** — shipped in `15b2d1b` (2026-10-14, pushed
 to `origin/main`) at the Product Owner's direction. Written as "Proposed — awaiting Product Owner
 review"; no separate formal acceptance of the ADR text is recorded. The decision text below is
 unchanged; see *Implementation notes* at the end for where the shipped code differs from it.

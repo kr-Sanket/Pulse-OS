@@ -74,7 +74,7 @@ portal now *creates* access requests and reads granted records, which was the on
 that the M0.3 and M2 gates carry: a live browser walk-through against running infrastructure.
 Deferred backend findings are in TODO.md.
 
-## M4 — Core Features Complete (Month 4) — substantially done, status 2026-10-14 (`72b55e2`)
+## M4 — Core Features Complete (Month 4) — substantially done, status 2026-10-17 (`d09d721`)
 
 **Carried forward from M3, all shipped:**
 
@@ -104,13 +104,13 @@ Deferred backend findings are in TODO.md.
 - ✅ **Synthea FHIR R4 Phase A ingestion**: 10 pinned patients, 889 records, sanitized raw FHIR to
   object storage behind the audited consent path. Phase B is deferred (TODO §1b).
 - ✅ **Patient record browsing**: clinical-date ordering, newest/oldest sort, server-side search,
-  category filter, cursor pagination and Load more.
+  category filter, cursor pagination and Load more (keyset pagination stabilized in `d09d721`).
 - ✅ **Patient audit history**: grouped hospital → actor → events, own-activity filter, Load more.
 - ✅ **Patient profile editing**: `PATCH /api/v1/patients/me` (the API's first PATCH).
 - ✅ **Patient record hide/unhide**: `PATCH /api/v1/records/{id}/visibility`, any record the
   patient owns; removes it from every grantee surface and revokes nothing.
 - ✅ Record download via presigned URLs, audited, in all three portals.
-- ✅ **In-app notifications** (ADR-031, `15b2d1b`, 2026-10-13): migration 0008, `notifications`
+- ✅ **In-app notifications** (ADR-031, `15b2d1b`, 2026-10-14): migration 0008, `notifications`
   module, four `/notifications` endpoints; `ACCESS_REQUESTED` → patient, `CONSENT_APPROVED` /
   `CONSENT_REJECTED` / `CONSENT_REVOKED` → doctor, written in the consent transaction with generic
   no-PHI text; bell + drawer with unread count in the patient and doctor portals (30 s polling,
@@ -118,31 +118,33 @@ Deferred backend findings are in TODO.md.
 - ✅ **Automatic consent/permission refresh** (`5690a93`): `useApiResource` polling + focus
   refresh on the patient consent inbox, grants and dashboard and the doctor sent-requests and
   granted-records screens (15–30 s). Audit, records and hospital screens do not poll.
-- ✅ **Granted-record indicators** (`13e2034`): already-granted categories are marked and cannot
-  be re-requested in the doctor portal; the Clinical AI Assistant sits above the granted-records
-  list. (The backend itself does not yet refuse duplicate requests — see §Final review priorities.)
+- ✅ **Granted-record indicators & duplicate guard** (`13e2034`, `a09d41f`): already-granted categories
+  are marked and cannot be re-requested in doctor portal; backend refuses duplicate open requests
+  and active grants with 409 under advisory locks.
+- ✅ **Per-category decisions in patient portal** (`b08ba2a`): patient can approve a subset of
+  categories and decline the rest; grants reconcile cleanly across page reloads.
+- ✅ **SYSTEM_ADMIN provisioning & hospital verification UI** (`b045f10`, `98f3b33`, `e48017a`, `96a2191`):
+  script `scripts/dev_provision_system_admin.py` sets Firebase custom claims; `GET /api/v1/hospitals`
+  exposes directory to admins; dedicated System Admin dashboard with metrics and verification controls.
 
 **Still open in M4:**
 
 - ⬜ **QR identity generation and scanning.** Designed in ADR-012 (`pulseos://p/v1/<healthId>`,
   no PHI); no code exists.
-- ⬜ **Per-category decisions in the patient portal** — the API accepts a subset of categories per
-  approve/reject call, but the portal always answers every requested category together; revoke has
-  no confirmation step.
+- ⬜ **Hospital verification lifecycle gaps**: verification does not yet persist verifier user ID
+  or timestamp on the row, nor emit an administrative audit log event. Rejection/suspension
+  lifecycle is not implemented.
 - ⬜ Hospital portal **bulk upload** (single-record upload is done) and **request management on
   behalf of their doctors** (the `⭕` dual-consent cell in DOMAIN_MODEL §3) — both were in this
   milestone's original scope and neither is built.
-- ⬜ **SYSTEM_ADMIN provisioning** — no code path creates one, so `POST /hospitals/{hid}/verify`
-  has no reachable caller and a self-registered hospital stays `PENDING`. Masked in demos because
-  the three seeded hospitals are already VERIFIED.
 - ⬜ Flutter patient app (auth, profile, consent inbox) — *pending Product Owner decision on
   timing (ADR-010 is still a placeholder); `mobile/` is a README.*
 
 **Gate:** all three web portals demo the full interoperability story end-to-end with seed data,
-including the M3 consent journey. *Status (2026-10-14, `72b55e2`): the portals and the journey
-exist; local run 1127 backend passed / 18 skipped and 549 web tests passed. The gate's live demo
-run is the same PO ops task as M0.3 and M2; QR identity and SYSTEM_ADMIN provisioning are still
-missing.*
+including the M3 consent journey and System Admin verification. *Status (2026-10-17, `d09d721`):
+the portals and the journeys exist and pass CI (1209 backend passed / 25 skipped, 611 web passed).
+The gate's live browser demo run is a PO ops task; QR identity and verification audit metadata
+remain open.*
 
 ## M5 — AI Layer (Month 5)
 
@@ -220,26 +222,33 @@ the guide; all docs current.
 
 ---
 
-## Final review priorities (from the read-only audit of 2026-10-14, `72b55e2`)
+## Final review priorities (status 2026-10-17, `d09d721`)
 
-The remaining major implementations, in the recommended order. **Item 1 is implemented
-(2026-10-15, uncommitted); items 2–5 are not started.** Each needs Product Owner authorization before code changes. Detail and acceptance
+The remaining major implementations, in the recommended order. **Items 1, 2, and 3 are implemented
+and committed; Item 4 is partially implemented (developer CLI); Item 5 is outstanding.** Detail and acceptance
 criteria: TODO.md §0a.
 
-1. ✅ **Authorization and audit correctness** (implemented 2026-10-15; open follow-ups in TODO
-   §0a) — audit + rate-limit (or remove) the unaudited
-   clinician AI search endpoint; require a VERIFIED hospital for `GET /patients/lookup`; refuse
-   duplicate pending requests / already-granted categories in the backend; make request expiry
-   visible in the inbox; 422 (not 500) for over-long upload filenames.
-2. **Granular consent decisions** in the patient portal — choose categories to approve/decline per
-   request; confirm before revoking.
-3. **SYSTEM_ADMIN provisioning and hospital verification** — a guarded provisioning path, a list
-   of pending hospitals, verification recorded with who/when, a minimal admin screen (no
-   separate admin app is authorized).
-4. **Demonstrable audit integrity (local)** — a runnable seal/reconcile entry point, v3
-   verification through batch membership, integrity status shown in the patient audit trail.
-   Public-chain anchoring stays out of scope (M6.4 not authorized).
-5. **FHIR R4 export** — a consent-enforced, audited, read-only Bundle export of granted, non-hidden
+1. ✅ **Authorization and audit correctness** (committed in `a09d41f`, `7c27aa0`) — audit + rate-limit
+   the clinician AI search endpoint (`AuditAction.RECORDS_SEARCHED`, `ai_search`); require a VERIFIED hospital
+   for `GET /patients/lookup` (409); refuse duplicate pending requests and already-granted categories in backend
+   with 409 under advisory locks; make request expiry visible in inbox and persist PENDING → EXPIRED; 422 for
+   over-long upload filenames (>255 chars).
+2. ✅ **Granular consent decisions in patient portal** (committed in `b08ba2a`) — choose categories to
+   approve/decline per request in UI; confirm before revoking; reconcile grants cleanly across page reloads.
+3. 🟡 **SYSTEM_ADMIN provisioning and hospital verification** (partially implemented in `b045f10`, `98f3b33`, `e48017a`, `96a2191`) —
+   guarded provisioning script (`scripts/dev_provision_system_admin.py`) setting Firebase custom claims;
+   admin hospital directory API (`GET /api/v1/hospitals`); dedicated System Admin dashboard with metrics and
+   verification controls in hospital portal (`AdminLayout`).
+   *Remaining gaps:* hospital verification does not yet persist verifier user ID or timestamp on the row,
+   nor emit an administrative audit log event; hospital rejection/suspension lifecycle is not implemented.
+4. 🟡 **Demonstrable audit integrity (local)** (partially implemented in `e350b2a`) — developer CLI workflow
+   (`scripts/audit_integrity.py`) supporting `seal`, `verify-batch`, `verify-event`, and `reconcile`
+   backed by `AuditBatchService`.
+   *Remaining gaps:* missing production-safety guard in CLI, scheduled background sealing daemon,
+   API v3 Merkle verification endpoint (`GET /audit-logs/{id}/verification` currently evaluates only
+   legacy per-event `audit_anchors`), and patient UI integration remain outstanding.
+   Public-chain anchoring stays deferred (Polygon Amoy / M6.4 not authorized).
+5. ⬜ **FHIR R4 export** (outstanding) — a consent-enforced, audited, read-only Bundle export of granted, non-hidden
    records, validated against R4 in tests; plus a `subject` consistency check in the importer.
 
 ---

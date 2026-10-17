@@ -42,10 +42,9 @@ jobs:
 
   backend-postgres:
     # Opt-in PostgreSQL integration tests (ADR-027): concurrent sealing, UUID ordering,
-    # integrity-error classification, and migration 0007 upgrade/parity/downgrade. A separate
-    # job so these run even while the backend job's lint/type steps fail on pre-existing
-    # findings. The service is a throwaway container that exists only for this job; its
-    # credentials are fixed test values, not secrets.
+    # integrity-error classification, and migration 0007 upgrade/parity/downgrade. The service
+    # is a throwaway container that exists only for this job; its credentials are fixed test
+    # values, not secrets.
     name: Backend PostgreSQL integration (opt-in tests)
     runs-on: ubuntu-latest
     defaults:

@@ -101,12 +101,11 @@ server that touches nothing else (no volume, removed on stop):
 -e POSTGRES_PASSWORD=<throwaway> -e POSTGRES_DB=pulseos_scratch -p 127.0.0.1:55432:5432
 --tmpfs /var/lib/postgresql/data pgvector/pgvector:pg16`, then `docker stop pulseos-pgtest`.
 
-**Recorded results (not a guarantee of the current tree):** 2026-10-15, `72b55e2` plus the
-uncommitted authorization and audit correctness changes, local — backend **1165 passed,
-25 skipped** without the URL (the 25 skips are the opt-in PostgreSQL tests) and **1190 passed,
-0 skipped** with it, against a disposable PostgreSQL 16.15 container; web **550 passed**
-(patient 184, hospital 162, doctor 156, ui 31, api-client 17). These are local runs, not
-GitHub Actions results.
+**Recorded results (not a guarantee of the current tree):** 2026-10-17, `d09d721`, local — backend
+**1209 passed, 25 skipped** without the URL (the 25 skips are the opt-in PostgreSQL tests);
+`mypy` clean (166 source files); `ruff check` and `ruff format` clean; web **611 passed**
+(hospital 199, patient 188, doctor 166, ui 34, api-client 24); web formatting, linting, and
+typechecking clean. CI workflow on GitHub Actions for `d09d721` was reported **GREEN** across all jobs (workflow run #17, user-provided evidence; logs not stored in repository).
 
 Rules: consent enforcement gets *negative* tests (wrong role, revoked grant, wrong patient) for
 every endpoint that touches records. External services (LLM, chain, S3, FCM) are faked in tests —
@@ -117,19 +116,11 @@ never live calls in CI. Coverage target ≥80% on `consent` and `records`; pragm
 On every PR and push to `main` (`.github/workflows/ci.yml`), with **no path filters** (docs-only
 changes run everything):
 
-- `backend` — `ruff format --check`, `ruff check`, `mypy`, `pytest`. The findings recorded on
-  2026-10-11 were fixed in `10bec8f`/`4d8e181`/`2cb0851`; the ruff findings `15b2d1b` added to
-  four test files are fixed in the working tree (uncommitted). Local run 2026-10-15: all four
-  steps clean. **At `72b55e2` as pushed, this job fails at `ruff format --check`** until that fix
-  is committed.
-- `backend-postgres` — a disposable PostgreSQL 16 service plus the opt-in PostgreSQL tests
-  (`test_audit_batches_postgres.py`, `test_alembic_postgres.py`, `test_consent_postgres.py` — the
-  file list is explicit; the third was added 2026-10-15, uncommitted); fails if any is skipped.
-  The same command passes locally against a disposable PostgreSQL 16.15 (25 passed, 0 skipped). **At `72b55e2` as pushed, two `test_alembic_postgres.py` tests fail**
-  (they upgraded to `head` and expected `0007`, which stopped being head when `15b2d1b` added
-  0008); pinned to `0007` in the working tree, uncommitted. GitHub run results have not been
-  checked here.
-- `web` — prettier, eslint, `tsc`, vitest. All clean locally at `72b55e2` (2026-10-14).
+- `backend` — `ruff format --check`, `ruff check`, `mypy`, `pytest`. All four steps clean.
+- `backend-postgres` — a disposable PostgreSQL 16 service running the opt-in PostgreSQL tests
+  (`test_audit_batches_postgres.py`, `test_alembic_postgres.py`, `test_consent_postgres.py`).
+  Passes with 25 passed, 0 skipped.
+- `web` — prettier, eslint, `tsc`, vitest. All clean across all 6 workspace packages.
 - There is no E2E job (see Testing Strategy).
 
 `make ci` runs the lint, typecheck and test targets locally; it does not run the opt-in PostgreSQL
