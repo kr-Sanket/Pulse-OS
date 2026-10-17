@@ -10,6 +10,8 @@ export interface HospitalReviewItem {
   name: string;
   address: string | null;
   status: HospitalVerificationStatus;
+  verifiedAt?: string | null;
+  verifiedByUserId?: string | null;
 }
 
 export const VERIFICATION_STATUS_CONFIG: Readonly<
@@ -33,7 +35,17 @@ export function toReviewItemFromResponse(hospital: Hospital): HospitalReviewItem
     name: hospital.name,
     address: hospital.address ?? null,
     status: hospital.verificationStatus,
+    verifiedAt: hospital.verifiedAt ?? null,
+    verifiedByUserId: hospital.verifiedByUserId ?? null,
   };
+}
+
+/**
+ * Shortens a verifier UUID for compact display (first 8 characters).
+ */
+export function formatVerifierId(userId: string | null | undefined): string | null {
+  if (!userId) return null;
+  return userId.slice(0, 8);
 }
 
 /**

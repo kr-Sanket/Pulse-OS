@@ -7,14 +7,18 @@ a disclosure test, because the whole design of the response is what it leaves ou
 """
 
 import re
-from uuid import uuid4
+from uuid import UUID
 
 import pytest
 from app.core.ratelimit import InMemoryRateLimiter
 from app.modules.auth.domain import Role
 from app.modules.auth.fake import FakeAuthProvider
+from app.modules.auth.models import User
 from app.modules.patients.health_id import generate_health_id, is_valid_health_id
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+from tests.support import run_with_session
 
 LOOKUP = "/api/v1/patients/lookup"
 PATIENT_REGISTER = "/api/v1/patients/register"
@@ -30,6 +34,25 @@ HOSPITAL_BODY = {
 
 def _bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _register_system_admin(
+    db_engine: AsyncEngine,
+    fake_auth: FakeAuthProvider,
+    token: str = "sysadmin",
+    firebase_uid: str = "fb-sysadmin",
+) -> UUID:
+    async def arrange(session: AsyncSession) -> UUID:
+        user = User(firebase_uid=firebase_uid, role=Role.SYSTEM_ADMIN)
+        session.add(user)
+        await session.flush()
+        return user.id
+
+    user_id = run_with_session(db_engine, arrange)
+    fake_auth.register_user(
+        token, user_id=user_id, firebase_uid=firebase_uid, role=Role.SYSTEM_ADMIN
+    )
+    return user_id
 
 
 def _refreshed(fake_auth: FakeAuthProvider, token: str, firebase_uid: str) -> dict[str, str]:
@@ -56,14 +79,12 @@ def _register_hospital(
 
 @pytest.fixture
 def admin_headers(
-    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None
+    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None, db_engine: AsyncEngine
 ) -> dict[str, str]:
     """An administrator of a VERIFIED hospital — verified through the real
     SYSTEM_ADMIN endpoint, as the platform would."""
     headers, hid = _register_hospital(client, fake_auth, "admin", "fb-admin")
-    fake_auth.register_user(
-        "sysadmin", user_id=uuid4(), firebase_uid="fb-sysadmin", role=Role.SYSTEM_ADMIN
-    )
+    _register_system_admin(db_engine, fake_auth, "sysadmin", "fb-sysadmin")
     verified = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin"))
     assert verified.status_code == 200, verified.text
     return headers
@@ -307,15 +328,13 @@ def test_a_pending_hospital_learns_nothing_about_which_health_ids_exist(
 
 
 def test_the_same_admin_can_look_up_once_their_hospital_is_verified(
-    client: TestClient, fake_auth: FakeAuthProvider, patient_health_id: str
+    client: TestClient, fake_auth: FakeAuthProvider, patient_health_id: str, db_engine: AsyncEngine
 ) -> None:
     headers, hid = _register_hospital(client, fake_auth, "late-admin", "fb-late-admin")
     params = {"healthId": patient_health_id}
     assert client.get(LOOKUP, params=params, headers=headers).status_code == 409
 
-    fake_auth.register_user(
-        "sysadmin-2", user_id=uuid4(), firebase_uid="fb-sysadmin-2", role=Role.SYSTEM_ADMIN
-    )
+    _register_system_admin(db_engine, fake_auth, "sysadmin-2", "fb-sysadmin-2")
     verified = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin-2"))
     assert verified.status_code == 200, verified.text
 

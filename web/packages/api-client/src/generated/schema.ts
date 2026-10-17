@@ -1873,6 +1873,10 @@ export interface components {
             /** Name */
             name: string;
             verificationStatus: components["schemas"]["HospitalVerificationStatus"];
+            /** Verifiedat */
+            verifiedAt?: string | null;
+            /** Verifiedbyuserid */
+            verifiedByUserId?: string | null;
         };
         /**
          * HospitalVerificationStatus

@@ -125,7 +125,7 @@ async def verify_hospital(
     Failure modes: 401, 403, 404 (unknown HID).
     """
     try:
-        hospital = await service.verify_hospital(hid)
+        hospital = await service.verify_hospital(hid, verifier_user_id=user.user_id)
     except RecordsError as exc:
         raise to_http_error(exc) from exc
     return HospitalResponse.model_validate(hospital)

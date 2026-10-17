@@ -253,3 +253,74 @@ def test_0008_downgrade_removes_notifications_table(tmp_path: Path) -> None:
 
     command.upgrade(config, "head")
     assert _table_names(db_file) >= NOTIFICATION_TABLES
+
+
+def test_0009_adds_verification_columns_and_fk(tmp_path: Path) -> None:
+    db_file = tmp_path / "hospitals_0009.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+    command.upgrade(config, "0009")
+
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        inspector = inspect(engine)
+        columns = {col["name"]: col for col in inspector.get_columns("hospitals")}
+        assert "verified_by_user_id" in columns
+        assert columns["verified_by_user_id"]["nullable"] is True
+        assert "verified_at" in columns
+        assert columns["verified_at"]["nullable"] is True
+
+        fks = inspector.get_foreign_keys("hospitals")
+        verif_fks = [fk for fk in fks if fk.get("constrained_columns") == ["verified_by_user_id"]]
+        assert len(verif_fks) == 1
+        assert verif_fks[0]["referred_table"] == "users"
+        assert verif_fks[0]["referred_columns"] == ["id"]
+    finally:
+        engine.dispose()
+
+
+def test_0009_matches_model_metadata() -> None:
+    from app.core.db import Base
+    from app.modules.records.models import Hospital  # noqa: F401
+
+    table = Base.metadata.tables["hospitals"]
+    col_names = set(table.columns.keys())
+    assert "verified_by_user_id" in col_names
+    assert "verified_at" in col_names
+    assert table.columns["verified_by_user_id"].nullable is True
+    assert table.columns["verified_at"].nullable is True
+
+    fk_by_col = {fk.parent.name: fk for fk in table.foreign_keys}
+    assert "verified_by_user_id" in fk_by_col
+    assert fk_by_col["verified_by_user_id"].target_fullname == "users.id"
+
+
+def test_0009_downgrade_removes_verification_columns_cleanly(tmp_path: Path) -> None:
+    db_file = tmp_path / "hospitals_down.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        cols_head = {col["name"] for col in inspect(engine).get_columns("hospitals")}
+        assert "verified_by_user_id" in cols_head
+        assert "verified_at" in cols_head
+    finally:
+        engine.dispose()
+
+    command.downgrade(config, "0008")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        cols_down = {col["name"] for col in inspect(engine).get_columns("hospitals")}
+        assert "verified_by_user_id" not in cols_down
+        assert "verified_at" not in cols_down
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        cols_reup = {col["name"] for col in inspect(engine).get_columns("hospitals")}
+        assert "verified_by_user_id" in cols_reup
+        assert "verified_at" in cols_reup
+    finally:
+        engine.dispose()

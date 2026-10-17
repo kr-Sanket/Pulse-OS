@@ -10,6 +10,7 @@ provider failure rolls everything back (the invariant established by the patient
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from app.modules.auth.accounts import UserAccountService
@@ -131,12 +132,22 @@ class HospitalService:
         )
         return HospitalRegistrationOutcome(hospital=hospital, admin=admin, created=True)
 
-    async def verify_hospital(self, hid: str) -> Hospital:
-        """SYSTEM_ADMIN marks a hospital VERIFIED (ADR-015 step 2). Idempotent."""
+    async def verify_hospital(self, hid: str, *, verifier_user_id: UUID) -> Hospital:
+        """SYSTEM_ADMIN marks a hospital VERIFIED (ADR-015 step 2).
+
+        ADM-01: Verification attribution is recorded when transitioning from a
+        non-VERIFIED state to VERIFIED.
+        Idempotent: If already VERIFIED, verification metadata is preserved and
+        not overwritten. Pre-verified legacy records with missing attribution
+        remain untouched.
+        """
         hospital = await self._hospitals.get_by_hid(hid.strip().upper())
         if hospital is None:
             raise HospitalNotFoundError()
-        hospital.verification_status = HospitalVerificationStatus.VERIFIED
+        if hospital.verification_status != HospitalVerificationStatus.VERIFIED:
+            hospital.verification_status = HospitalVerificationStatus.VERIFIED
+            hospital.verified_by_user_id = verifier_user_id
+            hospital.verified_at = datetime.now(UTC)
         return hospital
 
     async def list_hospitals(

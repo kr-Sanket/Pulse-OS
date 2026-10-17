@@ -471,3 +471,17 @@ def test_access_request_creation_declares_the_duplicate_conflict() -> None:
 def test_the_patient_lookup_declares_the_unverified_hospital_conflict() -> None:
     operation = _spec()["paths"]["/api/v1/patients/lookup"]["get"]
     assert {"200", "409", "422", "429"} <= set(operation["responses"])
+
+
+def test_hospital_response_schema_exposes_verification_attribution_fields() -> None:
+    """ADM-01: HospitalResponse exposes verifiedByUserId and verifiedAt on wire."""
+    schema = _spec()["components"]["schemas"]["HospitalResponse"]
+    assert set(schema["properties"]) == {
+        "hid",
+        "name",
+        "address",
+        "verificationStatus",
+        "createdAt",
+        "verifiedByUserId",
+        "verifiedAt",
+    }

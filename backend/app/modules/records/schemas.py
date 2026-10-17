@@ -4,7 +4,7 @@ Upload requests arrive as multipart form fields (not JSON), so they are declared
 router with ``Form(...)``; the models here are the JSON bodies and all responses.
 """
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from pydantic import Field, StrictBool, field_validator
@@ -60,6 +60,15 @@ class HospitalResponse(ApiModel):
     address: str | None
     verification_status: HospitalVerificationStatus
     created_at: datetime
+    verified_by_user_id: UUID | None = None
+    verified_at: datetime | None = None
+
+    @field_validator("verified_at", mode="after")
+    @classmethod
+    def _ensure_utc(cls, v: datetime | None) -> datetime | None:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=UTC)
+        return v
 
 
 class HospitalListResponse(ApiModel):

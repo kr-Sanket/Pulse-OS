@@ -5,13 +5,17 @@ transactions behave exactly as in production. Every endpoint gets its negative-a
 tests (docs/DEVELOPMENT_GUIDE.md §Testing).
 """
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from app.modules.auth.domain import Role
 from app.modules.auth.errors import AuthProviderUnavailableError
 from app.modules.auth.fake import FakeAuthProvider
+from app.modules.auth.models import User
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+from tests.support import run_with_session
 
 HOSPITAL_REGISTER = "/api/v1/hospitals/register"
 HOSPITAL_ME = "/api/v1/hospitals/me"
@@ -27,6 +31,25 @@ HOSPITAL_BODY = {
 
 def _bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _register_system_admin(
+    db_engine: AsyncEngine,
+    fake_auth: FakeAuthProvider,
+    token: str = "sysadmin",
+    firebase_uid: str = "fb-sys",
+) -> UUID:
+    async def arrange(session: AsyncSession) -> UUID:
+        user = User(firebase_uid=firebase_uid, role=Role.SYSTEM_ADMIN)
+        session.add(user)
+        await session.flush()
+        return user.id
+
+    user_id = run_with_session(db_engine, arrange)
+    fake_auth.register_user(
+        token, user_id=user_id, firebase_uid=firebase_uid, role=Role.SYSTEM_ADMIN
+    )
+    return user_id
 
 
 @pytest.fixture
@@ -124,7 +147,10 @@ def test_hospitals_me_returns_own_hospital(
 
 
 def test_verify_hospital_is_system_admin_only_and_idempotent(
-    client: TestClient, fake_auth: FakeAuthProvider, admin_signup: str
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    admin_signup: str,
+    db_engine: AsyncEngine,
 ) -> None:
     admin_headers = _register_admin(client, fake_auth, admin_signup)
     hid = client.get(HOSPITAL_ME, headers=admin_headers).json()["hospital"]["hid"]
@@ -132,23 +158,39 @@ def test_verify_hospital_is_system_admin_only_and_idempotent(
     # The hospital's own admin cannot self-verify (RBAC: System Admin verifies).
     assert client.post(f"/api/v1/hospitals/{hid}/verify", headers=admin_headers).status_code == 403
 
-    fake_auth.register_user(
-        "sysadmin", user_id=uuid4(), firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN
-    )
-    first = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin"))
-    assert first.status_code == 200
-    assert first.json()["verificationStatus"] == "VERIFIED"
-    again = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin"))
-    assert again.status_code == 200  # idempotent
+    # Other non-system-admin callers cannot verify (e.g. PATIENT, DOCTOR)
+    fake_auth.register_user("pat", user_id=uuid4(), firebase_uid="fb-pat-verif", role=Role.PATIENT)
+    assert client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("pat")).status_code == 403
+    fake_auth.register_user("doc", user_id=uuid4(), firebase_uid="fb-doc-verif", role=Role.DOCTOR)
+    assert client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("doc")).status_code == 403
 
-    missing = client.post("/api/v1/hospitals/HID-9999/verify", headers=_bearer("sysadmin"))
+    # First verification records administrator UUID and UTC timestamp
+    sysadmin_1_id = _register_system_admin(db_engine, fake_auth, "sysadmin-1", "fb-sys-1")
+    first = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin-1"))
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["verificationStatus"] == "VERIFIED"
+    assert first_body["verifiedByUserId"] == str(sysadmin_1_id)
+    assert first_body["verifiedAt"] is not None
+    first_verified_at = first_body["verifiedAt"]
+
+    # Repeated verification preserves original attribution (idempotent)
+    _register_system_admin(db_engine, fake_auth, "sysadmin-2", "fb-sys-2")
+    again = client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin-2"))
+    assert again.status_code == 200
+    again_body = again.json()
+    assert again_body["verificationStatus"] == "VERIFIED"
+    assert again_body["verifiedByUserId"] == str(sysadmin_1_id)
+    assert again_body["verifiedAt"] == first_verified_at
+
+    missing = client.post("/api/v1/hospitals/HID-9999/verify", headers=_bearer("sysadmin-1"))
     assert missing.status_code == 404
 
 
-def _verify(client: TestClient, fake_auth: FakeAuthProvider, hid: str) -> None:
-    fake_auth.register_user(
-        "sysadmin", user_id=uuid4(), firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN
-    )
+def _verify(
+    client: TestClient, fake_auth: FakeAuthProvider, hid: str, db_engine: AsyncEngine
+) -> None:
+    _register_system_admin(db_engine, fake_auth, "sysadmin", "fb-sys-shared")
     assert (
         client.post(f"/api/v1/hospitals/{hid}/verify", headers=_bearer("sysadmin")).status_code
         == 200
@@ -156,7 +198,7 @@ def _verify(client: TestClient, fake_auth: FakeAuthProvider, hid: str) -> None:
 
 
 def test_doctor_registration_and_management_flow(
-    client: TestClient, fake_auth: FakeAuthProvider, admin_signup: str
+    client: TestClient, fake_auth: FakeAuthProvider, admin_signup: str, db_engine: AsyncEngine
 ) -> None:
     admin_headers = _register_admin(client, fake_auth, admin_signup)
     hid = client.get(HOSPITAL_ME, headers=admin_headers).json()["hospital"]["hid"]
@@ -172,7 +214,7 @@ def test_doctor_registration_and_management_flow(
     blocked = client.post(DOCTORS_REGISTER, json=doctor_body, headers=_bearer("doc-signup"))
     assert blocked.status_code == 409
 
-    _verify(client, fake_auth, hid)
+    _verify(client, fake_auth, hid, db_engine)
 
     created = client.post(DOCTORS_REGISTER, json=doctor_body, headers=_bearer("doc-signup"))
     assert created.status_code == 201
@@ -256,7 +298,10 @@ def test_unprovisioned_rows_yield_404_profiles(
 
 
 def test_list_hospitals_system_admin_only_and_filters(
-    client: TestClient, fake_auth: FakeAuthProvider, admin_signup: str
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    admin_signup: str,
+    db_engine: AsyncEngine,
 ) -> None:
     # 1. Unauthenticated -> 401
     assert client.get("/api/v1/hospitals").status_code == 401
@@ -269,12 +314,10 @@ def test_list_hospitals_system_admin_only_and_filters(
     assert client.get("/api/v1/hospitals", headers=admin_headers).status_code == 403
 
     # 3. System Admin -> 200
-    fake_auth.register_user(
-        "sysadmin", user_id=uuid4(), firebase_uid="fb-sys", role=Role.SYSTEM_ADMIN
-    )
-    sys_headers = _bearer("sysadmin")
+    sysadmin_id = _register_system_admin(db_engine, fake_auth, "sysadmin-list", "fb-sys-list")
+    sys_headers = _bearer("sysadmin-list")
 
-    # The registered hospital starts PENDING
+    # The registered hospital starts PENDING with null attribution
     all_res = client.get("/api/v1/hospitals", headers=sys_headers)
     assert all_res.status_code == 200
     data = all_res.json()
@@ -283,6 +326,8 @@ def test_list_hospitals_system_admin_only_and_filters(
     hospital = data["items"][0]
     assert hospital["name"] == "Sunrise Clinic"
     assert hospital["verificationStatus"] == "PENDING"
+    assert hospital["verifiedByUserId"] is None
+    assert hospital["verifiedAt"] is None
     hid = hospital["hid"]
 
     # Filter ?status=PENDING -> returns 1
@@ -299,12 +344,17 @@ def test_list_hospitals_system_admin_only_and_filters(
     verify_res = client.post(f"/api/v1/hospitals/{hid}/verify", headers=sys_headers)
     assert verify_res.status_code == 200
     assert verify_res.json()["verificationStatus"] == "VERIFIED"
+    assert verify_res.json()["verifiedByUserId"] == str(sysadmin_id)
+    assert verify_res.json()["verifiedAt"] is not None
 
-    # Now ?status=VERIFIED -> returns 1
+    # Now ?status=VERIFIED -> returns 1 with attribution
     verified_after = client.get("/api/v1/hospitals?status=VERIFIED", headers=sys_headers)
     assert verified_after.status_code == 200
     assert len(verified_after.json()["items"]) == 1
-    assert verified_after.json()["items"][0]["hid"] == hid
+    item = verified_after.json()["items"][0]
+    assert item["hid"] == hid
+    assert item["verifiedByUserId"] == str(sysadmin_id)
+    assert item["verifiedAt"] is not None
 
     # And ?status=PENDING -> returns 0
     pending_after = client.get("/api/v1/hospitals?status=PENDING", headers=sys_headers)

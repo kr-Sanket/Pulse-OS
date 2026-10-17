@@ -5,9 +5,9 @@
 
 import { Building2, CheckCircle2, Clock } from "lucide-react";
 
-import { Badge, Button, Card, CardContent } from "@pulseos/ui";
+import { Badge, Button, Card, CardContent, formatInstantDate } from "@pulseos/ui";
 import { StatusBadge } from "@/components/shell/StatusBadge";
-import { VERIFICATION_STATUS_CONFIG, type HospitalReviewItem } from "../view";
+import { formatVerifierId, VERIFICATION_STATUS_CONFIG, type HospitalReviewItem } from "../view";
 
 export interface HospitalVerificationCardProps {
   hospital: HospitalReviewItem;
@@ -50,22 +50,36 @@ export function HospitalVerificationCard({
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t text-xs">
-          <div className="text-muted-foreground flex items-center gap-1.5">
+          <div className="text-muted-foreground flex items-start gap-1.5 min-w-0">
             {isVerified ? (
-              <>
-                <CheckCircle2
-                  className="size-3.5 text-emerald-600 dark:text-emerald-400"
+              <div className="space-y-0.5 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2
+                    className="size-3.5 text-emerald-600 dark:text-emerald-400 shrink-0"
+                    aria-hidden
+                  />
+                  <span>Verified: Organization can register doctors and upload records.</span>
+                </div>
+                {hospital.verifiedAt || hospital.verifiedByUserId ? (
+                  <p className="text-muted-foreground/80 pl-5 text-[11px]">
+                    Verified
+                    {hospital.verifiedAt ? ` on ${formatInstantDate(hospital.verifiedAt)}` : ""}
+                    {hospital.verifiedByUserId
+                      ? ` by Admin (${formatVerifierId(hospital.verifiedByUserId)})`
+                      : ""}
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <Clock
+                  className="size-3.5 text-amber-600 dark:text-amber-400 shrink-0"
                   aria-hidden
                 />
-                <span>Verified: Organization can register doctors and upload records.</span>
-              </>
-            ) : (
-              <>
-                <Clock className="size-3.5 text-amber-600 dark:text-amber-400" aria-hidden />
                 <span>
                   Awaiting verification: Doctors and record uploads are currently blocked.
                 </span>
-              </>
+              </div>
             )}
           </div>
 

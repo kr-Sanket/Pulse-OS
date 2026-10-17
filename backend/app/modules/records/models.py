@@ -14,10 +14,10 @@ no ORM relationship crosses a module boundary (docs/SYSTEM_ARCHITECTURE.md rule 
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, Boolean, Date, Enum, ForeignKey, String, Uuid
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -80,6 +80,10 @@ class Hospital(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         default=HospitalVerificationStatus.PENDING,
     )
+    verified_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("users.id"), nullable=True
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RecordCategory(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -15,12 +15,13 @@ import {
   CardHeader,
   CardTitle,
   Skeleton,
+  formatInstantDate,
 } from "@pulseos/ui";
 
 import { ErrorState } from "@/components/common/ErrorState";
 import { StatusBadge } from "@/components/shell/StatusBadge";
 import { useAdminDashboard, type AdminDashboardState } from "@/admin/useAdminDashboard";
-import { VERIFICATION_STATUS_CONFIG } from "@/admin/view";
+import { formatVerifierId, VERIFICATION_STATUS_CONFIG } from "@/admin/view";
 
 export interface AdminDashboardPageProps {
   state?: AdminDashboardState;
@@ -268,6 +269,18 @@ export function AdminDashboardPage({ state: injectedState }: AdminDashboardPageP
                           <p className="text-muted-foreground text-xs truncate mt-0.5">
                             {hospital.address ?? "No address recorded"}
                           </p>
+                          {hospital.status === "VERIFIED" &&
+                          (hospital.verifiedAt || hospital.verifiedByUserId) ? (
+                            <p className="text-muted-foreground/80 text-[11px] truncate mt-0.5">
+                              Verified
+                              {hospital.verifiedAt
+                                ? ` on ${formatInstantDate(hospital.verifiedAt)}`
+                                : ""}
+                              {hospital.verifiedByUserId
+                                ? ` by Admin (${formatVerifierId(hospital.verifiedByUserId)})`
+                                : ""}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
                           <StatusBadge tone={statusConfig.tone}>{statusConfig.label}</StatusBadge>

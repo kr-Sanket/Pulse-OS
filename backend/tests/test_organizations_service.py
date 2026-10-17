@@ -8,6 +8,7 @@ import pytest
 from app.modules.auth.accounts import UserAccountService
 from app.modules.auth.domain import Role
 from app.modules.auth.fake import FakeAuthProvider
+from app.modules.auth.models import User
 from app.modules.auth.provider import VerifiedToken
 from app.modules.auth.repository import UserRepository
 from app.modules.auth.service import ROLE_CLAIM, USER_ID_CLAIM
@@ -19,7 +20,7 @@ from app.modules.records.errors import (
     OrgRegistrationConflictError,
     ProfileNotFoundError,
 )
-from app.modules.records.models import DoctorStatus, HospitalVerificationStatus
+from app.modules.records.models import DoctorStatus, Hospital, HospitalVerificationStatus
 from app.modules.records.organizations import HospitalService, generate_hid
 from app.modules.records.repository import (
     DoctorRepository,
@@ -164,13 +165,60 @@ def test_verify_hospital_is_idempotent_and_404s_unknown() -> None:
             outcome = await service.register_hospital(
                 ADMIN_IDENTITY, hospital_name="A", hospital_address=None, admin_full_name="R"
             )
-            verified = await service.verify_hospital(outcome.hospital.hid.lower())  # sloppy input
-            assert verified.verification_status is HospitalVerificationStatus.VERIFIED
-            again = await service.verify_hospital(outcome.hospital.hid)
-            assert again.verification_status is HospitalVerificationStatus.VERIFIED
+            admin_1_id = uuid4()
+            admin_2_id = uuid4()
+            await UserRepository(session).add(
+                User(id=admin_1_id, firebase_uid="fb-sys-1", role=Role.SYSTEM_ADMIN)
+            )
+            await UserRepository(session).add(
+                User(id=admin_2_id, firebase_uid="fb-sys-2", role=Role.SYSTEM_ADMIN)
+            )
 
+            # 1. Verification records administrator UUID and UTC timestamp
+            verified = await service.verify_hospital(
+                outcome.hospital.hid.lower(), verifier_user_id=admin_1_id
+            )
+            assert verified.verification_status is HospitalVerificationStatus.VERIFIED
+            assert verified.verified_by_user_id == admin_1_id
+            assert verified.verified_at is not None
+            assert verified.verified_at.tzinfo is not None
+            first_verified_at = verified.verified_at
+
+            # 2. Repeated verification preserves original verifier UUID and timestamp (idempotency)
+            again = await service.verify_hospital(outcome.hospital.hid, verifier_user_id=admin_2_id)
+            assert again.verification_status is HospitalVerificationStatus.VERIFIED
+            assert again.verified_by_user_id == admin_1_id
+            assert again.verified_at == first_verified_at
+
+            # 3. 404 for unknown hospital
             with pytest.raises(HospitalNotFoundError):
-                await service.verify_hospital("HID-9999")
+                await service.verify_hospital("HID-9999", verifier_user_id=admin_1_id)
+
+            # 4. Legacy already-VERIFIED hospital without attribution is not falsely attributed
+            legacy_hospital = await HospitalRepository(session).add(
+                Hospital(
+                    id=uuid4(),
+                    hid="HID-0050",
+                    name="Legacy Hospital",
+                    address="Legacy Way",
+                    verification_status=HospitalVerificationStatus.VERIFIED,
+                )
+            )
+            assert legacy_hospital.verified_by_user_id is None
+            assert legacy_hospital.verified_at is None
+
+            re_verify = await service.verify_hospital(
+                legacy_hospital.hid, verifier_user_id=admin_2_id
+            )
+            assert re_verify.verification_status is HospitalVerificationStatus.VERIFIED
+            assert re_verify.verified_by_user_id is None
+            assert re_verify.verified_at is None
+
+            # 5. Existing hospitals with NULL metadata remain readable in list_hospitals
+            hospitals = await service.list_hospitals()
+            hids = {h.hid for h in hospitals}
+            assert outcome.hospital.hid in hids
+            assert "HID-0050" in hids
 
     asyncio.run(scenario())
 
@@ -244,7 +292,11 @@ def test_doctor_management_is_scoped_to_the_admins_hospital() -> None:
             admin = await service.register_hospital(
                 ADMIN_IDENTITY, hospital_name="Mine", hospital_address=None, admin_full_name="R"
             )
-            await service.verify_hospital(admin.hospital.hid)
+            sys_admin_id = uuid4()
+            await UserRepository(session).add(
+                User(id=sys_admin_id, firebase_uid="fb-sys-doc-manage", role=Role.SYSTEM_ADMIN)
+            )
+            await service.verify_hospital(admin.hospital.hid, verifier_user_id=sys_admin_id)
             mine = await service.register_doctor(
                 DOCTOR_IDENTITY,
                 full_name="Dr. Mine",
@@ -336,7 +388,11 @@ def test_list_hospitals_empty_and_filtered() -> None:
             assert len(verified_only) == 0
 
             # Verify hospital 1
-            await service.verify_hospital(h1.hospital.hid)
+            sys_admin_id = uuid4()
+            await UserRepository(session).add(
+                User(id=sys_admin_id, firebase_uid="fb-sys-list-hosp", role=Role.SYSTEM_ADMIN)
+            )
+            await service.verify_hospital(h1.hospital.hid, verifier_user_id=sys_admin_id)
 
             verified_after = await service.list_hospitals(
                 verification_status=HospitalVerificationStatus.VERIFIED

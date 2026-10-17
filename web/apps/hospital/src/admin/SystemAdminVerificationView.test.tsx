@@ -70,6 +70,41 @@ describe("HospitalVerificationCard", () => {
     expect(html).toContain('disabled=""');
   });
 
+  it("renders verification timestamp and shortened verifier UUID when attribution is present", () => {
+    const onVerify = vi.fn();
+    const attributedHospital: HospitalReviewItem = {
+      ...BASE_HOSPITAL,
+      status: "VERIFIED",
+      verifiedAt: "2026-10-17T12:00:00Z",
+      verifiedByUserId: "98765432-1234-5678-90ab-cdef01234567",
+    };
+
+    const html = renderToString(
+      <HospitalVerificationCard hospital={attributedHospital} busy={false} onVerify={onVerify} />,
+    );
+
+    expect(html).toContain("Verified");
+    expect(html).toContain("Admin (98765432)");
+  });
+
+  it("handles missing attribution metadata gracefully for legacy VERIFIED hospitals", () => {
+    const onVerify = vi.fn();
+    const legacyHospital: HospitalReviewItem = {
+      ...BASE_HOSPITAL,
+      status: "VERIFIED",
+      verifiedAt: null,
+      verifiedByUserId: null,
+    };
+
+    const html = renderToString(
+      <HospitalVerificationCard hospital={legacyHospital} busy={false} onVerify={onVerify} />,
+    );
+
+    expect(html).toContain("Verified");
+    expect(html).toContain("Organization can register doctors and upload records");
+    expect(html).not.toContain("Admin (");
+  });
+
   it("renders busy state and disables actions while verification is in-flight", () => {
     const onVerify = vi.fn();
     const html = renderToString(

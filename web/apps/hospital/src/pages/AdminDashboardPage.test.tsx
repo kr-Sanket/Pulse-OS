@@ -148,4 +148,42 @@ describe("AdminDashboardPage", () => {
     expect(html).toContain("Access denied");
     expect(html).toContain("Try Again");
   });
+
+  it("renders verification attribution for verified hospital and handles legacy record without attribution", () => {
+    const mockState: AdminDashboardState = {
+      loading: false,
+      error: null,
+      metrics: { totalCount: 2, pendingCount: 0, verifiedCount: 2 },
+      pendingHospitals: [],
+      allHospitals: [
+        {
+          hid: "HID-0001",
+          name: "Tata Main Hospital",
+          address: "Jamshedpur, JH",
+          status: "VERIFIED",
+          verifiedAt: "2026-10-17T14:30:00Z",
+          verifiedByUserId: "11112222-3333-4444-5555-666677778888",
+        },
+        {
+          hid: "HID-0002",
+          name: "Legacy Hospital",
+          address: "Vellore, TN",
+          status: "VERIFIED",
+          verifiedAt: null,
+          verifiedByUserId: null,
+        },
+      ],
+      refresh: vi.fn(),
+    };
+
+    const html = renderToString(
+      <MemoryRouter>
+        <AdminDashboardPage state={mockState} />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain("Tata Main Hospital");
+    expect(html).toContain("Admin (11112222)");
+    expect(html).toContain("Legacy Hospital");
+  });
 });
