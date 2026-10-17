@@ -20,11 +20,14 @@ from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.repository import PatientRepository
 from app.modules.records.errors import (
     ClinicianNotActiveError,
+    ConsentRequiredError,
     DoctorNotFoundError,
     EmptyFileError,
+    FHIRSerializationError,
     FileTooLargeError,
     HospitalNotFoundError,
     HospitalNotVerifiedError,
+    InvalidExportRequestError,
     OrgRegistrationConflictError,
     ProfileNotFoundError,
     RecordNotFoundError,
@@ -90,6 +93,14 @@ def to_http_error(exc: RecordsError) -> HTTPException:
         )
     if isinstance(exc, StorageUnavailableError):
         return HTTPException(status_code=503, detail="File storage is unavailable.")
+    if isinstance(exc, ConsentRequiredError):
+        return HTTPException(
+            status_code=403, detail="Active consent is required to export patient records."
+        )
+    if isinstance(exc, InvalidExportRequestError):
+        return HTTPException(status_code=422, detail=exc.detail)
+    if isinstance(exc, FHIRSerializationError):
+        return HTTPException(status_code=500, detail="Failed to serialize FHIR export bundle.")
     # Any RecordsError without a specific mapping is a server-side problem.
     return HTTPException(status_code=500, detail="The operation failed unexpectedly.")
 
@@ -188,6 +199,7 @@ def get_record_service(
         grant_scope=consent,
         listing_auditor=consent,
         record_auditor=consent,
+        export_auditor=consent,
         presign_ttl_seconds=settings.s3_presign_ttl_seconds,
         max_upload_bytes=settings.records_max_upload_bytes,
     )

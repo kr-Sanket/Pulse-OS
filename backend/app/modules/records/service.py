@@ -33,14 +33,20 @@ from app.modules.consent.models import AuditAction
 from app.modules.patients.directory import PatientDirectoryService
 from app.modules.records.errors import (
     ClinicianNotActiveError,
+    ConsentRequiredError,
     EmptyFileError,
     FileTooLargeError,
     HospitalNotVerifiedError,
+    InvalidExportRequestError,
     ProfileNotFoundError,
     RecordNotFoundError,
     UnknownCategoryError,
     UnknownPatientError,
     UnsupportedFileTypeError,
+)
+from app.modules.records.fhir_export import (
+    create_fhir_bundle,
+    serialize_bundle_to_json,
 )
 from app.modules.records.models import (
     DoctorStatus,
@@ -180,6 +186,25 @@ class RecordAuditor(Protocol):
     ) -> None: ...
 
 
+class ExportAuditor(Protocol):
+    """How a FHIR clinical record export reaches the patient's audit trail (FHIR-01).
+
+    A fifth seam beside ConsentEnforcer, GrantScope, ListingAuditor, and RecordAuditor.
+    Writes RECORD_EXPORTED on success, or ACCESS_DENIED when an unconsented clinician
+    attempts to export records.
+    """
+
+    async def record_export(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID] | None = None,
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class FileUpload:
     """The validated-at-the-boundary upload payload, already fully read into memory
@@ -241,6 +266,7 @@ class RecordService:
         grant_scope: GrantScope,
         listing_auditor: ListingAuditor,
         record_auditor: RecordAuditor,
+        export_auditor: ExportAuditor | None = None,
         *,
         presign_ttl_seconds: int,
         max_upload_bytes: int,
@@ -254,15 +280,19 @@ class RecordService:
         self._patients = patients
         self._storage = storage
         self._queue = queue
-        # Four names, one collaborator in production (ADR-016 direction 2, ADR-020,
-        # ADR-022): asking permission, asking what is in scope, recording that a listing
-        # happened, and recording the events that never reach the choke point are
-        # different questions, and a seam per question is what keeps the first from being
-        # answered by the second.
+        # Five names, one collaborator in production (ADR-016 direction 2, ADR-020,
+        # ADR-022, FHIR-01): asking permission, asking what is in scope, recording that
+        # a listing happened, recording events that never reach the choke point, and
+        # recording exports are different questions, and a seam per question keeps them apart.
         self._consent = consent
         self._grant_scope = grant_scope
         self._listing_auditor = listing_auditor
         self._record_auditor = record_auditor
+        self._export_auditor = (
+            export_auditor
+            if export_auditor is not None
+            else (consent if hasattr(consent, "record_export") else None)
+        )
         self._presign_ttl_seconds = presign_ttl_seconds
         self.max_upload_bytes = max_upload_bytes
         self._now = clock
@@ -577,6 +607,115 @@ class RecordService:
             content_type=view.record.content_type,
         )
         return DownloadLink(url=url, expires_in_seconds=self._presign_ttl_seconds)
+
+    # -- FHIR export -------------------------------------------------------------------
+
+    async def export_fhir(
+        self,
+        caller: AuthenticatedUser,
+        *,
+        patient_health_id: str | None = None,
+        request_context: str | None = None,
+    ) -> bytes:
+        """Export consented clinical records for a patient as a canonical FHIR R4 Bundle.
+
+        Authorization and scope:
+        - PATIENT: Caller exports their own locker records. ``patient_health_id`` must be absent
+          (the target patient is derived strictly from the caller's authenticated user identity).
+          Scope covers all categories, including hidden records.
+        - DOCTOR: Caller must be an ACTIVE clinician. ``patient_health_id`` is required and
+          resolved to the patient. Active consent is checked at the current instant via
+          ``_grant_scope.granted_category_ids``. If no categories are granted (or consent is
+          expired/revoked), ACCESS_DENIED is audited and ConsentRequiredError is raised.
+          Otherwise, records are selected strictly within the granted categories and hidden
+          records are excluded at the repository/database level.
+        - Other roles (HOSPITAL_ADMIN, SYSTEM_ADMIN): Refused.
+
+        Concurrency & isolation note:
+        The authorization decision time is captured at ``at = self._now()``. Under Read Committed
+        isolation, concurrent grant revocations committed before the grant check takes effect
+        immediately; this transaction does not claim to eliminate race conditions if a grant is
+        revoked concurrently after the read check.
+
+        Audit:
+        Exactly one RECORD_EXPORTED event is recorded upon successful bundle assembly.
+        If serialization fails or storage is unavailable, the transaction rolls back and no
+        success audit event is committed.
+        """
+        at = self._now()
+
+        if caller.role is Role.PATIENT:
+            if patient_health_id is not None:
+                raise InvalidExportRequestError(
+                    "patientHealthId must not be provided for patient self-export."
+                )
+            patient = await self._patients.get_by_user_id(caller.user_id)
+            if patient is None:
+                raise ProfileNotFoundError()
+            granted_category_ids = None
+            include_hidden = True
+
+        elif caller.role is Role.DOCTOR:
+            if not patient_health_id:
+                raise InvalidExportRequestError("patientHealthId is required for clinician export.")
+            doctor = await self._doctors.get_by_user_id(caller.user_id)
+            if doctor is None:
+                raise ProfileNotFoundError()
+            if doctor.status is not DoctorStatus.ACTIVE:
+                raise ClinicianNotActiveError()
+
+            patient = await self._patients.get_by_health_id(patient_health_id)
+            if patient is None:
+                raise UnknownPatientError()
+
+            granted = await self._grant_scope.granted_category_ids(
+                caller, patient_id=patient.id, at=at
+            )
+            if not granted:
+                if self._export_auditor is not None:
+                    await self._export_auditor.record_export(
+                        caller,
+                        patient_id=patient.id,
+                        granted_category_ids=frozenset(),
+                        at=at,
+                        request_context=request_context,
+                    )
+                raise ConsentRequiredError()
+
+            granted_category_ids = granted
+            include_hidden = False
+
+        else:
+            raise ClinicianNotActiveError()
+
+        # Retrieve candidate records from database using SQL-level scoping
+        records = await self._records.list_for_export(
+            patient_id=patient.id,
+            category_ids=granted_category_ids,
+            include_hidden=include_hidden,
+        )
+
+        # Retrieve stored objects from object storage
+        records_and_payloads: list[tuple[MedicalRecord, bytes]] = []
+        for record in records:
+            payload = await self._storage.get_object(record.s3_key)
+            records_and_payloads.append((record, payload))
+
+        # Pure serialization and subject validation
+        bundle_dict = create_fhir_bundle(patient, records_and_payloads, timestamp=at)
+        bundle_bytes = serialize_bundle_to_json(bundle_dict)
+
+        # Audit successful export
+        if self._export_auditor is not None:
+            await self._export_auditor.record_export(
+                caller,
+                patient_id=patient.id,
+                granted_category_ids=granted_category_ids,
+                at=at,
+                request_context=request_context,
+            )
+
+        return bundle_bytes
 
     # -- patient-controlled visibility -------------------------------------------------
 

@@ -12,7 +12,17 @@ from http import HTTPStatus
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
 
 from app.core.errors import problem_response
@@ -57,6 +67,11 @@ RecordActor = Annotated[AuthenticatedUser, Depends(RequireRecordActor)]
 # is absent from both gates: no admin break-glass exists (docs/SECURITY.md).
 RequireRecordReader = require_role(Role.PATIENT, Role.HOSPITAL_ADMIN, Role.DOCTOR)
 RecordReader = Annotated[AuthenticatedUser, Depends(RequireRecordReader)]
+
+# Exporting records admits only patients (self-export) and doctors (consent-scoped export).
+# Hospital admins and platform admins have no clinical export capability (FHIR-01).
+RequireExportActor = require_role(Role.PATIENT, Role.DOCTOR)
+ExportActor = Annotated[AuthenticatedUser, Depends(RequireExportActor)]
 
 # Discovering that records exist is a clinician-only capability: a patient already knows
 # what they hold, and no hospital or platform admin has any reason to probe a Health ID.
@@ -258,6 +273,55 @@ async def list_record_existence(
     return RecordExistenceResponse(
         items=[RecordCategoryResponse.model_validate(category) for category in categories]
     )
+
+
+@records_router.get(
+    "/export/fhir",
+    response_model=None,
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"application/fhir+json": {}},
+            "description": "FHIR R4 collection Bundle of the patient's clinical records.",
+        },
+        401: {"description": "Unauthenticated or revoked token."},
+        403: {"description": "Forbidden (unauthorized role or missing/expired/revoked consent)."},
+        404: {"description": "Patient or doctor profile not found."},
+        422: {"description": "Validation error (invalid parameters or patientHealthId mismatch)."},
+    },
+)
+async def export_patient_fhir(
+    request: Request,
+    user: ExportActor,
+    service: RecordServiceDep,
+    request_context: RequestContextDep,
+    patient_health_id: Annotated[
+        str | None, Query(alias="patientHealthId", min_length=1, max_length=20)
+    ] = None,
+) -> Response:
+    """Export consented clinical records as a canonical FHIR R4 Bundle.
+
+    Roles:
+    - PATIENT: Exports their own clinical records across all categories. `patientHealthId`
+      must be absent (identity derived strictly from token).
+    - DOCTOR: Exports records within active consent scope for the patient specified by
+      `patientHealthId`. If no active grant exists (or consent is expired/revoked), access
+      is denied and audited as ACCESS_DENIED.
+    Hospital admins and platform admins are rejected with 403.
+
+    Returns:
+    Direct FHIR R4 Bundle (type: collection) with Content-Type: application/fhir+json.
+    """
+    try:
+        bundle_bytes = await service.export_fhir(
+            user,
+            patient_health_id=patient_health_id,
+            request_context=request_context,
+        )
+    except RecordsError as exc:
+        return _problem(request, exc)
+
+    return Response(content=bundle_bytes, media_type="application/fhir+json")
 
 
 @records_router.get("/{record_id}", response_model=RecordMetadataResponse)

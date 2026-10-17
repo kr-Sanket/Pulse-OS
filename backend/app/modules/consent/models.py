@@ -126,6 +126,11 @@ class AuditAction(StrEnum):
     shape as a listing: one scope-level row, no target. Rows written before it existed keep
     ``RECORDS_LISTED``; nothing is rewritten.
 
+    ``RECORD_EXPORTED`` extends it a fourth time (FHIR-01): a patient self-export or a
+    consented clinician's export of structured FHIR R4 clinical records. Like listings,
+    an export spans a scope of records, so it sets none of the three target columns;
+    ``patient_id`` carries the subject.
+
     ``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own
     ADR (.claude/TODO.md parking lot), and an unused member here would imply a capability
     that docs/SECURITY.md's no-break-glass invariant denies.
@@ -142,6 +147,7 @@ class AuditAction(StrEnum):
     ACCESS_DENIED = "ACCESS_DENIED"
     RECORDS_LISTED = "RECORDS_LISTED"
     RECORDS_SEARCHED = "RECORDS_SEARCHED"
+    RECORD_EXPORTED = "RECORD_EXPORTED"
 
 
 class ConsentRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):

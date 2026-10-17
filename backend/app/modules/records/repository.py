@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.modules.records.errors import DuplicateHidError, DuplicateProfileError
+from app.modules.records.fhir_mapping import FHIR_CONTENT_TYPE
 from app.modules.records.models import (
     Doctor,
     Hospital,
@@ -332,6 +333,46 @@ class MedicalRecordRepository:
             .where(MedicalRecord.patient_id == patient_id, MedicalRecord.is_hidden.is_(False))
             .group_by(MedicalRecord.category_id)
         )
+        return list(result.scalars())
+
+    async def list_for_export(
+        self,
+        *,
+        patient_id: UUID,
+        category_ids: Collection[UUID] | None = None,
+        include_hidden: bool = False,
+    ) -> list[MedicalRecord]:
+        """All FHIR records for one patient matching the export scope, ordered chronologically.
+
+        Scope rules:
+        - When ``category_ids`` is provided, it must be non-empty and the query is strictly
+          restricted to those categories (the consented doctor path).
+        - When ``category_ids`` is None, all categories are included (the patient owner path).
+        - When ``include_hidden`` is False, hidden records are excluded at the SQL level.
+        - Only records with ``content_type == FHIR_CONTENT_TYPE`` are returned.
+        """
+        if category_ids is not None and not category_ids:
+            return []
+
+        criteria: list[ColumnElement[bool]] = [
+            MedicalRecord.patient_id == patient_id,
+            MedicalRecord.content_type == FHIR_CONTENT_TYPE,
+        ]
+        if category_ids is not None:
+            criteria.append(MedicalRecord.category_id.in_(category_ids))
+        if not include_hidden:
+            criteria.append(MedicalRecord.is_hidden.is_(False))
+
+        query = (
+            select(MedicalRecord)
+            .where(*criteria)
+            .order_by(
+                MedicalRecord.date_of_service.asc(),
+                MedicalRecord.created_at.asc(),
+                MedicalRecord.id.asc(),
+            )
+        )
+        result = await self._session.execute(query)
         return list(result.scalars())
 
     async def get_with_context(self, record_id: UUID) -> RecordRow | None:

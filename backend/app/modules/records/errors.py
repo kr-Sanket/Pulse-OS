@@ -90,3 +90,27 @@ class UnsupportedFileTypeError(RecordsError):
 
 class StorageUnavailableError(RecordsError):
     """Object storage could not be reached or refused the operation — server-side."""
+
+
+class ConsentRequiredError(RecordsError):
+    """Active consent is required to export patient records."""
+
+
+class InvalidExportRequestError(RecordsError):
+    """The export request parameters are invalid."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+class FHIRSerializationError(RecordsError):
+    """Failed to parse or serialize FHIR R4 resources for export."""
+
+
+class ConflictingPatientReferenceError(FHIRSerializationError):
+    """A resource carries a patient reference conflicting with the target patient."""
+
+
+class MalformedResourcePayloadError(FHIRSerializationError):
+    """Stored resource payload is not a valid FHIR JSON document."""

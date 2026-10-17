@@ -1059,6 +1059,34 @@ class ConsentService:
             actor_hospital_id=clinician.hospital_id if clinician is not None else None,
         )
 
+    async def record_export(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        granted_category_ids: frozenset[UUID] | None = None,
+        at: datetime,
+        request_context: str | None = None,
+    ) -> None:
+        """Append the single audit event for one FHIR R4 clinical record export.
+
+        Scope-level event: like RECORDS_LISTED and SUMMARY_GENERATED, an export
+        spans multiple records for a patient. It sets none of the three target columns;
+        patient_id carries the subject. If granted_category_ids was provided and was
+        empty (a clinician with no active grant), it records ACCESS_DENIED.
+        """
+        clinician = await self._acting_clinician(requester)
+        is_denied = granted_category_ids is not None and not granted_category_ids
+        action = AuditAction.ACCESS_DENIED if is_denied else AuditAction.RECORD_EXPORTED
+        await self._write_audit(
+            requester,
+            action=action,
+            patient_id=patient_id,
+            occurred_at=at,
+            request_context=request_context,
+            actor_hospital_id=clinician.hospital_id if clinician is not None else None,
+        )
+
     async def _acting_clinician(self, requester: AuthenticatedUser) -> Clinician | None:
         """The requester as a practitioner who may act clinically, or None.
 
