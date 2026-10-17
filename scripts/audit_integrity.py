@@ -14,15 +14,165 @@ Zero PHI is included in Merkle leaves, root metadata, proofs, or CLI output.
 import argparse
 import asyncio
 import json
+import os
 import sys
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
+from urllib.parse import urlsplit
 from uuid import UUID
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "backend"))
+
+LOCAL_DB_HOSTS: Final = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "postgres", ""})
+SUPPORTED_ENVIRONMENTS: Final = frozenset({"local", "test", "staging", "production"})
+DEV_DB_PORT: Final = 5433
+
+
+class AuditSafetyError(Exception):
+    """Raised when an operation is refused by the audit safety guard."""
+
+
+def database_host(database_url: str) -> str:
+    """The host a SQLAlchemy URL points at, lowercased ('' for a hostless/sqlite URL)."""
+    try:
+        scheme, _, remainder = database_url.partition("://")
+        if not remainder:
+            return ""
+        base_scheme = scheme.split("+", 1)[0]
+        parsed = urlsplit(f"{base_scheme}://{remainder}")
+        return (parsed.hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def database_port(database_url: str) -> int | None:
+    """The port a SQLAlchemy URL points at, or None if unparseable or omitted."""
+    try:
+        scheme, _, remainder = database_url.partition("://")
+        if not remainder:
+            return None
+        base_scheme = scheme.split("+", 1)[0]
+        parsed = urlsplit(f"{base_scheme}://{remainder}")
+        return parsed.port
+    except Exception:
+        return None
+
+
+def sanitize_database_url(database_url: str) -> str:
+    """Return a credentials-free target string like 'postgresql://localhost:5433/pulseos' or 'sqlite:///path'.
+
+    Never includes user, password, or query string secrets.
+    """
+    try:
+        scheme, _, remainder = database_url.partition("://")
+        if not remainder:
+            return "<invalid-database-url>"
+        base_scheme = scheme.split("+", 1)[0]
+        parsed = urlsplit(f"{base_scheme}://{remainder}")
+        host_port = parsed.netloc.split("@")[-1]
+        path = parsed.path
+        return f"{scheme}://{host_port}{path}"
+    except Exception:
+        return "<unparseable-database-url>"
+
+
+def is_environment_explicit(settings: Any) -> bool:
+    """True if PULSEOS_ENVIRONMENT was explicitly configured rather than defaulting."""
+    if os.environ.get("PULSEOS_ENVIRONMENT") is not None:
+        return True
+    if "environment" in getattr(settings, "model_fields_set", set()):
+        return True
+    return bool(getattr(settings, "explicit_environment", False))
+
+
+def ensure_sealing_safety(
+    settings: Any,
+    confirm_env: str | None,
+) -> None:
+    """Validate that environment and database target are safe for audit sealing.
+
+    Runs BEFORE standalone database engine creation, session-factory instantiation,
+    or any database communication.
+    """
+    raw_url = getattr(settings, "database_url", "")
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        raise AuditSafetyError("Database URL is missing or empty.")
+
+    sanitized = sanitize_database_url(raw_url)
+
+    # Validate URL parseability and scheme
+    scheme, sep, remainder = raw_url.partition("://")
+    if not sep or not remainder:
+        raise AuditSafetyError(f"Database URL is malformed: '{sanitized}'.")
+    base_scheme = scheme.split("+", 1)[0].lower()
+    if base_scheme not in {"postgresql", "sqlite"}:
+        raise AuditSafetyError(
+            f"Unsupported database scheme '{base_scheme}' in '{sanitized}'. "
+            "Must be postgresql or sqlite."
+        )
+
+    # 1. Configured environment validation
+    raw_env = getattr(settings, "environment", None)
+    if raw_env is None or not isinstance(raw_env, str) or not raw_env.strip():
+        raise AuditSafetyError("PULSEOS_ENVIRONMENT is not set.")
+
+    env = raw_env.strip().lower()
+    if env not in SUPPORTED_ENVIRONMENTS:
+        envs_str = ", ".join(sorted(SUPPORTED_ENVIRONMENTS))
+        raise AuditSafetyError(f"Unsupported environment '{env}'. Must be one of: {envs_str}.")
+
+    # Fail closed on implicit default environment
+    if not is_environment_explicit(settings):
+        raise AuditSafetyError(
+            f"PULSEOS_ENVIRONMENT='{env}' came from default configuration rather than an explicit "
+            "setting. Mutating audit state requires an explicitly configured environment."
+        )
+
+    # 2. Confirmation parameter validation
+    if confirm_env is None or not confirm_env.strip():
+        raise AuditSafetyError(
+            f"Audit sealing mutates ledger state. Configured environment is '{env}' "
+            f"(target: {sanitized}). Specify --confirm-env {env} to proceed."
+        )
+
+    cleaned_confirm = confirm_env.strip().lower()
+    if cleaned_confirm != env:
+        raise AuditSafetyError(
+            f"Confirmation mismatch: --confirm-env is '{cleaned_confirm}', "
+            f"but configured environment is '{env}'."
+        )
+
+    # 3. Target host and port suitability
+    host = database_host(raw_url)
+    port = database_port(raw_url)
+    is_local = host in LOCAL_DB_HOSTS
+
+    # Port 5433 is PulseOS local development database
+    if is_local and port == DEV_DB_PORT and env != "local":
+        raise AuditSafetyError(
+            f"Configured environment is '{env}', but target is the development database on "
+            f"port {DEV_DB_PORT} ({sanitized})."
+        )
+
+    if env == "local":
+        if not is_local:
+            raise AuditSafetyError(
+                f"Configured environment is 'local', but database host '{host}' is not a "
+                f"local host ({sanitized})."
+            )
+    elif env in {"staging", "production"}:
+        if is_local:
+            raise AuditSafetyError(
+                f"Configured environment is '{env}', but database target is a local or "
+                f"embedded host ({sanitized})."
+            )
+    elif env == "test" and is_local and port == DEV_DB_PORT:
+        raise AuditSafetyError(
+            f"Test environment must not target the development database on port {DEV_DB_PORT}."
+        )
 
 
 def _json_serial(obj: object) -> str:
@@ -60,6 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="maximum number of batches to seal (default: seal all available)",
+    )
+    seal_parser.add_argument(
+        "--confirm-env",
+        type=str,
+        default=None,
+        help="explicit confirmation of target environment (required: 'local', 'test', etc.)",
     )
 
     # verify-batch
@@ -412,6 +568,7 @@ async def run(
     *,
     session_factory: Any = None,
     service: object | None = None,
+    settings: Any = None,
 ) -> int:
     if service is not None:
         if args.command == "seal":
@@ -428,7 +585,18 @@ async def run(
     from app.core.db import create_db_engine, create_session_factory
     from app.modules.consent.dependencies import build_audit_batch_service
 
-    settings = get_settings()
+    if settings is None:
+        settings = get_settings()
+
+    # GUARD: Must run before standalone database engine creation,
+    # session-factory construction, or any database access.
+    # An injected session_factory is NOT an automatic bypass.
+    if args.command == "seal":
+        ensure_sealing_safety(
+            settings=settings,
+            confirm_env=getattr(args, "confirm_env", None),
+        )
+
     engine = None
     factory = session_factory
     if factory is None:
@@ -457,9 +625,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return asyncio.run(run(args))
+    except AuditSafetyError as exc:
+        if getattr(args, "json_output", False):
+            payload = {"status": "SAFETY_ERROR", "error": str(exc)}
+            print(json.dumps(payload, indent=2), file=sys.stderr)
+        else:
+            print(f"Safety Error: {exc}", file=sys.stderr)
+        return 2
     except Exception as exc:
         if getattr(args, "json_output", False):
-            print(json.dumps({"status": "ERROR", "error": str(exc)}, indent=2), file=sys.stderr)
+            payload = {"status": "ERROR", "error": str(exc)}
+            print(json.dumps(payload, indent=2), file=sys.stderr)
         else:
             print(f"Error executing audit integrity CLI: {exc}", file=sys.stderr)
         return 2

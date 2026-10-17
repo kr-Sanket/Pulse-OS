@@ -56,8 +56,24 @@ Operational scripts (owned here, run from repo root):
   obtain the Synthea corpus locally).
 - **`backfill_ai.py`** — indexes records already in object storage into the AI tables through
   the same ingestion path as the import. Non-destructive; FHIR records only (no OCR).
-- **Audit reconciliation** is a library today (`AuditBatchService.reconcile`, ADR-027) with no
-  CLI. The chain-side reconciliation job is planned and not authorized (M6.4+).
+- **`audit_integrity.py`** — **audit integrity verification and Merkle sealing CLI** (ADR-027, M6.3).
+  Provides verifiable Merkle integrity inspection and batch sealing.
+  - Read-only verification (no confirmation required):
+    ```bash
+    backend/.venv/bin/python scripts/audit_integrity.py verify-batch --batch-number 1
+    backend/.venv/bin/python scripts/audit_integrity.py verify-batch --all
+    backend/.venv/bin/python scripts/audit_integrity.py verify-event --event-id <EVENT_UUID>
+    backend/.venv/bin/python scripts/audit_integrity.py reconcile
+    ```
+  - State mutation (`seal`): **Protected by safety guard.** Sealing writes immutable Merkle
+    batches and advances the contiguous batch sequence. Requires explicit confirmation
+    matching the explicitly configured `PULSEOS_ENVIRONMENT`:
+    ```bash
+    PULSEOS_ENVIRONMENT=local backend/.venv/bin/python scripts/audit_integrity.py seal --confirm-env local
+    ```
+    Fails closed on missing confirmation, implicit default environment, or mismatched targets
+    (e.g., remote hosts in local mode or port 5433 in non-local modes). Supports `--json` for
+    machine-readable outputs.
 
 `review1_deck/` is presentation tooling (regenerates `PulseOS_Review1.pptx` via
 `python3 build.py`), not part of the product.

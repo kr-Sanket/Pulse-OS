@@ -36,7 +36,7 @@ pulse-os/
 ├── contracts/                # placeholder; contract toolchain undecided, nothing built
 ├── infra/
 │   └── docker-compose.yml    # postgres (pgvector image), redis, minio, minio-init — infra only
-├── scripts/                  # seed, Synthea import, AI backfill, OpenAPI client generation
+├── scripts/                  # seed, Synthea import, AI backfill, OpenAPI client generation, audit integrity CLI
 └── .github/workflows/        # ci.yml
 ```
 
@@ -50,6 +50,10 @@ pulse-os/
 - **Database setup:** there is no Makefile target for migrations or seeding. Run
   `cd backend && .venv/bin/alembic upgrade head`, then `backend/.venv/bin/python scripts/seed.py`
   (see scripts/README.md for the Synthea import and AI backfill).
+- **Audit integrity CLI:** `backend/.venv/bin/python scripts/audit_integrity.py` provides verifiable
+  Merkle integrity inspection and sealing tools (`verify-batch`, `verify-event`, `reconcile`, `seal`).
+  The mutating `seal` command is protected by a safety guard requiring `--confirm-env <ENVIRONMENT>`
+  matching an explicitly configured `PULSEOS_ENVIRONMENT`; read-only verification commands do not.
 - **Two `.env` files:** the root `.env` (created by `make env` from `.env.example`) is read by
   Docker Compose; the API reads `.env` relative to its working directory, i.e. `backend/.env`
   under `make dev-api` (there is no `backend/.env.example` yet — see TODO.md).
