@@ -132,7 +132,11 @@ def world(consent_app: FastAPI) -> Iterator[World]:
         doctor_user = User(firebase_uid="fb-doctor", role=Role.DOCTOR)
         patient_user = User(firebase_uid="fb-patient", role=Role.PATIENT)
         other_user = User(firebase_uid="fb-other", role=Role.PATIENT)
-        session.add_all([doctor_user, patient_user, other_user])
+        ghost_patient_user = User(firebase_uid="fb-ghost-p", role=Role.PATIENT)
+        ghost_doctor_user = User(firebase_uid="fb-ghost-d", role=Role.DOCTOR)
+        session.add_all(
+            [doctor_user, patient_user, other_user, ghost_patient_user, ghost_doctor_user]
+        )
         hospital = Hospital(
             hid="HID-0001", name="TMH", verification_status=HospitalVerificationStatus.VERIFIED
         )
@@ -160,6 +164,8 @@ def world(consent_app: FastAPI) -> Iterator[World]:
             "doctor_user_id": doctor_user.id,
             "patient_user_id": patient_user.id,
             "other_user_id": other_user.id,
+            "ghost_patient_user_id": ghost_patient_user.id,
+            "ghost_doctor_user_id": ghost_doctor_user.id,
             "doctor_id": doctor.id,
             "hospital_id": hospital.id,
             "categories": {
@@ -186,12 +192,19 @@ def world(consent_app: FastAPI) -> Iterator[World]:
     fake_auth.register_user(
         "other", user_id=ids["other_user_id"], firebase_uid="fb-other", role=Role.PATIENT
     )
-    # Valid claims, no profile row — the 404-class condition each listing must handle.
+    # Valid claims, active user record, no profile row — the 404-class condition
+    # each listing must handle.
     fake_auth.register_user(
-        "ghost-patient", user_id=uuid4(), firebase_uid="fb-ghost-p", role=Role.PATIENT
+        "ghost-patient",
+        user_id=ids["ghost_patient_user_id"],
+        firebase_uid="fb-ghost-p",
+        role=Role.PATIENT,
     )
     fake_auth.register_user(
-        "ghost-doctor", user_id=uuid4(), firebase_uid="fb-ghost-d", role=Role.DOCTOR
+        "ghost-doctor",
+        user_id=ids["ghost_doctor_user_id"],
+        firebase_uid="fb-ghost-d",
+        role=Role.DOCTOR,
     )
     clinicians = FakeClinicianDirectory()
     clinicians.register(

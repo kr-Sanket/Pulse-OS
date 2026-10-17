@@ -24,6 +24,8 @@ from app.modules.auth.errors import (
     AuthProviderUnavailableError,
     ExpiredTokenError,
     InvalidTokenError,
+    RevokedTokenError,
+    UserDisabledError,
 )
 from app.modules.auth.provider import AuthenticationProvider, VerifiedToken
 
@@ -65,9 +67,11 @@ class FirebaseAuthProvider(AuthenticationProvider):
             raise
         except firebase_auth.ExpiredIdTokenError as exc:
             raise ExpiredTokenError() from exc
-        except firebase_auth.InvalidIdTokenError as exc:  # includes RevokedIdTokenError
-            raise InvalidTokenError() from exc
+        except firebase_auth.RevokedIdTokenError as exc:
+            raise RevokedTokenError() from exc
         except firebase_auth.UserDisabledError as exc:
+            raise UserDisabledError() from exc
+        except firebase_auth.InvalidIdTokenError as exc:
             raise InvalidTokenError() from exc
         except ValueError as exc:  # SDK raises this for structurally unparseable tokens
             raise InvalidTokenError() from exc
@@ -101,7 +105,9 @@ class FirebaseAuthProvider(AuthenticationProvider):
 
     def _verify_sync(self, token: str) -> dict[str, object]:
         app = self._get_app()
-        decoded: dict[str, object] = firebase_auth.verify_id_token(token, app=app)
+        decoded: dict[str, object] = firebase_auth.verify_id_token(
+            token, app=app, check_revoked=True
+        )
         return decoded
 
     def _get_app(self) -> firebase_admin.App:

@@ -19,8 +19,11 @@ from app.modules.ai.providers.ollama import (
 from app.modules.ai.query import DEFAULT_EMPTY_EVIDENCE_ANSWER, AIQueryService
 from app.modules.ai.retrieval import RetrievedChunk
 from app.modules.ai.service import RetrievalVisibility
+from app.modules.auth.dependencies import get_user_repository
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.fake import FakeAuthProvider
+from app.modules.auth.models import User, UserStatus
+from app.modules.auth.service import ROLE_CLAIM, USER_ID_CLAIM
 from app.modules.consent.dependencies import (
     CategoryVocabulary,
     get_category_vocabulary,
@@ -101,6 +104,28 @@ def fake_category_vocabulary(app: FastAPI) -> Iterator[CategoryVocabulary]:
     yield source._vocabulary
     app.dependency_overrides.pop(get_category_vocabulary_source, None)
     app.dependency_overrides.pop(get_category_vocabulary, None)
+
+
+@pytest.fixture(autouse=True)
+def fake_user_repository(app: FastAPI, fake_auth: FakeAuthProvider) -> Iterator[None]:
+    class FakeUserRepo:
+        async def get_by_id(self, user_id: UUID) -> User | None:
+            for verified in fake_auth._tokens.values():
+                uid_str = verified.claims.get(USER_ID_CLAIM)
+                if uid_str and str(user_id) == str(uid_str):
+                    role_str = verified.claims.get(ROLE_CLAIM)
+                    role = Role(str(role_str)) if role_str else Role.PATIENT
+                    return User(
+                        id=user_id,
+                        firebase_uid=verified.firebase_uid,
+                        role=role,
+                        status=UserStatus.ACTIVE,
+                    )
+            return None
+
+    app.dependency_overrides[get_user_repository] = lambda: FakeUserRepo()
+    yield
+    app.dependency_overrides.pop(get_user_repository, None)
 
 
 def test_successful_doctor_request_returns_retrieval_results(

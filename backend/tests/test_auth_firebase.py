@@ -14,6 +14,8 @@ from app.modules.auth.errors import (
     AuthProviderUnavailableError,
     ExpiredTokenError,
     InvalidTokenError,
+    RevokedTokenError,
+    UserDisabledError,
 )
 from app.modules.auth.firebase import FirebaseAuthProvider
 from app.modules.auth.provider import VerifiedToken
@@ -30,7 +32,9 @@ def _provider(monkeypatch: pytest.MonkeyPatch) -> FirebaseAuthProvider:
 def _patch_verify(
     monkeypatch: pytest.MonkeyPatch, behavior: Callable[[], dict[str, object]]
 ) -> None:
-    def fake_verify(token: str, app: object = None) -> dict[str, object]:
+    def fake_verify(
+        token: str, app: object = None, check_revoked: bool = False
+    ) -> dict[str, object]:
         return behavior()
 
     monkeypatch.setattr(firebase_auth, "verify_id_token", fake_verify)
@@ -97,6 +101,37 @@ def test_client_side_failures_map_to_invalid_token(
     _patch_verify(monkeypatch, _raise(sdk_error))
 
     with pytest.raises(InvalidTokenError):
+        _verify(provider)
+
+
+def test_verify_passes_check_revoked(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _provider(monkeypatch)
+    captured: dict[str, object] = {}
+
+    def fake_verify(
+        token: str, app: object = None, check_revoked: bool = False
+    ) -> dict[str, object]:
+        captured["check_revoked"] = check_revoked
+        return {"uid": "fb-1"}
+
+    monkeypatch.setattr(firebase_auth, "verify_id_token", fake_verify)
+    _verify(provider)
+    assert captured.get("check_revoked") is True
+
+
+def test_revoked_token_error_maps_to_revoked_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _provider(monkeypatch)
+    _patch_verify(monkeypatch, _raise(firebase_auth.RevokedIdTokenError("revoked")))
+
+    with pytest.raises(RevokedTokenError):
+        _verify(provider)
+
+
+def test_user_disabled_error_maps_to_user_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _provider(monkeypatch)
+    _patch_verify(monkeypatch, _raise(firebase_auth.UserDisabledError("disabled")))
+
+    with pytest.raises(UserDisabledError):
         _verify(provider)
 
 

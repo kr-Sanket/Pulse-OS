@@ -19,14 +19,19 @@ from app.core.ratelimit import RateLimiter, get_rate_limiter
 from app.modules.auth.accounts import UserAccountService
 from app.modules.auth.domain import AuthenticatedUser, Role
 from app.modules.auth.errors import (
+    AccountSuspendedError,
+    AccountUnavailableError,
     AuthError,
     AuthProviderUnavailableError,
     ExpiredTokenError,
     InvalidTokenError,
     MalformedAuthorizationError,
     MissingCredentialsError,
+    RevokedTokenError,
     UnprovisionedAccountError,
+    UserDisabledError,
 )
+from app.modules.auth.models import UserStatus
 from app.modules.auth.provider import AuthenticationProvider, VerifiedToken
 from app.modules.auth.repository import UserRepository
 from app.modules.auth.service import AuthService
@@ -54,11 +59,25 @@ def to_http_error(exc: AuthError) -> HTTPException:
             detail="Authentication token has expired.",
             headers=_CHALLENGE_INVALID,
         )
+    if isinstance(exc, RevokedTokenError):
+        return HTTPException(
+            status_code=401,
+            detail="Authentication token has been revoked.",
+            headers=_CHALLENGE_INVALID,
+        )
+    if isinstance(exc, UserDisabledError):
+        return HTTPException(
+            status_code=401,
+            detail="Authentication token belongs to a disabled account.",
+            headers=_CHALLENGE_INVALID,
+        )
     if isinstance(exc, InvalidTokenError):
         return HTTPException(
             status_code=401, detail="Invalid authentication token.", headers=_CHALLENGE_INVALID
         )
-    if isinstance(exc, UnprovisionedAccountError):
+    if isinstance(exc, AccountSuspendedError):
+        return HTTPException(status_code=403, detail="Account is suspended.")
+    if isinstance(exc, (AccountUnavailableError, UnprovisionedAccountError)):
         return HTTPException(status_code=403, detail="Account is not provisioned for PulseOS.")
     if isinstance(exc, AuthProviderUnavailableError):
         return HTTPException(status_code=503, detail="Authentication service is unavailable.")
@@ -76,6 +95,12 @@ def get_auth_service(
     provider: Annotated[AuthenticationProvider, Depends(get_auth_provider)],
 ) -> AuthService:
     return AuthService(provider)
+
+
+def get_user_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> UserRepository:
+    return UserRepository(session)
 
 
 def get_user_account_service(
@@ -100,12 +125,25 @@ async def require_verified_identity(
 async def require_authenticated_user(
     request: Request,
     service: Annotated[AuthService, Depends(get_auth_service)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> AuthenticatedUser:
     """Authenticate the request or fail with an RFC 7807 response. Never logs the token."""
     try:
-        return await service.authenticate(request.headers.get("Authorization"))
+        user = await service.authenticate(request.headers.get("Authorization"))
     except AuthError as exc:
         raise to_http_error(exc) from exc
+
+    db_user = await users.get_by_id(user.user_id)
+    if db_user is None:
+        raise to_http_error(AccountUnavailableError())
+
+    if db_user.status is not UserStatus.ACTIVE:
+        raise to_http_error(AccountSuspendedError())
+
+    if db_user.role != user.role or db_user.firebase_uid != user.firebase_uid:
+        raise to_http_error(AccountUnavailableError())
+
+    return user
 
 
 CurrentUser = Annotated[AuthenticatedUser, Depends(require_authenticated_user)]

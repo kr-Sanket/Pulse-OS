@@ -15,8 +15,8 @@ from uuid import UUID
 
 from app.modules.auth.accounts import UserAccountService
 from app.modules.auth.domain import Role
-from app.modules.auth.errors import DuplicateUserError
-from app.modules.auth.models import User
+from app.modules.auth.errors import AccountSuspendedError, DuplicateUserError
+from app.modules.auth.models import User, UserStatus
 from app.modules.auth.provider import VerifiedToken
 from app.modules.records.errors import (
     DoctorNotFoundError,
@@ -260,6 +260,8 @@ class HospitalService:
     # -- idempotent-completion helpers -------------------------------------------------
 
     async def _complete_existing_admin(self, user: User) -> HospitalRegistrationOutcome:
+        if user.status is not UserStatus.ACTIVE:
+            raise AccountSuspendedError()
         if user.role is not Role.HOSPITAL_ADMIN:
             raise OrgRegistrationConflictError(
                 "Account is already registered with a different role."
@@ -274,6 +276,8 @@ class HospitalService:
         return HospitalRegistrationOutcome(hospital=hospital, admin=admin, created=False)
 
     async def _complete_existing_doctor(self, user: User) -> DoctorRegistrationOutcome:
+        if user.status is not UserStatus.ACTIVE:
+            raise AccountSuspendedError()
         if user.role is not Role.DOCTOR:
             raise OrgRegistrationConflictError(
                 "Account is already registered with a different role."

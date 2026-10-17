@@ -11,7 +11,7 @@ import pytest
 from app.modules.auth.domain import Role
 from app.modules.auth.errors import AuthProviderUnavailableError
 from app.modules.auth.fake import FakeAuthProvider
-from app.modules.auth.models import User
+from app.modules.auth.models import User, UserStatus
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -288,13 +288,97 @@ def test_doctor_endpoints_enforce_role_gates(
 
 
 def test_unprovisioned_rows_yield_404_profiles(
-    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    sqlite_db: None,
+    db_engine: AsyncEngine,
 ) -> None:
-    # Claims say HOSPITAL_ADMIN/DOCTOR but no profile row exists (stale claims, wiped DB).
-    fake_auth.register_user("adm", user_id=uuid4(), firebase_uid="fb-a", role=Role.HOSPITAL_ADMIN)
-    fake_auth.register_user("doc", user_id=uuid4(), firebase_uid="fb-d", role=Role.DOCTOR)
+    # Active User rows exist in DB, but no profile row exists (e.g. registration gap).
+    adm_user_id = uuid4()
+    doc_user_id = uuid4()
+    fake_auth.register_user(
+        "adm", user_id=adm_user_id, firebase_uid="fb-a", role=Role.HOSPITAL_ADMIN
+    )
+    fake_auth.register_user("doc", user_id=doc_user_id, firebase_uid="fb-d", role=Role.DOCTOR)
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add_all(
+            [
+                User(
+                    id=adm_user_id,
+                    firebase_uid="fb-a",
+                    role=Role.HOSPITAL_ADMIN,
+                    status=UserStatus.ACTIVE,
+                ),
+                User(
+                    id=doc_user_id, firebase_uid="fb-d", role=Role.DOCTOR, status=UserStatus.ACTIVE
+                ),
+            ]
+        )
+
+    run_with_session(db_engine, _seed)
     assert client.get(HOSPITAL_ME, headers=_bearer("adm")).status_code == 404
     assert client.get(DOCTORS_ME, headers=_bearer("doc")).status_code == 404
+
+
+def test_idempotent_hospital_registration_rejects_suspended_user(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    sqlite_db: None,
+    db_engine: AsyncEngine,
+) -> None:
+    user_id = uuid4()
+    fake_auth.register_token("suspended-admin", firebase_uid="fb-susp-adm", claims={})
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add(
+            User(
+                id=user_id,
+                firebase_uid="fb-susp-adm",
+                role=Role.HOSPITAL_ADMIN,
+                status=UserStatus.SUSPENDED,
+            )
+        )
+
+    run_with_session(db_engine, _seed)
+    response = client.post(
+        HOSPITAL_REGISTER, json=HOSPITAL_BODY, headers=_bearer("suspended-admin")
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Account is suspended."
+
+
+def test_idempotent_doctor_registration_rejects_suspended_user(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    sqlite_db: None,
+    db_engine: AsyncEngine,
+) -> None:
+    user_id = uuid4()
+    fake_auth.register_token("suspended-doctor", firebase_uid="fb-susp-doc", claims={})
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add(
+            User(
+                id=user_id,
+                firebase_uid="fb-susp-doc",
+                role=Role.DOCTOR,
+                status=UserStatus.SUSPENDED,
+            )
+        )
+
+    run_with_session(db_engine, _seed)
+    response = client.post(
+        DOCTORS_REGISTER,
+        json={
+            "fullName": "Dr. Suspended",
+            "registrationNumber": "REG-SUSP",
+            "hospitalHid": "HID-0001",
+        },
+        headers=_bearer("suspended-doctor"),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Account is suspended."
 
 
 def test_list_hospitals_system_admin_only_and_filters(

@@ -12,8 +12,8 @@ from uuid import UUID
 
 from app.modules.auth.accounts import UserAccountService
 from app.modules.auth.domain import Role
-from app.modules.auth.errors import DuplicateUserError
-from app.modules.auth.models import User
+from app.modules.auth.errors import AccountSuspendedError, DuplicateUserError
+from app.modules.auth.models import User, UserStatus
 from app.modules.auth.provider import VerifiedToken
 from app.modules.patients.errors import (
     DuplicateHealthIdError,
@@ -156,8 +156,11 @@ class PatientService:
         return patient
 
     async def _complete_existing(self, user: User) -> RegistrationOutcome:
+        if user.status is not UserStatus.ACTIVE:
+            raise AccountSuspendedError()
         if user.role is not Role.PATIENT:
             raise RegistrationConflictError("Account is already registered with a different role.")
+
         patient = await self._patients.get_by_user_id(user.id)
         if patient is None:
             # Unreachable while registration is atomic; guarded so it can never 500 into

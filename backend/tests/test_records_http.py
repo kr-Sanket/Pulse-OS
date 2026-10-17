@@ -917,11 +917,17 @@ def test_another_patients_record_is_indistinguishable_from_one_that_does_not_exi
 
 
 def test_a_patient_token_without_a_profile_row_is_the_usual_404(
-    client: TestClient, actors: Actors, fake_auth: FakeAuthProvider
+    client: TestClient, actors: Actors, fake_auth: FakeAuthProvider, db_engine: AsyncEngine
 ) -> None:
     """PATIENT claims for a user that has no patient row — the same gap every other
     patient-scoped surface answers 404 for."""
-    fake_auth.register_user("ghost", user_id=uuid4(), firebase_uid="fb-ghost", role=Role.PATIENT)
+    user_id = uuid4()
+    fake_auth.register_user("ghost", user_id=user_id, firebase_uid="fb-ghost", role=Role.PATIENT)
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add(User(id=user_id, firebase_uid="fb-ghost", role=Role.PATIENT))
+
+    run_with_session(db_engine, _seed)
     record_id = _own_record(client, actors)
 
     refused = client.patch(

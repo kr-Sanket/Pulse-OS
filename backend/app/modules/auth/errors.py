@@ -27,12 +27,32 @@ class ExpiredTokenError(InvalidTokenError):
     """The token was valid once but has expired — clients should refresh and retry."""
 
 
+class RevokedTokenError(InvalidTokenError):
+    """The token failed verification because it was revoked."""
+
+
+class UserDisabledError(InvalidTokenError):
+    """The account has been disabled in the identity provider."""
+
+
 class UnprovisionedAccountError(AuthError):
     """The token is authentic but carries no PulseOS role/user claims yet.
 
     This is the state between Firebase sign-up and PulseOS registration (M0.3 Part 3
     sets the claims during onboarding). Authentication succeeded; authorization fails.
     """
+
+
+class AccountSuspendedError(AuthError):
+    """The PulseOS user account is suspended."""
+
+    code = "account_suspended"
+
+
+class AccountUnavailableError(AuthError):
+    """The PulseOS user record is missing or unavailable."""
+
+    code = "account_unavailable"
 
 
 class AuthProviderUnavailableError(AuthError):

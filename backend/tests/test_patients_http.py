@@ -11,9 +11,13 @@ import pytest
 from app.modules.auth.domain import Role
 from app.modules.auth.errors import AuthProviderUnavailableError
 from app.modules.auth.fake import FakeAuthProvider
+from app.modules.auth.models import User, UserStatus
 from app.modules.auth.service import ROLE_CLAIM, USER_ID_CLAIM
 from app.modules.patients.health_id import is_valid_health_id
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+from tests.support import run_with_session
 
 REGISTER = "/api/v1/patients/register"
 ME = "/api/v1/patients/me"
@@ -131,13 +135,46 @@ def test_me_requires_patient_role(
 
 
 def test_me_is_404_when_profile_row_is_missing(
-    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None
+    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None, db_engine: AsyncEngine
 ) -> None:
-    # Provisioned PATIENT claims but no patient row (e.g. wiped DB, stale claims).
-    fake_auth.register_user("ghost", user_id=uuid4(), firebase_uid="fb-ghost", role=Role.PATIENT)
+    # Active User row in DB, but no patient profile row.
+    user_id = uuid4()
+    fake_auth.register_user("ghost", user_id=user_id, firebase_uid="fb-ghost", role=Role.PATIENT)
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add(
+            User(id=user_id, firebase_uid="fb-ghost", role=Role.PATIENT, status=UserStatus.ACTIVE)
+        )
+
+    run_with_session(db_engine, _seed)
     response = client.get(ME, headers=_bearer("ghost"))
     assert response.status_code == 404
     assert response.headers["content-type"].startswith("application/problem+json")
+
+
+def test_idempotent_registration_rejects_suspended_user(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    sqlite_db: None,
+    db_engine: AsyncEngine,
+) -> None:
+    user_id = uuid4()
+    fake_auth.register_token("suspended-patient", firebase_uid="fb-suspended", claims={})
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add(
+            User(
+                id=user_id,
+                firebase_uid="fb-suspended",
+                role=Role.PATIENT,
+                status=UserStatus.SUSPENDED,
+            )
+        )
+
+    run_with_session(db_engine, _seed)
+    response = client.post(REGISTER, json=BODY, headers=_bearer("suspended-patient"))
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Account is suspended."
 
 
 # -- PATCH /patients/me ------------------------------------------------------------------
@@ -252,28 +289,46 @@ def test_a_name_is_stored_trimmed(
 
 
 def test_editing_requires_authentication_and_the_patient_role(
-    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None
+    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None, db_engine: AsyncEngine
 ) -> None:
     assert client.patch(ME, json={"fullName": "Nobody"}).status_code == 401
 
+    doc_user_id = uuid4()
     fake_auth.register_token(
         "doctor",
         firebase_uid="fb-doctor",
-        claims={ROLE_CLAIM: Role.DOCTOR.value, USER_ID_CLAIM: str(uuid4())},
+        claims={ROLE_CLAIM: Role.DOCTOR.value, USER_ID_CLAIM: str(doc_user_id)},
     )
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add(
+            User(
+                id=doc_user_id, firebase_uid="fb-doctor", role=Role.DOCTOR, status=UserStatus.ACTIVE
+            )
+        )
+
+    run_with_session(db_engine, _seed)
     assert client.patch(ME, json={"fullName": "N"}, headers=_bearer("doctor")).status_code == 403
 
 
 def test_editing_without_a_profile_row_is_404(
-    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None
+    client: TestClient, fake_auth: FakeAuthProvider, sqlite_db: None, db_engine: AsyncEngine
 ) -> None:
     """A token carrying PATIENT claims for a user that has no patient row — the same gap
     GET /me answers 404 for."""
+    user_id = uuid4()
     fake_auth.register_token(
         "ghost",
         firebase_uid="fb-ghost",
-        claims={ROLE_CLAIM: Role.PATIENT.value, USER_ID_CLAIM: str(uuid4())},
+        claims={ROLE_CLAIM: Role.PATIENT.value, USER_ID_CLAIM: str(user_id)},
     )
+
+    async def _seed(session: AsyncSession) -> None:
+        session.add(
+            User(id=user_id, firebase_uid="fb-ghost", role=Role.PATIENT, status=UserStatus.ACTIVE)
+        )
+
+    run_with_session(db_engine, _seed)
     assert client.patch(ME, json={"fullName": "Ghost"}, headers=_bearer("ghost")).status_code == 404
 
 
