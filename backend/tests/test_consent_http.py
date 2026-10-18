@@ -760,9 +760,17 @@ def test_openapi_declares_every_consent_path_and_its_failures(consent_app: FastA
         f"{GRANTS}/{{grant_id}}/revoke",
         AUDIT,
         f"{AUDIT}/{{audit_log_id}}/verification",
+        f"{AUDIT}/{{audit_log_id}}/proof",
     }
     assert set(paths[GRANTS]["get"]["responses"]) >= {"200", "401", "403", "404", "422"}
     assert set(paths[AUDIT]["get"]["responses"]) >= {"200", "401", "403", "404", "422"}
+    assert set(paths[f"{AUDIT}/{{audit_log_id}}/proof"]["get"]["responses"]) >= {
+        "200",
+        "401",
+        "403",
+        "404",
+        "422",
+    }
     assert set(paths[REQUESTS]["post"]["responses"]) >= {"201", "401", "403", "404", "422"}
     approve = paths[f"{REQUESTS}/{{request_id}}/approve"]["post"]["responses"]
     assert set(approve) >= {"200", "401", "403", "404", "409", "422"}

@@ -39,7 +39,9 @@ from app.modules.consent.anchoring import AuditAnchor, LocalChainAuditAnchor
 from app.modules.consent.batch_service import AuditBatchService
 from app.modules.consent.errors import (
     AccessDeniedError,
+    AuditBatchNotFoundError,
     AuditEventNotFoundError,
+    AuditProofNotFoundError,
     CategoryAlreadyGrantedError,
     ClinicianNotActiveError,
     ClinicianProfileNotFoundError,
@@ -113,6 +115,10 @@ def to_http_error(exc: ConsentError) -> HTTPException:
     if isinstance(exc, AuditEventNotFoundError):
         # Another patient's event answers exactly this, so the two are indistinguishable.
         return HTTPException(status_code=404, detail="Audit event not found.")
+    if isinstance(exc, AuditProofNotFoundError):
+        return HTTPException(status_code=404, detail="Merkle proof not found for this audit event.")
+    if isinstance(exc, AuditBatchNotFoundError):
+        return HTTPException(status_code=404, detail="Audit batch not found.")
     if isinstance(exc, AccessDeniedError):
         # Never "forbidden": a caller without consent must not learn the record exists.
         return HTTPException(status_code=404, detail="Not found.")
@@ -353,21 +359,21 @@ def get_audit_anchor_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     anchor: Annotated[AuditAnchor, Depends(get_audit_anchor)],
 ) -> AuditAnchorService:
-    """Anchoring and verification over the request's session (ADR-026)."""
+    """Anchoring and verification over the request's session (ADR-026, ADR-027)."""
     return AuditAnchorService(
         audit=AuditLogRepository(session),
         anchors=AuditAnchorRepository(session),
         anchor_provider=anchor,
         patients=PatientDirectoryService(PatientRepository(session)),
+        batches=AuditBatchRepository(session),
     )
 
 
 def build_audit_batch_service(session: AsyncSession, settings: Settings) -> AuditBatchService:
     """Batch sealing and reconciliation over ``session`` (ADR-027), configured from settings.
 
-    Deliberately not a request dependency: sealing never runs on a healthcare request, and no
-    endpoint exposes it. The future scheduler (and tests) call this with their own session
-    and own the transaction — commit on success, roll back on any exception.
+    Sealing and full reconciliation are scheduled/CLI operations, but read-only proof and batch
+    verification methods (get_proof_for_event, verify_batch) are served through this service.
     """
     return AuditBatchService(
         batches=AuditBatchRepository(session),
@@ -376,7 +382,21 @@ def build_audit_batch_service(session: AsyncSession, settings: Settings) -> Audi
     )
 
 
+def get_audit_batch_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AuditBatchService:
+    """Read-only audit batch and proof verification over the request's session.
+
+    Used strictly for proof and batch verification endpoints. Does NOT trigger sealing
+    or reconciliation on request paths.
+    """
+    from app.core.config import get_settings
+
+    return build_audit_batch_service(session, get_settings())
+
+
 ConsentServiceDep = Annotated[ConsentService, Depends(get_consent_service)]
 AuditAnchorServiceDep = Annotated[AuditAnchorService, Depends(get_audit_anchor_service)]
+AuditBatchServiceDep = Annotated[AuditBatchService, Depends(get_audit_batch_service)]
 CategoryVocabularyDep = Annotated[CategoryVocabulary, Depends(get_category_vocabulary)]
 RequestContextDep = Annotated[str | None, Depends(get_request_context)]

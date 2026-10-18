@@ -32,7 +32,9 @@ the gap a real chain closes, and the honest limit of this milestone.
 import logging
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
+from typing import Final
 from uuid import UUID
 
 from app.modules.auth.domain import AuthenticatedUser
@@ -44,8 +46,17 @@ from app.modules.consent.errors import (
     PatientProfileNotFoundError,
     UnanchorableAuditEventError,
 )
-from app.modules.consent.models import AuditAnchorEntry, AuditLog
-from app.modules.consent.repository import AuditAnchorRepository, AuditLogRepository
+from app.modules.consent.merkle import (
+    MERKLE_PROTOCOL_VERSION,
+    InvalidCommitmentInputError,
+    batch_commitment,
+)
+from app.modules.consent.models import AuditAnchorEntry, AuditBatch, AuditBatchMember, AuditLog
+from app.modules.consent.repository import (
+    AuditAnchorRepository,
+    AuditBatchRepository,
+    AuditLogRepository,
+)
 from app.modules.consent.service import (
     HASH_SCHEME_V3,
     UnsupportedHashSchemeError,
@@ -54,6 +65,10 @@ from app.modules.consent.service import (
 from app.modules.patients.directory import PatientDirectoryService
 
 logger = logging.getLogger(__name__)
+
+#: Network identifier for locally verified v3 Merkle batches. Distinguishes local Merkle
+#: batch verification from external blockchain anchoring (ADR-027).
+LOCAL_MERKLE_BATCH_NETWORK: Final = "local-merkle-batch"
 
 
 class IntegrityStatus(StrEnum):
@@ -88,10 +103,13 @@ class IntegrityReport:
     audit_log_id: UUID
     status: IntegrityStatus
     anchor: AuditAnchorEntry | None
+    network: str | None = None
+    reference: str | None = None
+    anchored_at: datetime | None = None
 
     @property
     def is_anchored(self) -> bool:
-        return self.anchor is not None
+        return self.anchor is not None or self.reference is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,11 +145,13 @@ class AuditAnchorService:
         anchors: AuditAnchorRepository,
         anchor_provider: AuditAnchor,
         patients: PatientDirectoryService,
+        batches: AuditBatchRepository | None = None,
     ) -> None:
         self._audit = audit
         self._anchors = anchors
         self._provider = anchor_provider
         self._patients = patients
+        self._batches = batches
 
     # -- anchoring ---------------------------------------------------------------------
 
@@ -243,19 +263,129 @@ class AuditAnchorService:
     async def verify(self, entry: AuditLog) -> IntegrityReport:
         """The integrity verdict for one audit event."""
         anchor = await self._anchors.get_by_audit_log_id(entry.id)
-        return await self._assess(entry, anchor)
+        if anchor is not None:
+            return await self._assess(entry, anchor)
+        if self._batches is not None:
+            member = await self._batches.get_member_by_audit_log_id(entry.id)
+            if member is not None:
+                batch = await self._batches.get_batch_by_id(member.batch_id)
+                if batch is not None:
+                    return self._assess_batched(entry, member, batch)
+        return IntegrityReport(
+            audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
+        )
 
     async def verify_many(self, entries: Sequence[AuditLog]) -> Mapping[UUID, IntegrityReport]:
         """Verdicts for a page of events, in a fixed number of *queries*.
 
-        One anchor lookup for the whole page, then a comparison per row. The per-row work is
-        a rehash and an adapter check, both local and cheap today. A networked provider must
-        not be verified once per rendered row — when ``PolygonAuditAnchor`` lands, the chain
-        check moves to the sweep (recording its outcome) and this reads that result instead.
-        The seam does not change; only where the network call happens does.
+        One anchor lookup for the whole page, then a batch lookup for unanchored rows,
+        and finally in-memory comparison per row. Fixed query count ensures no N+1.
         """
         anchors = await self._anchors.by_audit_log_ids([entry.id for entry in entries])
-        return {entry.id: await self._assess(entry, anchors.get(entry.id)) for entry in entries}
+        reports: dict[UUID, IntegrityReport] = {}
+        unanchored_entries: list[AuditLog] = []
+
+        for entry in entries:
+            anchor = anchors.get(entry.id)
+            if anchor is not None:
+                reports[entry.id] = await self._assess(entry, anchor)
+            else:
+                unanchored_entries.append(entry)
+
+        if not unanchored_entries:
+            return reports
+
+        if self._batches is not None:
+            members = await self._batches.by_audit_log_ids([e.id for e in unanchored_entries])
+            batch_ids = {m.batch_id for m in members.values()}
+            batches = await self._batches.get_batches_by_ids(batch_ids)
+
+            for entry in unanchored_entries:
+                member = members.get(entry.id)
+                if member is not None and member.batch_id in batches:
+                    batch = batches[member.batch_id]
+                    reports[entry.id] = self._assess_batched(entry, member, batch)
+                else:
+                    reports[entry.id] = IntegrityReport(
+                        audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
+                    )
+        else:
+            for entry in unanchored_entries:
+                reports[entry.id] = IntegrityReport(
+                    audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
+                )
+
+        return reports
+
+    def _assess_batched(
+        self, entry: AuditLog, member: AuditBatchMember, batch: AuditBatch
+    ) -> IntegrityReport:
+        """The comparisons for a v3 Merkle-batched audit event (ADR-027).
+
+        Ordinary event-list and single-event verification checks event digest
+        recomputation, member digest consistency, batch commitment consistency against
+        the sealed batch root, and leaf index bounds. Cryptographic Merkle inclusion
+        verification (path proof) is performed on demand by the proof endpoint
+        (GET /api/v1/audit-logs/{id}/proof).
+
+        Distinguishes local Merkle batch verification from external blockchain anchoring:
+        network is set to 'local-merkle-batch' and anchored_at represents the local batch
+        creation/sealing timestamp.
+        """
+        try:
+            recomputed: str | None = recompute_event_hash(entry)
+        except UnsupportedHashSchemeError:
+            recomputed = None
+
+        if (
+            recomputed is None
+            or recomputed != entry.event_hash
+            or entry.event_hash != member.digest
+            or entry.hash_version != HASH_SCHEME_V3
+        ):
+            return IntegrityReport(
+                audit_log_id=entry.id,
+                status=IntegrityStatus.EVENT_ALTERED,
+                anchor=None,
+                network=LOCAL_MERKLE_BATCH_NETWORK,
+                reference=f"0x{batch.commitment}",
+                anchored_at=batch.created_at,
+            )
+
+        try:
+            expected_commitment = batch_commitment(
+                protocol_version=batch.protocol_version,
+                batch_number=batch.batch_number,
+                leaf_count=batch.leaf_count,
+                root=batch.root,
+            )
+        except (InvalidCommitmentInputError, InvalidDigestError):
+            expected_commitment = None
+
+        if (
+            member.leaf_index < 0
+            or member.leaf_index >= batch.leaf_count
+            or batch.protocol_version != MERKLE_PROTOCOL_VERSION
+            or batch.hash_version != HASH_SCHEME_V3
+            or expected_commitment != batch.commitment
+        ):
+            return IntegrityReport(
+                audit_log_id=entry.id,
+                status=IntegrityStatus.ANCHOR_ALTERED,
+                anchor=None,
+                network=LOCAL_MERKLE_BATCH_NETWORK,
+                reference=f"0x{batch.commitment}",
+                anchored_at=batch.created_at,
+            )
+
+        return IntegrityReport(
+            audit_log_id=entry.id,
+            status=IntegrityStatus.VERIFIED,
+            anchor=None,
+            network=LOCAL_MERKLE_BATCH_NETWORK,
+            reference=f"0x{batch.commitment}",
+            anchored_at=batch.created_at,
+        )
 
     async def _assess(self, entry: AuditLog, anchor: AuditAnchorEntry | None) -> IntegrityReport:
         """The three comparisons, in the order that makes a verdict meaningful.
@@ -282,7 +412,12 @@ class AuditAnchorService:
             # Either the row no longer hashes to its own digest, or its digest is no longer
             # the one that was published. Both mean the event changed after anchoring.
             return IntegrityReport(
-                audit_log_id=entry.id, status=IntegrityStatus.EVENT_ALTERED, anchor=anchor
+                audit_log_id=entry.id,
+                status=IntegrityStatus.EVENT_ALTERED,
+                anchor=anchor,
+                network=anchor.network,
+                reference=anchor.reference,
+                anchored_at=anchor.anchored_at,
             )
 
         receipt = AnchorReceipt(
@@ -290,10 +425,20 @@ class AuditAnchorService:
         )
         if not await self._provider.verify(anchor.digest, receipt):
             return IntegrityReport(
-                audit_log_id=entry.id, status=IntegrityStatus.ANCHOR_ALTERED, anchor=anchor
+                audit_log_id=entry.id,
+                status=IntegrityStatus.ANCHOR_ALTERED,
+                anchor=anchor,
+                network=anchor.network,
+                reference=anchor.reference,
+                anchored_at=anchor.anchored_at,
             )
         return IntegrityReport(
-            audit_log_id=entry.id, status=IntegrityStatus.VERIFIED, anchor=anchor
+            audit_log_id=entry.id,
+            status=IntegrityStatus.VERIFIED,
+            anchor=anchor,
+            network=anchor.network,
+            reference=anchor.reference,
+            anchored_at=anchor.anchored_at,
         )
 
 

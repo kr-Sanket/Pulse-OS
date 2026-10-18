@@ -184,3 +184,11 @@ class AuditEventNotFoundError(ConsentError):
     One error for both, deliberately: the 403-vs-404 rule (docs/API_GUIDELINES.md) means a
     patient asking about somebody else's event must not learn that it exists.
     """
+
+
+class AuditProofNotFoundError(ConsentError):
+    """The audit event is not sealed into any Merkle batch, so no proof exists."""
+
+
+class AuditBatchNotFoundError(ConsentError):
+    """No sealed audit batch with the requested batch number exists."""

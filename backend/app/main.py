@@ -27,6 +27,7 @@ from app.modules.auth.firebase import FirebaseAuthProvider
 from app.modules.auth.router import router as auth_router
 from app.modules.consent.router import (
     access_requests_router,
+    audit_batches_router,
     audit_logs_router,
     consent_grants_router,
     hospital_audit_logs_router,
@@ -102,6 +103,7 @@ def create_app() -> FastAPI:
     application.include_router(access_requests_router, prefix=API_V1_PREFIX)
     application.include_router(consent_grants_router, prefix=API_V1_PREFIX)
     application.include_router(audit_logs_router, prefix=API_V1_PREFIX)
+    application.include_router(audit_batches_router, prefix=API_V1_PREFIX)
     application.include_router(notifications_router, prefix=API_V1_PREFIX)
     application.include_router(ai_router, prefix=API_V1_PREFIX)
     # /hospitals/me/audit-logs is consent-owned data on a records-owned URL prefix (ADR-023).

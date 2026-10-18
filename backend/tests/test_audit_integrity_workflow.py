@@ -266,6 +266,12 @@ class _MissingEventRepository(AuditBatchRepository):
         rows = await super().list_members_with_events()
         return [(m, None if m.audit_log_id == self._missing_id else e) for m, e in rows]
 
+    async def list_members_with_events_for_batch(
+        self, batch_id: UUID
+    ) -> list[tuple[AuditBatchMember, AuditLog | None]]:
+        rows = await super().list_members_with_events_for_batch(batch_id)
+        return [(m, None if m.audit_log_id == self._missing_id else e) for m, e in rows]
+
 
 def test_missing_event_detected() -> None:
     async def scenario() -> None:

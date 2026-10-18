@@ -233,18 +233,25 @@ class AuditIntegrityResponse(ApiModel):
     #: Null exactly when ``status`` is ``NOT_ANCHORED``.
     network: str | None
     reference: str | None
+    #: For v1/v2 records: the timestamp of anchoring.
+    #: For v3 records: the local batch creation/sealing timestamp.
     anchored_at: datetime | None
 
     @classmethod
     def from_report(cls, report: IntegrityReport) -> "AuditIntegrityResponse":
         anchor = report.anchor
-        if anchor is None:
-            return cls(status=report.status, network=None, reference=None, anchored_at=None)
+        if anchor is not None:
+            return cls(
+                status=report.status,
+                network=anchor.network,
+                reference=anchor.reference,
+                anchored_at=anchor.anchored_at,
+            )
         return cls(
             status=report.status,
-            network=anchor.network,
-            reference=anchor.reference,
-            anchored_at=anchor.anchored_at,
+            network=report.network,
+            reference=report.reference,
+            anchored_at=report.anchored_at,
         )
 
 
@@ -371,3 +378,57 @@ class DecisionOutcomeResponse(ApiModel):
     request_status: ConsentRequestStatus
     decisions: list[ConsentDecisionResponse]
     grants: list[ConsentGrantResponse]
+
+
+class ProofStepResponse(ApiModel):
+    sibling: str
+    sibling_on_left: bool
+
+
+class MerkleProofResponse(ApiModel):
+    leaf_index: int
+    leaf_count: int
+    steps: list[ProofStepResponse]
+
+
+class AuditEventProofResponse(ApiModel):
+    audit_log_id: UUID
+    status: IntegrityStatus
+    batch_number: int
+    batch_id: UUID
+    leaf_index: int
+    leaf_count: int
+    root: str
+    commitment: str
+    event_digest: str
+    recomputed_digest: str | None
+    is_event_valid: bool
+    is_proof_valid: bool
+    proof_steps_count: int
+    proof: MerkleProofResponse
+
+
+class AuditBatchFindingResponse(ApiModel):
+    kind: str
+    batch_number: int | None
+    audit_log_id: UUID | None
+
+
+class AuditBatchResponse(ApiModel):
+    """The answer to 'is this sealed Merkle batch valid and intact?'.
+
+    Zero PHI: contains only batch metadata, roots, commitments, and discrepancy findings.
+    """
+
+    batch_number: int
+    batch_id: UUID
+    protocol_version: int
+    hash_version: int
+    leaf_count: int
+    root: str
+    commitment: str
+    first_occurred_at: datetime | None
+    last_occurred_at: datetime | None
+    is_valid: bool
+    status: str
+    findings: list[AuditBatchFindingResponse]

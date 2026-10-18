@@ -292,12 +292,7 @@ class AuditBatchService:
         if batch is None:
             return None
 
-        members = await self._batches.list_members_for_batch(batch.id)
-        member_pairs: list[tuple[AuditBatchMember, AuditLog | None]] = []
-        for member in members:
-            event = await self._batches.get_event_by_id(member.audit_log_id)
-            member_pairs.append((member, event))
-
+        member_pairs = await self._batches.list_members_with_events_for_batch(batch.id)
         findings = _check_batch(batch, member_pairs)
         return BatchVerificationResult(
             batch_number=batch.batch_number,

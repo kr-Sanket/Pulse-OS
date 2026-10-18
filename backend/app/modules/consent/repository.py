@@ -742,6 +742,24 @@ class AuditBatchRepository:
         )
         return result.scalar_one_or_none()
 
+    async def by_audit_log_ids(
+        self, audit_log_ids: Collection[UUID]
+    ) -> dict[UUID, AuditBatchMember]:
+        """Batch members for a collection of audit event ids, keyed by audit_log_id."""
+        if not audit_log_ids:
+            return {}
+        result = await self._session.execute(
+            select(AuditBatchMember).where(AuditBatchMember.audit_log_id.in_(audit_log_ids))
+        )
+        return {member.audit_log_id: member for member in result.scalars()}
+
+    async def get_batches_by_ids(self, batch_ids: Collection[UUID]) -> dict[UUID, AuditBatch]:
+        """Fetch multiple batches by their UUID primary keys, keyed by batch id."""
+        if not batch_ids:
+            return {}
+        result = await self._session.execute(select(AuditBatch).where(AuditBatch.id.in_(batch_ids)))
+        return {batch.id: batch for batch in result.scalars()}
+
     async def list_members_for_batch(self, batch_id: UUID) -> list[AuditBatchMember]:
         """Fetch all members of a batch ordered by leaf position (0 .. n-1)."""
         result = await self._session.execute(
@@ -750,6 +768,22 @@ class AuditBatchRepository:
             .order_by(AuditBatchMember.leaf_index.asc())
         )
         return list(result.scalars())
+
+    async def list_members_with_events_for_batch(
+        self, batch_id: UUID
+    ) -> list[tuple[AuditBatchMember, AuditLog | None]]:
+        """Every membership row of a batch with its audit event, ordered by leaf position.
+
+        An outer join: a member whose event row has gone missing comes back with None,
+        preserving missing-event detection without N+1 queries.
+        """
+        result = await self._session.execute(
+            select(AuditBatchMember, AuditLog)
+            .outerjoin(AuditLog, AuditLog.id == AuditBatchMember.audit_log_id)
+            .where(AuditBatchMember.batch_id == batch_id)
+            .order_by(AuditBatchMember.leaf_index.asc())
+        )
+        return [(member, event) for member, event in result.tuples()]
 
     async def get_event_by_id(self, audit_log_id: UUID) -> AuditLog | None:
         """Fetch an audit log entry by UUID primary key."""

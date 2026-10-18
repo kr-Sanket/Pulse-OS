@@ -18,21 +18,23 @@ from http import HTTPStatus
 from typing import Annotated, Protocol
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from app.core.errors import problem_response
 from app.modules.auth.dependencies import (
+    CurrentUser,
     RequireDoctor,
     RequireHospitalAdmin,
     RequirePatient,
     rate_limited,
 )
 from app.modules.auth.domain import AuthenticatedUser
-from app.modules.consent.anchor_service import IntegrityReport
+from app.modules.consent.anchor_service import IntegrityReport, IntegrityStatus
 from app.modules.consent.dependencies import (
     PROBLEM,
     AuditAnchorServiceDep,
+    AuditBatchServiceDep,
     CategoryVocabulary,
     CategoryVocabularyDep,
     ConsentServiceDep,
@@ -42,14 +44,22 @@ from app.modules.consent.dependencies import (
     resolve_category_codes,
     to_http_error,
 )
-from app.modules.consent.errors import ConsentError, RequestNotDecidableError
+from app.modules.consent.errors import (
+    AuditBatchNotFoundError,
+    AuditProofNotFoundError,
+    ConsentError,
+    RequestNotDecidableError,
+)
 from app.modules.consent.models import ConsentGrant
 from app.modules.consent.schemas import (
     AccessRequestCreateRequest,
     AccessRequestListItemResponse,
     AccessRequestListResponse,
     AccessRequestResponse,
+    AuditBatchFindingResponse,
+    AuditBatchResponse,
     AuditEventListResponse,
+    AuditEventProofResponse,
     AuditEventResponse,
     AuditEventVerificationResponse,
     AuditHospitalResponse,
@@ -62,6 +72,8 @@ from app.modules.consent.schemas import (
     DecisionOutcomeResponse,
     HospitalAuditEventListResponse,
     HospitalAuditEventResponse,
+    MerkleProofResponse,
+    ProofStepResponse,
     SentAccessRequestListResponse,
     SentAccessRequestResponse,
     StaffDisplayResponse,
@@ -89,6 +101,8 @@ audit_logs_router = APIRouter(prefix="/audit-logs", tags=["consent"])
 # otherwise the records module's, and ownership of the *data* decides the module while the
 # URL only decides the shape (the rule ADR-020 set).
 hospital_audit_logs_router = APIRouter(prefix="/hospitals/me/audit-logs", tags=["hospitals"])
+# Read-only verification of sealed Merkle batches against the database (ADR-027).
+audit_batches_router = APIRouter(prefix="/audit-batches", tags=["audit"])
 
 PatientUser = Annotated[AuthenticatedUser, Depends(RequirePatient)]
 HospitalAdminUser = Annotated[AuthenticatedUser, Depends(RequireHospitalAdmin)]
@@ -687,6 +701,82 @@ async def verify_audit_event(
     return AuditEventVerificationResponse.from_report(report)
 
 
+@audit_logs_router.get(
+    "/{audit_log_id}/proof",
+    response_model=AuditEventProofResponse,
+    responses={
+        **_UNAUTHENTICATED,
+        **_WRONG_ROLE,
+        404: {"description": "No such audit event or proof for this patient", "content": PROBLEM},
+    },
+)
+async def get_audit_event_proof(
+    audit_log_id: UUID,
+    user: PatientUser,
+    anchors: AuditAnchorServiceDep,
+    batches: AuditBatchServiceDep,
+) -> AuditEventProofResponse:
+    """Get the cryptographic Merkle membership proof for an entry of the caller's trail (ADR-027).
+
+    Proves that this audit record is a committed leaf in an immutable Merkle batch.
+    Re-verifies the proof against the batch's root and recomputes the event digest.
+    Contains zero PHI.
+
+    Roles: PATIENT (own trail only). Enforces patient isolation: another patient's
+    event answers 404.
+    Failure modes: 401, 403, 404 (no such event for this caller, or unbatched event),
+    422 (malformed id).
+    """
+    try:
+        report = await anchors.verify_for_caller(user, audit_log_id)
+    except ConsentError as exc:
+        raise to_http_error(exc) from exc
+
+    proof_res = await batches.get_proof_for_event(audit_log_id)
+    if proof_res is None:
+        raise to_http_error(AuditProofNotFoundError())
+
+    # Patient isolation is enforced by anchors.verify_for_caller (404 for other patients).
+    # batches.get_proof_for_event generates and verifies the Merkle inclusion proof.
+    # Primary-key lookups hit SQLAlchemy's session identity map.
+    #
+    # Incorporate both event digest validity and cryptographic Merkle proof validity:
+    # never return status=VERIFIED if is_proof_valid or is_event_valid is false.
+    if not proof_res.is_event_valid:
+        final_status = IntegrityStatus.EVENT_ALTERED
+    elif not proof_res.is_proof_valid or report.status is IntegrityStatus.ANCHOR_ALTERED:
+        final_status = IntegrityStatus.ANCHOR_ALTERED
+    else:
+        final_status = IntegrityStatus.VERIFIED
+
+    return AuditEventProofResponse(
+        audit_log_id=proof_res.audit_log_id,
+        status=final_status,
+        batch_number=proof_res.batch_number,
+        batch_id=proof_res.batch_id,
+        leaf_index=proof_res.leaf_index,
+        leaf_count=proof_res.leaf_count,
+        root=proof_res.root,
+        commitment=proof_res.commitment,
+        event_digest=proof_res.event_digest,
+        recomputed_digest=proof_res.recomputed_digest,
+        is_event_valid=proof_res.is_event_valid,
+        is_proof_valid=proof_res.is_proof_valid,
+        proof_steps_count=proof_res.proof_steps_count,
+        proof=MerkleProofResponse(
+            leaf_index=proof_res.proof.leaf_index,
+            leaf_count=proof_res.proof.leaf_count,
+            steps=[
+                ProofStepResponse(
+                    sibling=s.sibling,
+                    sibling_on_left=s.sibling_on_left,
+                )
+                for s in proof_res.proof.steps
+            ],
+        ),
+    )
+
+
 @hospital_audit_logs_router.get("", response_model=HospitalAuditEventListResponse)
 async def list_hospital_audit_events(
     user: HospitalAdminUser,
@@ -725,3 +815,55 @@ async def list_hospital_audit_events(
     except ConsentError as exc:
         raise to_http_error(exc) from exc
     return _to_hospital_audit_list_response(page)
+
+
+@audit_batches_router.get(
+    "/{batch_number}",
+    response_model=AuditBatchResponse,
+    responses={
+        **_UNAUTHENTICATED,
+        404: {"description": "Audit batch not found", "content": PROBLEM},
+        **_INVALID,
+    },
+)
+async def verify_audit_batch(
+    batch_number: int,
+    user: CurrentUser,
+    batches: AuditBatchServiceDep,
+) -> AuditBatchResponse:
+    """Independently verify a sealed Merkle batch against the database (ADR-027).
+
+    Recomputes the domain-separated Merkle root and Keccak commitment from the batch's
+    members and compares them with persisted values. Reports any tampering or inconsistencies.
+    Contains zero PHI and zero patient identifiers.
+
+    Roles: Any authenticated user (PATIENT, DOCTOR, HOSPITAL_ADMIN, SYSTEM_ADMIN).
+    Failure modes: 401, 404 (no such batch), 422 (batch_number < 1).
+    """
+    del user  # auth gate guarantees authenticated caller
+    if batch_number < 1:
+        raise HTTPException(status_code=422, detail="batch_number must be at least 1")
+    res = await batches.verify_batch(batch_number)
+    if res is None:
+        raise to_http_error(AuditBatchNotFoundError())
+    return AuditBatchResponse(
+        batch_number=res.batch_number,
+        batch_id=res.batch_id,
+        protocol_version=res.protocol_version,
+        hash_version=res.hash_version,
+        leaf_count=res.leaf_count,
+        root=res.root,
+        commitment=res.commitment,
+        first_occurred_at=res.first_occurred_at,
+        last_occurred_at=res.last_occurred_at,
+        is_valid=res.is_valid,
+        status="VALID" if res.is_valid else "TAMPERED",
+        findings=[
+            AuditBatchFindingResponse(
+                kind=f.kind.value,
+                batch_number=f.batch_number,
+                audit_log_id=f.audit_log_id,
+            )
+            for f in res.findings
+        ],
+    )
