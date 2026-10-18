@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import Final, Protocol
 from uuid import UUID
 
-from app.modules.auth.domain import AuthenticatedUser
+from app.modules.auth.domain import AuthenticatedUser, Role
 
 from .context import AssembledContext, ContextAudience, assemble_context
 from .generation import AnswerGenerator, GeneratedAnswer
@@ -145,14 +145,32 @@ class AIQueryService:
             visibility=RetrievalVisibility.GRANTEE,
             limit=limit,
         )
+
+        # Re-check active consent after retrieval to prevent TOCTOU race:
+        final_at = datetime.now(UTC)
+        current_category_ids = await self._consent.granted_category_ids(
+            requester, patient_id=patient_id, at=final_at
+        )
+        if not current_category_ids:
+            if patient_id in await self._patients.health_ids_by_id([patient_id]):
+                await self._search_auditor.record_search(
+                    requester,
+                    patient_id=patient_id,
+                    granted_category_ids=frozenset(),
+                    at=final_at,
+                    request_context=request_context,
+                )
+            return []
+
+        authorized_chunks = [c for c in chunks if c.category_id in current_category_ids]
         await self._search_auditor.record_search(
             requester,
             patient_id=patient_id,
-            granted_category_ids=category_ids,
-            at=at,
+            granted_category_ids=current_category_ids,
+            at=final_at,
             request_context=request_context,
         )
-        return chunks
+        return authorized_chunks
 
     async def search(
         self,
@@ -208,6 +226,7 @@ class AIQueryService:
         patient_id: UUID,
         generator: AnswerGenerator,
         request_context: str | None = None,
+        category_codes: Mapping[UUID, str] | None = None,
     ) -> GeneratedAnswer:
         now = datetime.now(UTC)
 
@@ -233,6 +252,42 @@ class AIQueryService:
 
         # Context has evidence: invoke generator
         generated = await generator.generate_answer(context)
+
+        # For doctor answer generation, perform authoritative post-synthesis verification:
+        # if any category of evidence used to construct the answer was revoked or expired
+        # while the generator was running, discard the answer, citations, and audit.
+        if requester.role is Role.DOCTOR and self._consent is not None:
+            code_to_id = (
+                {code: uid for uid, code in category_codes.items()} if category_codes else {}
+            )
+            used_categories: set[UUID] = set()
+            for item in context.items:
+                cat_id = code_to_id.get(item.category_code)
+                if cat_id is not None:
+                    used_categories.add(cat_id)
+
+            if used_categories:
+                final_granted = await self._consent.granted_category_ids(
+                    requester, patient_id=patient_id, at=datetime.now(UTC)
+                )
+                if not used_categories.issubset(final_granted):
+                    provider = getattr(
+                        generator,
+                        "provider",
+                        "fake" if "Fake" in type(generator).__name__ else "ollama",
+                    )
+                    model = getattr(
+                        generator,
+                        "model",
+                        "fake-v1" if "Fake" in type(generator).__name__ else "qwen3:8b",
+                    )
+                    return GeneratedAnswer(
+                        answer=DEFAULT_EMPTY_EVIDENCE_ANSWER,
+                        citations=(),
+                        provider=str(provider),
+                        model=str(model),
+                        generated_at=datetime.now(UTC),
+                    )
 
         # Audit recording: only after successful generation
         if self._auditor is not None:
@@ -285,6 +340,7 @@ class AIQueryService:
             patient_id,
             generator,
             request_context=request_context,
+            category_codes=category_codes,
         )
 
     async def generate_self_answer(

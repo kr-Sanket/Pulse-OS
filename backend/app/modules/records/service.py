@@ -701,6 +701,34 @@ class RecordService:
             payload = await self._storage.get_object(record.s3_key)
             records_and_payloads.append((record, payload))
 
+        # For clinician export, perform authoritative final consent verification:
+        # any category revoked or expired during database queries or S3 streaming
+        # must be excluded. If no granted categories remain, access is denied.
+        if caller.role is Role.DOCTOR:
+            final_at = self._now()
+            current_granted = await self._grant_scope.granted_category_ids(
+                caller, patient_id=patient.id, at=final_at
+            )
+            if not current_granted:
+                if self._export_auditor is not None:
+                    await self._export_auditor.record_export(
+                        caller,
+                        patient_id=patient.id,
+                        granted_category_ids=frozenset(),
+                        at=final_at,
+                        request_context=request_context,
+                    )
+                raise ConsentRequiredError()
+
+            # Filter candidate records and payloads to only those currently authorized
+            records_and_payloads = [
+                (rec, payload)
+                for rec, payload in records_and_payloads
+                if rec.category_id in current_granted
+            ]
+            granted_category_ids = current_granted
+            at = final_at
+
         # Pure serialization and subject validation
         bundle_dict = create_fhir_bundle(patient, records_and_payloads, timestamp=at)
         bundle_bytes = serialize_bundle_to_json(bundle_dict)
