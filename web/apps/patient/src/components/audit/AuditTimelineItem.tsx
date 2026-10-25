@@ -64,19 +64,24 @@ export function AuditTimelineItem({ event, isLast = false }: AuditTimelineItemPr
                 </span>
               </Detail>
               <Detail label="Integrity">
-                <span className="flex flex-wrap items-center gap-2" title={event.integrity.detail}>
+                <span className="flex flex-wrap items-center gap-2">
                   <StatusBadge tone={event.integrity.tone}>{event.integrity.label}</StatusBadge>
                   {event.integrity.batched ? (
                     <Button
                       variant="ghost"
                       size="sm"
                       className="h-7 gap-1.5 px-2 text-xs"
+                      aria-label={event.proofButtonLabel}
                       onClick={() => setProofOpen(true)}
                     >
                       <ShieldCheck className="size-3.5" aria-hidden />
                       View proof
                     </Button>
                   ) : null}
+                </span>
+                {/* Visible, not a tooltip: touch and screen-reader users get it too. */}
+                <span className="text-muted-foreground mt-1 block text-xs leading-relaxed">
+                  {event.integrity.detail}
                 </span>
               </Detail>
             </dl>

@@ -44,7 +44,8 @@ automatic summaries, health timelines and a report explainer are planned, not bu
   lifecycle and verification audit event open — policy needed); (4) demonstrable local audit integrity ✅
   for the review (scheduler open); (5) FHIR R4 export ✅ patient UI, API for clinicians (not HL7-validated).
   QR identity open. **There is no E2E suite and none is to be rebuilt** (removed in `281439c`).
-  **Not built, do not describe as working:** upload indexing/OCR (`workers/tasks.py` only logs),
+  **Not built, do not describe as working:** OCR (scanned PDFs/images are never indexed; text-layer
+  PDF indexing exists only on branch `feature/upload-ai-indexing`, unmerged),
   embeddings, on-chain submission, receipts, contract, chain adapter, sealing scheduler, append-only DB
   triggers; M7 hardening/deploy. **M6.4 is not authorized.**
 - **Health (2026-10-25, local only — not CI):** backend **1351 passed, 26 skipped** (opt-in PostgreSQL
@@ -59,8 +60,8 @@ automatic summaries, health timelines and a report explainer are planned, not bu
 A **modular monolith** FastAPI backend (NOT six microservices — see ADR-001) with six internal
 modules matching the original service boundaries: `auth`, `patients`, `records`, `consent`, `ai`,
 `notifications` (in-app only, ADR-031). PostgreSQL (no pgvector use — retrieval is
-lexical, ADR-029; host port 5433 → container 5432), Redis (rate limits + arq queue; the worker
-only logs today), S3-compatible
+lexical, ADR-029; host port 5433 → container 5432), Redis (rate limits + arq queue; on `main`
+the worker only logs — text-layer PDF indexing is on `feature/upload-ai-indexing`), S3-compatible
 object storage (MinIO locally, ADR-005), and a **local Ollama** model for AI generation
 (ADR-028). Audit integrity: versioned digests and Merkle batches with an opaque commitment behind
 a pluggable anchor port; only hashes would ever go on-chain, and **nothing is submitted yet**

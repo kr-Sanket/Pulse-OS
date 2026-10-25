@@ -8,6 +8,7 @@ the shared ``client``/``sqlite_db`` fixtures in conftest.py and the contract pin
 move to test_openapi.py.
 """
 
+import asyncio
 import datetime as dt
 import logging
 from collections.abc import Iterator
@@ -120,8 +121,6 @@ def consent_app() -> FastAPI:
 def world(consent_app: FastAPI) -> Iterator[World]:
     engine: AsyncEngine = create_sqlite_test_engine()
 
-    import asyncio
-
     async def _schema() -> None:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
@@ -220,17 +219,23 @@ def world(consent_app: FastAPI) -> Iterator[World]:
     consent_app.dependency_overrides[get_clinician_directory] = lambda: clinicians
     consent_app.dependency_overrides[get_category_vocabulary_source] = lambda: vocabulary
 
-    with TestClient(consent_app) as client:
-        yield World(
-            client=client,
-            clinicians=clinicians,
-            doctor=_bearer("doctor"),
-            patient=_bearer("patient"),
-            other_patient=_bearer("other"),
-            doctor_user_id=ids["doctor_user_id"],
-            engine=engine,
-            patient_user_id=ids["patient_user_id"],
-        )
+    try:
+        with TestClient(consent_app) as client:
+            yield World(
+                client=client,
+                clinicians=clinicians,
+                doctor=_bearer("doctor"),
+                patient=_bearer("patient"),
+                other_patient=_bearer("other"),
+                doctor_user_id=ids["doctor_user_id"],
+                engine=engine,
+                patient_user_id=ids["patient_user_id"],
+            )
+    finally:
+        # Close the in-memory connection and its aiosqlite worker thread now, on a live
+        # loop. Left to garbage collection it closes later, after its loop is gone, and
+        # surfaces as "Event loop is closed" thread warnings in whichever test runs then.
+        asyncio.run(engine.dispose())
 
 
 def _select_category(code: str) -> Any:

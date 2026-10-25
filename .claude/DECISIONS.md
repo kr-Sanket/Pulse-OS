@@ -1628,3 +1628,29 @@ simplest path for students); AWS only if the team wants the learning curve.
 patient web portal stabilizes, reusing the proven API; web portal is the demo-critical patient
 surface. Original plan had all four clients in Month 3, which overloads the single frontend lead.
 
+## ADR-033 — Index uploaded text-layer PDFs for local AI retrieval
+**Date:** 2026-10-25 · **Status:** **Proposed — needs Product Owner approval** (branch
+`feature/upload-ai-indexing`, uncommitted). **Extends:** ADR-008, ADR-014, ADR-028, ADR-029.
+
+**Context:** the `record_uploaded` job only logged, so uploads never reached AI retrieval and the
+assistant relied on imported Synthea data. Uploads accept PDF, JPEG and PNG.
+
+**Decision:**
+1. The worker indexes **PDFs with a text layer only**, using `pypdf` (new runtime dependency,
+   pure Python, BSD-3). JPEG/PNG and scanned PDFs are not indexed — there is no OCR, and nothing
+   claims otherwise (UI: "Not searchable by AI").
+2. One job is one transaction; no row lock is held across the object read or extraction.
+   Idempotency rests on the existing UNIQUE `ai_documents.record_id` (a losing concurrent
+   delivery returns `ALREADY_INDEXED` via a savepoint).
+3. `processing_status`: `INDEXED`; `FAILED` for no text / encrypted / unparseable (not retried)
+   or storage failing on the last of 5 arq attempts; images stay `UPLOADED`. `PROCESSING` is
+   never written (unobservable inside one transaction).
+4. Access is unchanged: chunks carry patient and category and are read only through the existing
+   consent-scoped, hidden-aware retrieval and the post-generation consent re-check.
+5. No document text in logs: outcome codes and record ids only; `pypdf` and database-driver
+   loggers pinned to WARNING.
+
+**Consequences:** extracted text is PHI at rest in `ai_chunks` (as imported FHIR text already
+is). Bounded extraction (300 pages / 500 000 characters) but no per-job CPU timeout beyond arq's
+job timeout. Re-indexing on file replacement is not needed — record files are immutable.
+

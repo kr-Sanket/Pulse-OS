@@ -1,1 +1,2 @@
-"""Async queue consumers (OCR, embeddings, anchoring, notifications). Added from M2 (ADR-008)."""
+"""Async queue consumers (ADR-008/ADR-014). Today: ``record_uploaded`` — text-layer PDF
+indexing for local AI retrieval. No OCR, embeddings or anchoring jobs exist."""

@@ -69,6 +69,7 @@ export {
   NO_DESCRIPTION,
   originLabel,
   PATIENT_UPLOADED,
+  aiIndexingNote,
   processingLabel,
   processingTone,
   toRecordDetailView,

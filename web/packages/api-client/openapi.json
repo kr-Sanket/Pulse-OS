@@ -2199,7 +2199,7 @@
         "type": "string"
       },
       "RecordProcessingStatus": {
-        "description": "ADR-008 pipeline states. M2 only ever writes UPLOADED \u2014 the OCR/embedding worker\nthat advances records to PROCESSING/INDEXED/FAILED is the M5 AI milestone.",
+        "description": "ADR-008 pipeline states, written by the upload-indexing worker\n(records/upload_indexing.py). INDEXED: a text-layer PDF whose text joined AI retrieval.\nFAILED: a PDF with no readable text (scanned, encrypted, unparseable) or storage still\nfailing on the last attempt. Images stay UPLOADED \u2014 there is no OCR. PROCESSING is\nreserved; the worker commits in one transaction, so it is never observable.",
         "enum": [
           "UPLOADED",
           "PROCESSING",

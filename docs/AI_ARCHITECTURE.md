@@ -21,8 +21,19 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
 - **Source data is sanitized FHIR R4 JSON** written by the Synthea import (see
   [DOMAIN_MODEL.md](DOMAIN_MODEL.md) §Synthetic data). Ingestion runs inside the import, or later
   from `scripts/backfill_ai.py` over records already in object storage.
-- **Uploaded files (PDFs, images) are not indexed.** There is no OCR and no document extraction;
-  `app/workers/tasks.py::record_uploaded` only logs, and records stay `UPLOADED`.
+- **Uploaded PDFs with a text layer are indexed; images and scanned PDFs are not** (branch
+  `feature/upload-ai-indexing`, proposed ADR-033). `POST /records` enqueues `record_uploaded`;
+  the arq worker (`records/upload_indexing.py`) reads the object, extracts text with `pypdf`
+  (`records/text_extraction.py`, ≤ 300 pages / 500 000 characters) and writes `ai_documents` /
+  `ai_chunks` with the record's patient and category, then sets `processing_status`:
+  `INDEXED`; `FAILED` for a PDF with no text layer, an encrypted or unparseable file
+  (deterministic — not retried) or storage still failing on the last of 5 attempts; JPEG/PNG
+  stay `UPLOADED`. **There is no OCR**, so scanned documents are never searchable. Indexing is
+  idempotent (UNIQUE `ai_documents.record_id`; a concurrent duplicate delivery is a no-op,
+  validated on PostgreSQL). `scripts/backfill_ai.py --uploads` indexes PDFs stored before the
+  worker existed. Extracted text is PHI at rest like imported FHIR text; it is read only
+  through the retrieval paths below (consent scope and `is_hidden` evaluated per query) and is
+  never logged — `pypdf` and database-driver loggers are pinned to WARNING.
 - **No embeddings are computed or stored.** `ai_documents` and `ai_chunks` (migration
   `aedb0169a4eb`) hold text, ordering and content hashes — no vector column.
 - Re-indexing is content-hash based: an unchanged resource is not rewritten.
@@ -72,9 +83,11 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
 - UI: doctor portal `AIAssistantPanel`, placed above the granted-records list on the patient
   records page (`13e2034`); patient portal `HealthCopilotPanel` on the records page. No UI calls
   the search endpoint.
-- **Citations:** the model returns `cited_indices`; only indices that match supplied evidence are
-  kept and mapped to record ids server-side. `[N]` markers inside the answer text itself are not
-  checked against that set.
+- **Citations:** reconciled against the answer text for every generator (`ai/citations.py`):
+  `[N]` / `[a, b]` markers naming evidence that was not supplied are removed from the text, and
+  only indices that appear as markers in the text are returned as citations, rebuilt from the
+  supplied evidence (never from generator-provided record ids). Whether a sentence is actually
+  supported by the evidence it cites is not checked — that is semantic, not a string rule.
 - **Audit:** a successful generated answer writes a `SUMMARY_GENERATED` audit event for the
   patient. The search writes one scope-level event per request (ADR-020 amendments,
   2026-10-15): `RECORDS_SEARCHED` when the clinician had a granted scope (after retrieval, also

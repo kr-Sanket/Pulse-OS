@@ -687,7 +687,9 @@ def test_citation_provenance_preserves_multiple_records(
         consent=fake_consent,
         auditor=fake_auditor,
     )
-    fake_generator = FakeAnswerGenerator()
+    # Both sources are cited in the text: a citation is returned only when its marker
+    # appears in the answer (ai/citations.py).
+    fake_generator = FakeAnswerGenerator(answer_template="Labs from both records [1] [2].")
 
     app.dependency_overrides[get_ai_query_service] = lambda: real_service
     app.dependency_overrides[get_answer_generator] = lambda: fake_generator

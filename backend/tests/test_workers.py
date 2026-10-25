@@ -1,32 +1,27 @@
-"""Worker-skeleton tests (M2): registry wiring and the no-op upload task."""
+"""Worker wiring tests: registry, retry budget, and startup/shutdown resources.
+
+The indexing behaviour of ``record_uploaded`` is pinned in tests/test_upload_indexing.py.
+"""
 
 import asyncio
-import logging
+from typing import Any
 
-import pytest
-from app.workers.main import WorkerSettings, startup
-from app.workers.tasks import record_uploaded
+from app.workers.main import WorkerSettings, shutdown, startup
+from app.workers.tasks import MAX_TRIES
 
 
 def test_worker_settings_register_the_upload_task() -> None:
     names = {fn.__name__ for fn in WorkerSettings.functions}
     assert names == {"record_uploaded"}
-    assert WorkerSettings.max_tries == 5
+    assert WorkerSettings.max_tries == MAX_TRIES == 5
 
 
-def test_record_uploaded_logs_only_the_opaque_id(caplog: pytest.LogCaptureFixture) -> None:
+def test_worker_startup_builds_resources_and_shutdown_disposes_them() -> None:
     async def scenario() -> None:
-        with caplog.at_level(logging.INFO, logger="app.workers.tasks"):
-            await record_uploaded({}, record_id="11111111-2222-3333-4444-555555555555")
-        assert len(caplog.records) == 1
-        record = caplog.records[0]
-        assert record.record_id == "11111111-2222-3333-4444-555555555555"  # type: ignore[attr-defined]
-
-    asyncio.run(scenario())
-
-
-def test_worker_startup_configures_logging() -> None:
-    async def scenario() -> None:
-        await startup({})  # must not raise; idempotent logging setup
+        ctx: dict[str, Any] = {}
+        await startup(ctx)  # builds lazily — no database or S3 connection is opened here
+        assert {"engine", "session_factory", "storage"} <= ctx.keys()
+        await shutdown(ctx)
+        await shutdown({})  # tolerates a context startup never filled
 
     asyncio.run(scenario())

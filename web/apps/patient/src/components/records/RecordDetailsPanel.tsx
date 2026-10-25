@@ -15,7 +15,7 @@
 import { Download, Eye, EyeOff, Printer, Share2 } from "lucide-react";
 
 import { IconChip } from "@/components/dashboard/IconChip";
-import { Badge, Button, Card, CardContent, Separator } from "@pulseos/ui";
+import { aiIndexingNote, Badge, Button, Card, CardContent, Separator } from "@pulseos/ui";
 
 import type { RecordMetadata } from "@/records/api";
 import {
@@ -66,6 +66,7 @@ export function RecordDetailsPanel({
   visibilityError,
 }: RecordDetailsPanelProps) {
   const { icon, tone } = categoryStyle(record.categoryCode);
+  const aiNote = aiIndexingNote(record.contentType, record.processingStatus);
 
   return (
     <Card className="sticky top-24">
@@ -90,6 +91,7 @@ export function RecordDetailsPanel({
           <DetailRow label="File" value={record.originalFilename} />
           <DetailRow label="Size" value={formatFileSize(record.sizeBytes)} />
           <DetailRow label="Description" value={recordDescription(record)} />
+          {aiNote === null ? null : <DetailRow label="AI search" value={aiNote} />}
         </dl>
 
         <Separator />

@@ -209,6 +209,44 @@ export const FHIR_JSON_TYPE = "application/fhir+json";
 export interface FhirExport {
   blob: Blob;
   filename: string;
+  /** Clinical resources in the Bundle (every entry but the Patient); null if unreadable. */
+  recordCount: number | null;
+}
+
+/**
+ * How many clinical resources a FHIR Bundle carries, read from a *copy* of its text.
+ *
+ * Only counts: the bytes saved are the Blob itself, never this parse. Null when the body is
+ * not a Bundle this build can read, so the caller says nothing rather than guessing.
+ */
+export function countBundleRecords(text: string): number | null {
+  try {
+    const bundle: unknown = JSON.parse(text);
+    if (typeof bundle !== "object" || bundle === null) return null;
+    const entries = (bundle as { entry?: unknown }).entry;
+    if (!Array.isArray(entries)) return null;
+    return entries.filter((entry: unknown) => {
+      const resource = (entry as { resource?: { resourceType?: unknown } } | null)?.resource;
+      return resource?.resourceType !== "Patient";
+    }).length;
+  } catch {
+    return null;
+  }
+}
+
+/** The line shown after a successful export. A profile-only bundle says why it is empty. */
+export function exportSavedMessage(saved: FhirExport): string {
+  if (saved.recordCount === 0) {
+    return (
+      `Saved ${saved.filename}. It contains only your profile: no structured FHIR records ` +
+      "were found, and uploaded PDFs and images are not part of FHIR exports."
+    );
+  }
+  if (saved.recordCount === null) {
+    return `Saved ${saved.filename}.`;
+  }
+  const noun = saved.recordCount === 1 ? "record" : "records";
+  return `Saved ${saved.filename} (${saved.recordCount} ${noun}).`;
 }
 
 /** `pulseos-fhir-export-2026-10-25.json` — dated by the caller's clock, never by content. */
@@ -241,6 +279,7 @@ export async function exportFhirBundle(
       result.data.type === FHIR_JSON_TYPE
         ? result.data
         : new Blob([result.data], { type: FHIR_JSON_TYPE });
-    return { status: "ready", data: { blob, filename: fhirExportFilename(now) } };
+    const recordCount = countBundleRecords(await blob.text());
+    return { status: "ready", data: { blob, filename: fhirExportFilename(now), recordCount } };
   });
 }

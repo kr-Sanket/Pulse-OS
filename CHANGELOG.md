@@ -5,6 +5,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+### Branch `feature/upload-ai-indexing` (uncommitted, awaiting review)
+
+- **Added — uploaded-record AI indexing:** the `record_uploaded` worker indexes text-layer PDFs
+  (`pypdf`) into local AI retrieval and sets `processing_status` (`INDEXED` / `FAILED`); images
+  and scanned PDFs are not indexed (no OCR). Idempotent, retried on storage outages, backfill via
+  `scripts/backfill_ai.py --uploads`. Proposed ADR-033.
+- **Fixed — AI citations:** `[N]` markers naming missing evidence are removed and only markers
+  present in the text become citations (`ai/citations.py`).
+- **Security — logging:** database-driver and `pypdf` loggers pinned to WARNING so DEBUG logging
+  cannot write SQL parameters or document text.
+- **Added — patient portal:** FHIR export reports how many records were exported and explains a
+  profile-only bundle; record panel says whether AI can read the file; audit integrity
+  explanation is visible text and each "View proof" button has a per-entry accessible name;
+  download object URLs are revoked after 30 s instead of immediately.
+- **Tests:** `test_consent_http` disposes its engine (no leaked aiosqlite threads); new
+  PostgreSQL concurrency test for indexing, added to CI `backend-postgres`.
+
 ### Session 021, 2026-10-25
 - **Fixed — VERIFIED requires Merkle inclusion on every surface.** `GET /audit-logs` and
   `GET /audit-logs/{id}/verification` could report `VERIFIED` for a v3 batched event without

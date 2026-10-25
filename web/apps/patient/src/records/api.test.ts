@@ -3,8 +3,10 @@ import { expect, test, vi } from "vitest";
 import type { PulseOSClient } from "@pulseos/api-client";
 
 import {
+  countBundleRecords,
   createDownloadUrl,
   exportFhirBundle,
+  exportSavedMessage,
   FHIR_JSON_TYPE,
   fhirExportFilename,
   getRecord,
@@ -272,7 +274,7 @@ test("the export asks for a blob and sends no patient identifier", async () => {
   expect(call).toHaveBeenCalledWith("/api/v1/records/export/fhir", { parseAs: "blob" });
   expect(result).toEqual({
     status: "ready",
-    data: { blob: bundle, filename: "pulseos-fhir-export-2026-10-25.json" },
+    data: { blob: bundle, filename: "pulseos-fhir-export-2026-10-25.json", recordCount: null },
   });
 });
 
@@ -315,4 +317,45 @@ test("the export filename is dated in UTC", () => {
   expect(fhirExportFilename(new Date("2026-01-02T23:59:59Z"))).toBe(
     "pulseos-fhir-export-2026-01-02.json",
   );
+});
+
+test("records are counted from the bundle, excluding the Patient entry", () => {
+  const bundle = {
+    resourceType: "Bundle",
+    entry: [
+      { resource: { resourceType: "Patient" } },
+      { resource: { resourceType: "Condition" } },
+      { resource: { resourceType: "Immunization" } },
+    ],
+  };
+  expect(countBundleRecords(JSON.stringify(bundle))).toBe(2);
+  expect(countBundleRecords('{"resourceType":"Bundle","entry":[]}')).toBe(0);
+  expect(countBundleRecords("not json")).toBeNull();
+  expect(countBundleRecords('{"resourceType":"Bundle"}')).toBeNull();
+});
+
+test("a profile-only export says why it is empty", () => {
+  const blob = new Blob([]);
+  expect(exportSavedMessage({ blob, filename: "f.json", recordCount: 0 })).toMatch(
+    /only your profile.*uploaded PDFs and images are not part of FHIR exports/,
+  );
+  expect(exportSavedMessage({ blob, filename: "f.json", recordCount: 1 })).toBe(
+    "Saved f.json (1 record).",
+  );
+  expect(exportSavedMessage({ blob, filename: "f.json", recordCount: 7 })).toBe(
+    "Saved f.json (7 records).",
+  );
+  expect(exportSavedMessage({ blob, filename: "f.json", recordCount: null })).toBe("Saved f.json.");
+});
+
+test("counting the records never changes the saved bytes", async () => {
+  const body =
+    '{"resourceType":"Bundle","type":"collection","entry":[{"resource":{"resourceType":"Patient"}}]}';
+  const { client } = stubClient(ok(new Blob([body], { type: FHIR_JSON_TYPE })));
+
+  const result = await exportFhirBundle(client, EXPORT_DAY);
+
+  if (result.status !== "ready") throw new Error("expected a ready export");
+  expect(result.data.recordCount).toBe(0);
+  expect(await result.data.blob.text()).toBe(body);
 });

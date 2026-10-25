@@ -72,19 +72,20 @@ export function fileTypeLabel(contentType: string): string {
 }
 
 /**
- * ADR-008's pipeline states.
+ * ADR-008's pipeline states, as the upload-indexing worker writes them.
  *
- * `UPLOADED` is the only one the backend writes today — the OCR and embedding worker lands
- * at M5 — so the wording says where the document is, not what has been done to it. Nothing
- * here implies a capability that does not exist yet.
+ * Only text-layer PDFs are indexed for AI search (no OCR). `UPLOADED` is a stored file not
+ * (yet) indexed — images always stay here; `INDEXED` means its text is searchable within the
+ * usual consent rules; `FAILED` means a PDF had no readable text (a scan, encrypted, or
+ * damaged) or storage kept failing. Nothing here implies a capability that does not exist.
  */
 const PROCESSING_STATUSES: Readonly<
   Record<RecordProcessingStatus, { label: string; tone: StatusTone }>
 > = {
   UPLOADED: { label: "Stored", tone: "neutral" },
-  PROCESSING: { label: "Being processed", tone: "info" },
-  INDEXED: { label: "Indexed", tone: "success" },
-  FAILED: { label: "Processing failed", tone: "destructive" },
+  PROCESSING: { label: "Being indexed", tone: "info" },
+  INDEXED: { label: "Indexed for AI search", tone: "success" },
+  FAILED: { label: "Not indexed — no readable text", tone: "warning" },
 };
 
 export function processingLabel(status: RecordProcessingStatus): string {
@@ -134,4 +135,28 @@ export function toRecordDetailView(record: RecordMetadata): RecordDetailView {
     processingLabel: processingLabel(record.processingStatus),
     processingTone: processingTone(record.processingStatus),
   };
+}
+
+/**
+ * One sentence on whether AI features can read this file, for the patient's record panel.
+ *
+ * Derived from the API's `processingStatus` and the stored content type only. Structured
+ * FHIR records are indexed at import, not by the upload worker, so nothing is claimed for them.
+ */
+export function aiIndexingNote(contentType: string, status: RecordProcessingStatus): string | null {
+  if (contentType.startsWith("image/")) {
+    return "Not searchable by AI: images would need text recognition (OCR), which PulseOS does not support.";
+  }
+  if (contentType !== "application/pdf") {
+    return null;
+  }
+  switch (status) {
+    case "INDEXED":
+      return "Its text is searchable by your Health Copilot and, only within consent you grant, by a clinician's AI assistant.";
+    case "FAILED":
+      return "Not searchable by AI: no readable text was found (a scanned, encrypted or damaged PDF).";
+    case "UPLOADED":
+    case "PROCESSING":
+      return "Not yet indexed for AI search.";
+  }
 }
