@@ -1629,16 +1629,16 @@ patient web portal stabilizes, reusing the proven API; web portal is the demo-cr
 surface. Original plan had all four clients in Month 3, which overloads the single frontend lead.
 
 ## ADR-033 — Index uploaded text-layer PDFs for local AI retrieval
-**Date:** 2026-10-25 · **Status:** **Proposed — needs Product Owner approval** (branch
-`feature/upload-ai-indexing`, uncommitted). **Extends:** ADR-008, ADR-014, ADR-028, ADR-029.
+**Date:** 2026-10-25 · **Status:** Accepted (2026-10-26, PR #4). **Extends:** ADR-008, ADR-014, ADR-028, ADR-029.
 
 **Context:** the `record_uploaded` job only logged, so uploads never reached AI retrieval and the
 assistant relied on imported Synthea data. Uploads accept PDF, JPEG and PNG.
 
 **Decision:**
 1. The worker indexes **PDFs with a text layer only**, using `pypdf` (new runtime dependency,
-   pure Python, BSD-3). JPEG/PNG and scanned PDFs are not indexed — there is no OCR, and nothing
-   claims otherwise (UI: "Not searchable by AI").
+   pure Python, BSD-3). Maximum 300 pages and 500,000 extracted characters per document. JPEG/PNG and
+   scanned PDFs with no extractable text are not indexed — there is no OCR, and nothing claims
+   otherwise (UI: "Not searchable by AI").
 2. One job is one transaction; no row lock is held across the object read or extraction.
    Idempotency rests on the existing UNIQUE `ai_documents.record_id` (a losing concurrent
    delivery returns `ALREADY_INDEXED` via a savepoint).
@@ -1651,6 +1651,6 @@ assistant relied on imported Synthea data. Uploads accept PDF, JPEG and PNG.
    loggers pinned to WARNING.
 
 **Consequences:** extracted text is PHI at rest in `ai_chunks` (as imported FHIR text already
-is). Bounded extraction (300 pages / 500 000 characters) but no per-job CPU timeout beyond arq's
+is). Bounded extraction (300 pages / 500,000 characters) but no per-job CPU timeout beyond arq's
 job timeout. Re-indexing on file replacement is not needed — record files are immutable.
 
