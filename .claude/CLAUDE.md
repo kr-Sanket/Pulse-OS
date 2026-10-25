@@ -8,9 +8,11 @@
 A **patient-centric healthcare interoperability platform** (final-year project, production-grade
 ambitions). Every patient gets a permanent **Pulse Health ID** (`PHI-IND-YYYY-XXXXXXC`, ADR-012) usable
 across hospitals. Doctors discover that records exist elsewhere but can only open them after the
-patient grants **granular, per-category consent**. Every consent/access event is anchored to the
-**Polygon Amoy** blockchain. An **AI layer** (OCR → RAG → LLM) produces clinical summaries,
-health timelines, a report explainer, and a Health Copilot chat.
+patient grants **granular, per-category consent**. Every consent/access event is hashed and can be
+sealed into a **local Merkle batch**; anchoring those commitments to **Polygon Amoy** is the design
+goal (ADR-004/027) and is **not built**. An **AI layer** answers questions over consented records
+(lexical retrieval → local Ollama LLM: clinician assistant and patient Health Copilot); OCR,
+automatic summaries, health timelines and a report explainer are planned, not built.
 
 - 3 simulated hospitals (TMH Jamshedpur, CMC Vellore, Apollo). No real hospital or ABHA integration in scope.
 - Team: ChatGPT (Chief Architect), Claude (Senior Engineer — you), Human (Product Owner / Integrator).
@@ -19,49 +21,36 @@ health timelines, a report explainer, and a Health Copilot chat.
 
 ## Current Status
 
-- **Phase (2026-10-17, Session 020):** M4 substantially done; M5 AI **partially built**;
-  **M6.1–M6.3 complete** (local audit integrity; CLI sealing/verification; no public chain); M6.4 **not authorized**.
-  Preparing for the final review. `main` at `d09d721`, **level with `origin/main` (pushed)**.
-  GitHub Actions workflow is reported **GREEN** (workflow run #17, user-provided evidence). See [SESSION.md](SESSION.md) §Session 020.
-- **Completed:** M0.1 scaffold; M0.2 domain design (ADR-011…013); M0.3 walking skeleton (PR #1);
-  M2 backend (onboarding per ADR-015, upload → S3 port, presigned downloads, arq worker per
-  ADR-014, seed); **M3** (request → per-category decision → grant → revoke, `consent.enforce()`
-  on every non-owner record read, append-only audit log, migration 0004, ADR-016…019) — its gate
-  criteria are now met in code; **M4 so far** — all three portals built and integrated (patient
-  complete, doctor's full consent workflow, hospital portal), hospital audit attribution
-  (migration 0005, ADR-022/023/025), authenticated rate limiting (ADR-024), Synthea FHIR R4
-  Phase A (10 patients / 889 records), patient record browsing (sort, server-side search,
-  category filter, composite keyset cursor pagination), patient audit grouping, patient profile editing
-  (`PATCH /patients/me`), patient record hide/unhide (`PATCH /records/{id}/visibility`),
-  **in-app notifications** (ADR-031, migration 0008, `15b2d1b`), automatic consent/permission
-  refresh by polling (`5690a93`), granted-category indicators in the doctor portal (`13e2034`),
-  **authorization and audit correctness** (`a09d41f`, `7c27aa0`), **granular per-category consent decisions**
-  and recovery (`b08ba2a`), **local SYSTEM_ADMIN provisioning** (`b045f10`), **hospital directory API**
-  (`98f3b33`, 39 operations under `/api/v1`), **dedicated System Admin dashboard** (`96a2191`),
-  **hospital token-refresh recovery** (`e48017a`), **medical record keyset pagination stabilization** (`d09d721`),
-  and **audit-integrity CLI workflow** (`e350b2a`).
-- **Next — final review priorities** ([ROADMAP.md](ROADMAP.md) §Final review priorities,
-  [TODO.md](TODO.md) §0a): (1) authorization and audit correctness — ✅ **done** (`a09d41f`); (2) per-category
-  consent decisions in the patient UI — ✅ **done** (`b08ba2a`); (3) SYSTEM_ADMIN provisioning + hospital
-  verification — 🟡 **partially implemented** (`b045f10`, `98f3b33`, `96a2191`, `e48017a`; verifier/timestamp recording and
-  rejection lifecycle open); (4) demonstrable local audit integrity — 🟡 **CLI done** (`e350b2a`; scheduler,
-  missing CLI safety guard, API v3 Merkle verification, and UI open); (5) FHIR R4 export — ⬜ **not started**. QR identity is still
-  open. **There is no E2E suite and none is to be rebuilt** (removed in `281439c`).
-  **Partially built:** M5 AI/RAG — `app/modules/ai` exists (FHIR ingestion, consent-scoped
-  substring-lexical retrieval, Ollama/Qwen3:8B-only generation, clinical assistant, patient
-  copilot) but `workers/tasks.py` still only logs, so uploads are never indexed; M6 blockchain per
-  **ADR-027** (Merkle-batched v3 anchoring) — the `AuditAnchor` port, network-free
-  `LocalChainAuditAnchor`, migration 0006, Keccak-256 v3 digests (M6.1), `consent/merkle.py`
-  (M6.2/M6.2.1), M6.3 batch persistence, and `scripts/audit_integrity.py` CLI workflow (`e350b2a`).
-  M6.1–M6.3 are accepted with deferred items. **The M6 gate is not complete. Not built, do not
-  describe as working:** on-chain batch submission, receipts, chain-side verification,
-  contract, chain adapter, scheduler, patient verification API/UI; M7 hardening/deploy. **M6.4 is not
-  authorized.**
-- **Health (2026-10-17, commit `d09d721`, verified local & GitHub Actions CI reported green via user-provided evidence):** backend **1209 passed,
-  25 skipped** (the 25 skips are the opt-in PostgreSQL tests; the PostgreSQL CI job was reported passed in GitHub Actions run #17, user-provided evidence);
-  ruff format/lint and `mypy` clean (166 source files). Web: **611 tests passed** across 6 packages, prettier +
-  eslint + tsc clean. GitHub Actions is reported green across all jobs (workflow run #17, user-provided evidence).
-- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 020 — read this second, update it before ending every session.
+- **Phase (2026-10-25, Session 021):** M4 substantially done; M5 AI **partially built**;
+  **M6.1–M6.3 complete** (local audit integrity: CLI, API v3 verification/proofs, patient integrity UI;
+  no public chain); M6.4 **not authorized**. Preparing for the final review. Session 021's series
+  (on top of `0ea4bac`, with the four earlier unpushed commits) is committed and pushed to
+  `origin/main`; check GitHub Actions for its CI result (last in-repo record: run #17 on `d09d721`).
+  See [SESSION.md](SESSION.md) §Session 021.
+- **Completed:** M0–M3 (see ROADMAP); **M4 so far** — all three portals on real APIs, hospital audit
+  attribution (ADR-022/023/025), rate limiting (ADR-024), Synthea FHIR R4 import, record browsing with
+  keyset pagination, hide/unhide, profile editing, in-app notifications (ADR-031), polling refresh,
+  per-category consent decisions (`b08ba2a`), SYSTEM_ADMIN provisioning, directory and dashboard,
+  hospital verification with verifier/timestamp (`15e0b1c`, migration 0009), CLI sealing guard
+  (`278bbfc`), account-status + token-revocation enforcement (`65b68fe`), consent-gated **FHIR R4
+  export** (`2e05ee4`), **audit API v3** verification/proofs/batches (`c7e5359`), consent
+  revalidation after AI retrieval/synthesis and export reads (`0ea4bac`). Session 021:
+  VERIFIED now requires Merkle inclusion on every surface, proof endpoint no longer 500s on tampered
+  membership, AI denials/discards audited as `ACCESS_DENIED`, `audit_batch_verify` rate limit,
+  patient FHIR export button, audit integrity badge + proof dialog, suspended-account routing,
+  regenerated OpenAPI/client (42 operations under `/api/v1`), CI build + client-drift steps.
+- **Next — final review priorities** ([ROADMAP.md](ROADMAP.md), [TODO.md](TODO.md) §0a): (1) authz/audit
+  correctness ✅; (2) per-category consent UI ✅; (3) SYSTEM_ADMIN + hospital verification 🟡 (rejection
+  lifecycle and verification audit event open — policy needed); (4) demonstrable local audit integrity ✅
+  for the review (scheduler open); (5) FHIR R4 export ✅ patient UI, API for clinicians (not HL7-validated).
+  QR identity open. **There is no E2E suite and none is to be rebuilt** (removed in `281439c`).
+  **Not built, do not describe as working:** upload indexing/OCR (`workers/tasks.py` only logs),
+  embeddings, on-chain submission, receipts, contract, chain adapter, sealing scheduler, append-only DB
+  triggers; M7 hardening/deploy. **M6.4 is not authorized.**
+- **Health (2026-10-25, local only — not CI):** backend **1351 passed, 26 skipped** (opt-in PostgreSQL
+  tests not run); ruff format/lint and strict `mypy` clean (173 files). Web **689 passed** across 5 tested
+  packages; prettier, eslint, tsc clean; `pnpm build` succeeds.
+- **Session log / handoff notes:** [SESSION.md](SESSION.md) §Session 021 — read this second, update it before ending every session.
 - **Status is owned by [ROADMAP.md](ROADMAP.md)** (milestones, dated validation) and the handoff by
   SESSION.md; the summary above must not grow into a second copy of either.
 
@@ -78,7 +67,7 @@ a pluggable anchor port; only hashes would ever go on-chain, and **nothing is su
 (ADR-004, ADR-027). Frontends: one pnpm/React monorepo with three apps (patient, doctor,
 hospital) sharing a UI kit and a typed API client (ADR-003); the Flutter patient app has not
 started (ADR-010). Record metadata is **FHIR-aligned** (ADR-006), with Synthea FHIR R4 import
-via CLI (proposed ADR-030); there is no FHIR export. Full picture: [docs/SYSTEM_ARCHITECTURE.md](../docs/SYSTEM_ARCHITECTURE.md).
+via CLI (proposed ADR-030) and a consent-gated FHIR R4-shaped Bundle export (not HL7-validated). Full picture: [docs/SYSTEM_ARCHITECTURE.md](../docs/SYSTEM_ARCHITECTURE.md).
 
 ## Where Everything Lives
 

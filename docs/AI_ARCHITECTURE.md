@@ -1,7 +1,7 @@
 # AI Architecture
 
 > **Canonical source for AI behaviour.** Describes the `ai` module **as built** (verified
-> against `backend/app/modules/ai/` on 2026-10-11) and, separately, the original plan that is
+> against `backend/app/modules/ai/` on 2026-10-11; consent revalidation added 2026-10-25) and, separately, the original plan that is
 > **not** implemented. Decisions: ADR-028 (Ollama as the sole generation provider; supersedes
 > ADR-007's provider and redaction parts) and ADR-029 (deterministic lexical retrieval; pgvector
 > deferred; amends ADR-002). Milestone status: `.claude/ROADMAP.md` §M5.
@@ -81,7 +81,18 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
   when nothing matched), `ACCESS_DENIED` when the scope was empty, nothing when the id names no
   patient. The patient and hospital audit views label it "Records searched (AI)". The query and
   chunk text are never stored or logged. Limitations: the query is sent in the URL query string;
-  an answer that finds no evidence, or whose generation fails, is still not audited.
+  an answer whose granted scope finds no evidence (nothing was accessed), or whose generation
+  fails operationally (503/504/502), is not audited.
+- **Consent revalidation (`0ea4bac` and follow-up).** Grants can be revoked while a request is in
+  flight, so clinician paths check twice:
+  - *Search:* grants are re-read after retrieval and chunks from revoked categories are dropped;
+    if none remain the request is audited `ACCESS_DENIED` instead of `RECORDS_SEARCHED`.
+  - *Doctor answer:* with no live grant the generator is never called, an `ACCESS_DENIED` event is
+    written and an empty-evidence answer returned. After generation the grants are re-checked; if
+    any evidence category was revoked — or an evidence item cannot be mapped to a category (fail
+    closed) — the answer and citations are discarded, `ACCESS_DENIED` is written, and
+    `SUMMARY_GENERATED` is not.
+  - The patient copilot reads the owner's records and has no grant to revalidate.
 - **Query sanitization:** `sanitize_clinical_query` replaces Health IDs and phone numbers in the
   question with placeholders. This is **not** a redaction layer: evidence text sent to the model
   is not redacted (see Privacy below).

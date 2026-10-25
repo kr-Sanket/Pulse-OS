@@ -9,7 +9,8 @@
 ### User (identity principal)
 The authenticated identity. Holds the auth-provider subject (e.g. Firebase UID), verified
 phone/email, exactly one **role** (`PATIENT | DOCTOR | HOSPITAL_ADMIN | SYSTEM_ADMIN`), and
-account status (`ACTIVE | SUSPENDED`). A User is linked 1:1 to exactly one profile entity
+account status (`ACTIVE | SUSPENDED`; every authenticated request requires `ACTIVE` — there is
+no API to change it, so suspension is out-of-band). A User is linked 1:1 to exactly one profile entity
 matching its role (Patient, Doctor, or Hospital-admin membership). System admins have no
 domain profile. Users never own medical data directly — profiles do.
 
@@ -23,7 +24,9 @@ Owns records, consent decisions, and their audit trail.
 
 ### Hospital (FHIR: Organization)
 A care organization. `HID-XXXX` business ID, name, address, verification status
-(`PENDING | VERIFIED`, set by System Admin). Employs Doctors, uploads records, receives and
+(`PENDING | VERIFIED`, set by System Admin; the verifying user and time are recorded on the
+PENDING → VERIFIED transition since migration 0009 — rows verified earlier keep them NULL; there is
+no rejection state and verification writes no audit event). Employs Doctors, uploads records, receives and
 originates access requests. The three simulated hospitals are ordinary rows, not special cases.
 
 ### Doctor (FHIR: Practitioner)
@@ -77,10 +80,12 @@ CONSENT_REVOKED · RECORD_VIEWED · RECORD_DOWNLOADED · SUMMARY_GENERATED · EM
 (Phase 2)`, plus three the implementation added with their own ADRs: `ACCESS_DENIED` (ADR-018 —
 a refused read must be logged, and no success verb states that), `RECORDS_LISTED` (ADR-020 — a
 clinician listing what a grant covers) and `RECORDS_SEARCHED` (ADR-020 amendment 2, 2026-10-15 —
-a clinician's AI search over the granted scope, which returns record text). Audit events are written in the same transaction as the
-action they record.
+a clinician's AI search over the granted scope, which returns record text) and `RECORD_EXPORTED`
+(FHIR export, proposed ADR-032 — one event per successful patient self-export or clinician
+export; no target, its subject is the exported scope). Audit events are written in the same
+transaction as the action they record.
 **At most one** target is set per event: exactly one for every action naming an object, and
-**none** for `RECORDS_LISTED` and `RECORDS_SEARCHED`, whose subject is a scope rather than an
+**none** for `RECORDS_LISTED`, `RECORDS_SEARCHED` and `RECORD_EXPORTED`, whose subject is a scope rather than an
 object — `patient_id`,
 never nullable, carries it (ADR-020).
 
@@ -138,13 +143,14 @@ Legend: ✅ always (within role) · ⭕ conditional (condition noted) · ❌ nev
 | List which records a grant covers | ✅ own | ⭕ grant-scoped, chooser fields only (ADR-020) | ⭕ own hospital's uploads | ❌ |
 | Read record content / download | ✅ own | ⭕ active grant for that category | ⭕ only records their hospital uploaded | ❌ |
 | Upload record | ✅ own locker | ⭕ prescription, for patient with active grant | ⭕ for verified patient at their hospital | ❌ |
+| Export FHIR R4-shaped Bundle (stored FHIR records only) | ✅ own, hidden included | ⭕ currently granted categories, hidden excluded (no UI) | ❌ | ❌ |
 | Hide/unhide record | ✅ own records only (any origin) | ❌ | ❌ | ❌ |
 | Create access request | ❌ | ✅ | ⭕ on behalf of their doctors (dual-consent flows) | ❌ |
 | Approve / reject / revoke consent | ✅ own, per category | ❌ | ❌ | ❌ |
 | View audit log | ✅ all events about them | ⭕ own actions only | ⭕ their hospital's actions only | ⭕ platform events, **never record content** |
 | Manage doctors (add/remove/credentials) | ❌ | ❌ | ✅ own hospital | ❌ |
 | Register / verify hospitals | ❌ | ❌ | ⭕ register own | ✅ verify |
-| Suspend users / support operations | ❌ | ❌ | ❌ | ✅ |
+| Suspend users / support operations | ❌ | ❌ | ❌ | ✅ *(no API — out-of-band only)* |
 | AI: copilot (own data) — *explainer, timeline: not implemented* | ✅ | ❌ | ❌ | ❌ |
 | AI: clinical assistant answers and search (granted data) — *summary, timeline: not implemented* | ❌ | ⭕ grant-scoped | ❌ | ❌ |
 | Send reminders / follow-ups | ❌ | ❌ | ⭕ to their hospital's patients | ❌ |
@@ -153,8 +159,11 @@ Legend: ✅ always (within role) · ⭕ conditional (condition noted) · ❌ nev
 every grantee surface — the existence projection, the grant-scoped listing, the single-record
 read, the download and clinician AI retrieval (search, answer context and citations) — but the
 row, the file, its AI index and the grant are all untouched, and the uploading hospital keeps its
-layer-2 access to its own upload. A patient-facing screen offering the control
-has to say so rather than imply that hiding conceals a record from everyone.
+layer-2 access to its own upload — including hidden ones. **This is the confirmed policy
+(Product Owner, 2026-10-25)**: hiding withdraws a record from consent-based sharing, not from the
+hospital that produced it. A patient-facing screen offering the control has to say so rather than
+imply that hiding conceals a record from everyone (the patient portal states it under the hide
+button).
 
 Two deliberate properties worth stating: **System Admin has zero access to medical content**
 (platform operations never require PHI; there is no break-glass for admins), and **AI features

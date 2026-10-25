@@ -5,9 +5,113 @@
 
 ---
 
-## Session 020 — 2026-10-17 · ← CURRENT STATE
+## Session 021 — 2026-10-25 · ← CURRENT STATE
 
 **Read this entry alone to know where the project stands.** Everything below it is history.
+
+**Branch:** `main`. Session 021 committed its work as a series on top of `0ea4bac` and pushed it to
+`origin/main` together with the four previously unpushed commits (`65b68fe`, `2e05ee4`, `c7e5359`,
+`0ea4bac`), with Product Owner approval. CI result for that push is recorded in GitHub Actions, not here (unknown at commit time). CI was last reported green on `d09d721`
+(run #17, user-provided evidence).
+
+### Landed since Session 020 (committed, from git history and code)
+
+| Commit | What |
+|---|---|
+| `d25fb82` | Docs reconciliation |
+| `15e0b1c` | Hospital verification records `verified_by_user_id` / `verified_at` (migration **0009**, head) |
+| `278bbfc` | `scripts/audit_integrity.py seal` environment safety guard (`--confirm-env`, explicit `PULSEOS_ENVIRONMENT`, host rules) |
+| `65b68fe` | Account status (ACTIVE) and Firebase token revocation (`check_revoked=True`) enforced on every authenticated request |
+| `2e05ee4` | Consent-gated FHIR R4-shaped export, `GET /api/v1/records/export/fhir` |
+| `c7e5359` | Audit API v3: batched-event verification, `GET /audit-logs/{id}/proof`, `GET /audit-batches/{n}` |
+| `0ea4bac` | Consent re-checked after AI retrieval/synthesis and after FHIR export reads |
+
+### Session 021 work (committed in the Session 021 series)
+
+Started with a read-only repository audit, then fixed what it verified:
+
+- **Audit integrity — VERIFIED overclaim fixed (security).** List and single-event verification
+  reported VERIFIED for a batched v3 event without checking Merkle inclusion; editing an event and
+  rewriting both its digest and its member digest stayed VERIFIED there. Now every surface uses one
+  rule, `merkle.verify_stored_inclusion` (rebuild the batch from stored members, require positions
+  `0..n-1`, the leaf at the index, the stored root, and a valid path). A member whose batch row is
+  missing is `ANCHOR_ALTERED`. Page verification stays at 3 queries
+  (`AuditBatchRepository.members_sharing_batch_with`). Files: `consent/merkle.py`,
+  `anchor_service.py`, `batch_service.py`, `repository.py`.
+- **`/audit-logs/{id}/proof` no longer 500s** on tampered membership (duplicate/malformed digests,
+  gaps): returns `ANCHOR_ALTERED`, `isProofValid: false`, `proof: null` (schema now nullable).
+- **AI answer auditing:** no live grant ⇒ `ACCESS_DENIED` (was: unaudited 200); answer discarded
+  after a mid-generation revocation ⇒ `ACCESS_DENIED` (was: unaudited); the post-synthesis check
+  now fails closed on an unmappable evidence category (`ai/query.py`).
+- **`GET /audit-batches/{n}`:** access policy kept (any authenticated role — attestation material,
+  no PHI) and documented; added rate-limit bucket `audit_batch_verify` 30/60 s (`core/ratelimit.py`)
+  — accepted by the PO (2026-10-25).
+- **SEC-01 review:** no backend defects found. Frontend: doctor, hospital and patient bootstraps
+  treated the suspended 403 as "unregistered" (onboarding / auto-register). Now detected via
+  `@pulseos/ui` `isAccountSuspended` (matches the API detail "Account is suspended.") and shown as
+  a suspension message; no token refresh, no registration attempt.
+- **OpenAPI + client regenerated** (`scripts/generate-api-client.sh`): 42 operations under
+  `/api/v1` (+ `/health`, `/ready`). Exposed a missing `RECORD_EXPORTED` label in both audit
+  timelines — added.
+- **Patient FHIR export UI:** "Export FHIR (JSON)" on Medical Records and Settings → Your Data
+  (replaces the dead "Export Data" button); saves the response body unchanged as
+  `pulseos-fhir-export-YYYY-MM-DD.json`; in-flight guard, error/success states. "Delete Account"
+  now renders disabled ("not available") instead of a dead button.
+- **Patient audit integrity UI:** per-entry badge from the API verdict (Integrity verified / Not
+  yet sealed / Integrity check failed / Integrity unavailable) and a "View proof" dialog for
+  batched entries (`GET /audit-logs/{id}/proof`, fetched only when opened). Copy says local Merkle
+  batch, not a blockchain. Privacy-card copy corrected (append-only is application-enforced; a
+  presigned link survives revocation for ≤ 5 min).
+- **CI:** web job gains "Generated api-client is current" and "Production build". A backend spec
+  drift step was deliberately **not** added (no Python lockfile → spurious diffs).
+- **Docs** reconciled: README, CLAUDE.md, ROADMAP, TODO, this entry; `docs/*`, `scripts/README.md`,
+  `CHANGELOG.md`, `DECISIONS.md` by a delegated pass (see CHANGELOG `[Unreleased]`).
+
+### Quality gates (2026-10-25, local, working tree — not CI)
+
+| Gate | Result |
+|---|---|
+| `pytest` (backend, `PULSEOS_TEST_POSTGRES_URL` unset) | **1351 passed, 26 skipped** (skips = opt-in PostgreSQL tests, not run) |
+| `ruff format --check` / `ruff check` / `mypy` (strict, CI config) | clean (173 source files) |
+| Web `format:check` / `lint` / `typecheck` | clean |
+| Web tests (Vitest) | **689 passed** (hospital 252, patient 229, doctor 158, ui 33, api-client 17) |
+| Web `pnpm build` | succeeds (Vite chunk-size advisory only) |
+| New regression tests vs. original code | the 4 tamper/500 HTTP tests in `tests/test_audit_inclusion_regression.py` **fail on `0ea4bac`** and pass now |
+
+Final-review fixes (same session): per-event anchors can no longer make a v3 event VERIFIED and
+batch evidence takes precedence (3 forged-anchor tests fail on the pre-fix tree with `VERIFIED`,
+pass now); each batch is rebuilt once per page (`verify_many`, 100 entries of a 256-leaf batch:
+median 203.6 ms → 5.4 ms, local benchmark). New opt-in PostgreSQL test
+`test_page_verification_on_postgres_uses_whole_batches_and_detects_tampering` was **not executed
+on PostgreSQL** (Docker daemon not running, no native PostgreSQL) — run the `backend-postgres`
+job or a disposable container before relying on `members_sharing_batch_with`.
+
+Not run: PostgreSQL tests, any live stack (Firebase, MinIO, Redis, Ollama), browser checks.
+Local Python is 3.14; CI uses 3.12.
+
+### PO decisions (2026-10-25)
+
+- **Approved:** ADR-027 decision-7 amendment — historical v3 per-event anchors stay stored and
+  readable but cannot by themselves establish VERIFIED.
+- **Approved:** `audit_batch_verify` 30/60 s and the any-role policy of `/audit-batches/{n}`.
+- **Confirmed policy:** the uploading hospital keeps access to its own uploads even when the
+  patient hides them (ADR-013 layer 2); this stays disclosed in the patient UI and documented.
+- **Keep explicit:** the unsealed-v3 relabel-to-v2 limitation; no claim of protection against an
+  attacker who can rewrite the database consistently.
+- **Still open:** hospital rejection/suspension lifecycle and a verification audit event (the
+  latter needs an ADR: `audit_logs.patient_id` is NOT NULL).
+
+### Exact next step
+
+Review the working-tree diff; commit it (suggested split: backend audit fixes + tests; AI audit;
+web client regen + UI; CI; docs); push with the 4 earlier commits; confirm all CI jobs green,
+including `backend-postgres` and the two new web steps. Then, before the review: seal batches on
+the local stack with `scripts/audit_integrity.py seal --confirm-env local` so the integrity badges
+show *verified* (sealing is manual), and rehearse the demo in TODO.md §6.
+
+---
+
+## Session 020 — 2026-10-17 · superseded by Session 021
 
 **Branch:** `main` at `d09d721`, synchronized with `origin/main` (`ahead 0, behind 0`).
 **CI Status:** GitHub Actions workflow for commit `d09d721` is **GREEN** (workflow run #17, user-provided evidence; run logs not in-repo).

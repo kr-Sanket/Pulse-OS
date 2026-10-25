@@ -60,7 +60,7 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
 - **Processing status** on DocumentReference: `UPLOADED → PROCESSING → INDEXED | FAILED` is
   modeled (ADR-008), but only `UPLOADED` is ever written — no worker advances it yet.
 
-## Physical tables (from migrations and models, 2026-10-14)
+## Physical tables (from migrations and models, 2026-10-25)
 
 | Migration | Tables |
 |---|---|
@@ -73,9 +73,11 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
 | `aedb0169a4eb` | `ai_documents`, `ai_chunks` |
 | `0007` | `audit_batches`, `audit_batch_members` (ADR-027) |
 | `0008` | `notifications` (ADR-031) |
+| `0009` (head) | adds nullable `verified_by_user_id` (FK → `users`) and `verified_at` to `hospitals`; set only on the PENDING → VERIFIED transition, so hospitals verified before 0009 keep NULL |
 
 18 tables in total; there are no timeline, summary or embedding tables. `notifications` is a
-mutable convenience table (`is_read`, `read_at`), not audit evidence. Batch
+mutable convenience table (`is_read`, `read_at`), not audit evidence. Hospital verification
+writes no audit row (`audit_logs.patient_id` is NOT NULL, and verification has no patient). Batch
 constraints that the sealing design depends on — UNIQUE `batch_number`, `commitment`,
 `audit_log_id` and `(batch_id, leaf_index)`, plus CHECKs on `batch_number`, `leaf_count`,
 `hash_version` and `leaf_index` — are listed in BLOCKCHAIN_ARCHITECTURE.md and pinned by

@@ -41,7 +41,7 @@
 | Technology | Used for | Δ |
 |---|---|---|
 | Docker Compose | Local infrastructure only: PostgreSQL, Redis, MinIO, bucket bootstrap | API and worker run on the host (`make dev-api`), not in Compose |
-| GitHub Actions | CI: backend lint/typecheck/tests, web checks; an opt-in PostgreSQL integration job (see DEVELOPMENT_GUIDE.md) | — |
+| GitHub Actions | CI: backend lint/typecheck/tests, web checks (including generated-client drift and a production build); an opt-in PostgreSQL integration job (see DEVELOPMENT_GUIDE.md) | — |
 | ruff + mypy (strict) / eslint + prettier + tsc | Lint, format, static analysis | Enforced in CI (see DEVELOPMENT_GUIDE.md for current status) |
 
 ## Planned or undecided (not in the code)
@@ -68,4 +68,6 @@
   scale (ADR-001).
 - **Hyperledger** — rejected in the original plan.
 - **A real FHIR server (HAPI etc.)** — we align to FHIR shapes (ADR-006) and import FHIR R4
-  bundles (proposed ADR-030) without running one. FHIR export is not built.
+  bundles (proposed ADR-030) without running one. FHIR export is an in-house Bundle builder
+  (`records/fhir_export.py`, proposed ADR-032), not validated with an HL7 validator or a FHIR
+  library.

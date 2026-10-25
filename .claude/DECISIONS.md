@@ -236,6 +236,14 @@ Consent grants are per **individual doctor** and per **category** (not hospital-
   record the verifier's user ID or timestamp on the hospital row, nor emit an administrative audit event.
   Rejection/suspension lifecycle is not implemented.
 
+**Note (2026-10-25 — commit `15e0b1c`):** the verifier gap above is partly closed. Migration
+`0009` adds nullable `hospitals.verified_by_user_id` (FK → `users`) and `hospitals.verified_at`,
+set only on the PENDING → VERIFIED transition in `verify_hospital`; hospitals verified before
+0009 keep NULL. Still open: no administrative audit event (`audit_logs.patient_id` is NOT NULL),
+no rejection lifecycle (`HospitalVerificationStatus` is only PENDING | VERIFIED). Separately,
+`65b68fe` enforces `users.status == ACTIVE` and token revocation on every request; there is no
+API to suspend a user or revoke tokens (out-of-band only).
+
 ---
 
 ## ADR-014 — Async job queue library: arq
@@ -909,6 +917,13 @@ endpoints inherit throttling by declaration rather than by retrofit. Unauthentic
 still cost one Firebase verification each — a real remaining gap, recorded in TODO. Counters
 are per bucket per user per window, and shared across API workers because Redis is shared.
 
+**Amendment (2026-10-25 — Session 021; **accepted by the Product Owner 2026-10-25**): bucket
+`audit_batch_verify` (30 / 60 s).** Applied to `GET /audit-batches/{batch_number}`, the one
+audit read open to every authenticated role (ADR-027 amendment). It carries no PHI but recomputes
+a whole sealed batch (up to 256 leaves) per call, so it is bounded like the other content reads.
+Same keying, fail-open and 429 semantics as decisions 3–6. (The `ai_generate` and `ai_search`
+buckets were added by the AI work and ADR-020 Amendment 1.)
+
 ---
 
 ## ADR-025 — The patient's audit trail attributes events to the hospital recorded on them
@@ -1041,6 +1056,12 @@ committed, persisted, published and reconciled.
      version — including a v3 event anchored per-event before M6.3 — keeps verifying through the
      existing per-event path (`AuditAnchorService` verdicts) as *historical per-event evidence*.
      A `local-dev` anchor is a simulation and proves no public-chain inclusion.
+     **Amended 2026-10-25, approved by the Product Owner (see the ADR-027 amendment "Batch
+     evidence takes precedence"): this no longer holds for v3.** A retained v3 per-event row is still stored, never deleted or
+     rewritten, and still assessed — it can report `EVENT_ALTERED`/`ANCHOR_ALTERED` when it
+     contradicts the event — but it can no longer establish `VERIFIED`; a matching row reads
+     `NOT_ANCHORED`, and the event becomes `VERIFIED` only through batch membership once sealed.
+     v1/v2 rows are unchanged.
    - **Merkle batch membership.** Established only by a membership row checked against its sealed
      batch's root using the persisted, trusted `leaf_index` and `leaf_count`.
    - **On-chain verification of a batch commitment.** Established only by comparing the stored
@@ -1183,6 +1204,44 @@ and verification against the database:
 sealing daemon/scheduler, API v3 Merkle verification endpoint (`GET /audit-logs/{id}/verification` currently
 checks only legacy per-event `audit_anchors`), patient UI verification integration, and external blockchain
 anchoring (Polygon Amoy / M6.4 not authorized) remain deferred.
+
+**Amendment (2026-10-25 — `278bbfc`, `c7e5359` and Session 021 follow-up fixes; **accepted by
+the Product Owner 2026-10-25**, including the decision-7 change below): verification surfaces and
+the inclusion rule.** Several items deferred
+above now exist:
+- `seal` is guarded by `ensure_sealing_safety` before any engine is created: postgresql/sqlite URL,
+  explicit `PULSEOS_ENVIRONMENT` in {local, test, staging, production} (implicit default refused),
+  `--confirm-env` equal to it, local ⇒ local host, staging/production ⇒ non-local host and never
+  `localhost:5433`; exit code 2 on refusal. Read-only subcommands are unguarded.
+- API: `GET /audit-logs` and `GET /audit-logs/{id}/verification` now report batch evidence for v3
+  events; `GET /audit-logs/{id}/proof` returns the event's membership proof (patient, own events;
+  404 for unsealed or foreign); `GET /audit-batches/{batch_number}` returns `VALID`/`TAMPERED`
+  with findings.
+- **VERIFIED requires Merkle inclusion on every verification surface.** List, detail and proof
+  share `verify_stored_inclusion` (`consent/merkle.py`): stored members must be exactly
+  `0 .. leaf_count-1`, form a valid tree, and the event's path must recompute to the stored root —
+  in addition to digest recompute, member-digest match, leaf bounds and commitment rebuild. A
+  member whose batch row is missing is `ANCHOR_ALTERED`; tampered membership yields a verdict
+  (`ANCHOR_ALTERED`, `proof: null`), never HTTP 500.
+- **Batch evidence takes precedence; a per-event anchor never makes a v3 event VERIFIED**
+  (amends decision 7, final review 2026-10-25). With a membership row the batch decides,
+  regardless of the `hash_version` label. Without one, an `audit_anchors` row can only report a
+  contradiction for a v3 event; a matching row yields `NOT_ANCHORED`. Historical v3 per-event
+  anchors (written between M6.1 and M6.3) stay stored, unmodified and readable, and can still
+  surface a contradiction, but are no longer sufficient evidence of integrity; those events
+  verify only after they are sealed into a batch (they remain eligible for sealing). Why: the
+  application never writes v3 per-event anchors any more and the `local-dev` reference is a
+  deterministic function of the digest, so a matching row is indistinguishable from a forgery.
+  Residual (local-only): an unsealed v3 event relabelled v2 with a forged v2 anchor still
+  verifies. None of these local checks — per-event anchors, Merkle inclusion or batch
+  commitments — resists an attacker who can rewrite the database consistently; only the
+  deferred external anchoring would.
+- **`/audit-batches` is authenticated-any-role and rate limited** (`audit_batch_verify`, ADR-024
+  amendment): roots and commitments are attestation material with no PHI; findings may name
+  opaque audit-log ids.
+- Patient portal: per-entry integrity badge and "View proof" dialog; copy says local Merkle batch.
+Still deferred: scheduler, receipts, contract, chain adapter, on-chain submission and verification.
+Commitments remain in the same database as the events; M6.4 is not authorized.
 
 ---
 
@@ -1524,6 +1583,39 @@ Client (Doctor / Patient)
   every 30 s and refresh on window focus and visibility change. Used in the patient and doctor
   top bars; the hospital portal has none (out of scope above). Notification items do not link to
   the referenced request.
+
+---
+
+## ADR-032 — Consent-gated FHIR R4 Bundle export
+**Date:** 2026-10-25 · **Status:** **Proposed — needs Product Owner approval.** Records behaviour
+already in code (`2e05ee4`, consent re-check `0ea4bac`); final-review priority 5. **Extends:**
+ADR-006, ADR-013, ADR-020 (scope-level audit rows)
+
+**Context:** record metadata is FHIR-aligned (ADR-006) and Synthea FHIR R4 resources are imported
+(ADR-030), but there was no way to take data out in a standard shape.
+
+**Behaviour as implemented:**
+1. `GET /api/v1/records/export/fhir` returns `application/fhir+json`: a Bundle of type
+   `collection` with a `Patient` resource built from the database plus one entry per stored FHIR
+   record (`fullUrl` `urn:uuid:{record.id}`). Builder: `records/fhir_export.py`.
+2. Only records stored as `application/fhir+json` are exported; uploaded PDFs/images are excluded.
+3. PATIENT: own records, all categories, hidden records included; `patientHealthId` must be absent
+   (422 otherwise). DOCTOR: ACTIVE clinician, `patientHealthId` required, scope = currently granted
+   categories, hidden records excluded; no grant → 403 + `ACCESS_DENIED`. HOSPITAL_ADMIN and
+   SYSTEM_ADMIN → 403.
+4. The doctor path re-checks consent after the object-storage reads and drops revoked categories
+   (403 + `ACCESS_DENIED` if none remain). Hidden status is not re-checked after the reads.
+5. One `RECORD_EXPORTED` audit event (new `AuditAction`; no target column, `patient_id` carries
+   the subject) per successful export. Not rate-limited.
+6. UI: patient portal "Export FHIR (JSON)" (Records header and Settings → Your Data) downloads
+   `pulseos-fhir-export-YYYY-MM-DD.json`. No doctor UI.
+
+**Not claimed:** conformance. Output is FHIR R4-*shaped*; tests check structure and references
+only — no HL7 validator or `fhir.resources` validation.
+
+**Open questions for approval:** whether a 403 (rather than API_GUIDELINES' 404-not-403 rule) is right for a doctor
+with no grant; whether export should be rate-limited; whether HOSPITAL_ADMIN should export its own
+uploads; whether doctor export needs a UI.
 
 ---
 

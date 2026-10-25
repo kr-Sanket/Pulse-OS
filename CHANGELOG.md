@@ -5,6 +5,61 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
+### Session 021, 2026-10-25
+- **Fixed — VERIFIED requires Merkle inclusion on every surface.** `GET /audit-logs` and
+  `GET /audit-logs/{id}/verification` could report `VERIFIED` for a v3 batched event without
+  checking inclusion. All event surfaces now share `verify_stored_inclusion`
+  (`consent/merkle.py`): stored members rebuilt into a tree and the event's path verified against
+  the stored root, on top of digest recompute, member-digest match, leaf bounds and commitment. A
+  member whose batch row is missing reports `ANCHOR_ALTERED`. `verify_many` stays at 3 queries
+  per page.
+- **Fixed — proof endpoint no longer returns HTTP 500 on tampered membership** (duplicate or
+  malformed digests, index gaps); it returns `ANCHOR_ALTERED`, `isProofValid: false`, `proof: null`.
+- **Security — AI denials are audited.** A doctor answer with no live grant writes
+  `ACCESS_DENIED` (previously no row); an answer discarded after post-generation revalidation
+  writes `ACCESS_DENIED`, and an evidence category that cannot be mapped now fails closed.
+- **Security — `audit_batch_verify` rate limit (30/60 s)** on `GET /audit-batches/{batch_number}`
+  (ADR-024 amendment, accepted by the Product Owner 2026-10-25).
+- **Added — patient portal:** "Export FHIR (JSON)" button (Records header, Settings → Your Data)
+  downloading `pulseos-fhir-export-YYYY-MM-DD.json`; Audit History integrity badge and "View proof"
+  dialog (copy says local Merkle batch, not a public blockchain); suspended accounts (403
+  `Account is suspended.`) see a suspension message instead of registration/onboarding, in all
+  three portals (`@pulseos/ui` `isAccountSuspended`).
+- **Changed — OpenAPI spec and generated client regenerated** (42 operations under `/api/v1`,
+  44 with `/health` and `/ready`). CI `web` job adds "Generated api-client is current" and
+  "Production build" (`pnpm build`).
+- **Docs:** API, architecture, security, AI, blockchain, database, domain, development and
+  scripts docs aligned with the above; ADR-032 (FHIR export) **proposed**; amendments to ADR-024
+  and ADR-027; note on ADR-013 verifier recording.
+
+### Added
+- **Audit API v3 verification and proofs (`c7e5359`).** Patient verification for v3 batched
+  events, `GET /audit-logs/{audit_log_id}/proof` (Merkle membership proof, own events only) and
+  `GET /audit-batches/{batch_number}` (any authenticated role; `VALID`/`TAMPERED` plus findings).
+  Local database evidence only — nothing is submitted to a chain.
+- **Consent-gated FHIR R4 export (`2e05ee4`).** `GET /api/v1/records/export/fhir`
+  (`application/fhir+json`, Bundle type `collection`): patients export their own stored FHIR
+  records (hidden included); active doctors export currently granted categories (hidden
+  excluded; no grant → 403 + `ACCESS_DENIED`); admins get 403. New `RECORD_EXPORTED` audit action.
+  Uploaded PDFs/images are not exported. FHIR R4-shaped, not HL7-validated.
+- **Hospital verification accountability (`15e0b1c`).** Migration `0009` adds nullable
+  `hospitals.verified_by_user_id` and `verified_at`, set on the PENDING → VERIFIED transition;
+  the System Admin dashboard shows them. No rejection lifecycle and no verification audit event.
+
+### Security
+- **Consent revalidated after retrieval and synthesis (`0ea4bac`).** AI search re-checks grants
+  after retrieval and drops revoked categories; doctor answers are discarded (no
+  `SUMMARY_GENERATED`) when an evidence category was revoked during generation; the doctor FHIR
+  export re-checks after its object-storage reads. An already-issued presigned URL still lives
+  until its TTL.
+- **Account status and token revocation enforced (`65b68fe`).** Firebase tokens verified with
+  `check_revoked=True`; every request requires an `ACTIVE` DB user whose role and UID match the
+  token (403 otherwise); expired/revoked/disabled tokens 401; Firebase unavailable 503;
+  registration retries by suspended users refused. No API to suspend users (out-of-band).
+- **Audit sealing guarded by environment (`278bbfc`).** `scripts/audit_integrity.py seal` requires
+  an explicit `PULSEOS_ENVIRONMENT` and matching `--confirm-env`, checks the database host against
+  the environment before creating an engine, and exits 2 on refusal.
+
 ### Fixed
 - **Medical record keyset pagination ordering (`d09d721`).** Resolved flaky test ordering and
   non-deterministic page walks across equal timestamps. `MedicalRecordRepository._context_rows` now

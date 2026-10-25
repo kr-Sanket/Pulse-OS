@@ -2,13 +2,32 @@
 
 > Core decisions: ADR-004 (hash-only, asynchronous, non-blocking; decision 2 amended) and
 > **ADR-027** (Merkle-batched anchoring of verified v3 audit events). PostgreSQL is authoritative;
-> the chain provides **tamper-evidence**, not storage. **Current state (2026-10-17): only the
+> the chain provides **tamper-evidence**, not storage. **Current state (2026-10-25): only the
 > local, database-side integrity layer is built** — versioned audit digests, Merkle batches and
-> commitments, database-only reconciliation, a network-free simulated anchor adapter, and a
-> developer CLI workflow (`scripts/audit_integrity.py` supporting `seal`, `verify-batch`, `verify-event`, `reconcile`).
-> Nothing is submitted to Polygon Amoy or any other chain; no contract exists; M6.4 is not authorized. The CLI
-> currently lacks an environment safety guard; scheduled background sealing, API v3 verification endpoints
-> (`GET /audit-logs/{id}/verification` currently queries only legacy per-event `audit_anchors`), and UI integration remain deferred.
+> commitments, database-only reconciliation, a network-free simulated anchor adapter, a
+> developer CLI workflow (`scripts/audit_integrity.py` supporting `seal`, `verify-batch`, `verify-event`,
+> `reconcile`; `seal` is environment-guarded, `278bbfc`), patient-facing v3 verification and proof
+> endpoints plus an any-role batch verification endpoint (`c7e5359`), and a patient-portal integrity
+> badge and proof dialog. Nothing is submitted to Polygon Amoy or any other chain; no contract exists;
+> no scheduler exists (sealing is manual); M6.4 is not authorized.
+
+## What is built vs what is not — four distinct layers
+
+Do not collapse these when describing the system:
+
+1. **Hashing (built).** Each audit row carries a versioned digest: v1/v2 SHA-256 (historical),
+   v3 Ethereum Keccak-256 (`pycryptodome` `Crypto.Hash.keccak`, not SHA3-256). Recomputing it
+   detects an edited row whose digest was not also rewritten.
+2. **Merkle inclusion (built).** Sealed v3 events are leaves of a Merkle batch; an event's path
+   recomputes to the stored batch root. This proves membership in a sealed batch, never
+   completeness.
+3. **Local commitment (built).** Each batch has a 32-byte commitment `C` over protocol, batch
+   number, leaf count and root. `C` is stored **in the same PostgreSQL database** as the events,
+   so it is evidence only against someone who did not also rewrite the batch rows.
+4. **Public anchoring (not built).** Publishing `C` to Polygon Amoy — the step that would give
+   independent, third-party evidence — does not exist: no contract (`contracts/` is a
+   placeholder), no chain adapter, no receipts, no submission. UI copy says "local Merkle batch",
+   not "blockchain".
 
 ## What Goes On-Chain (and what never does)
 
@@ -53,15 +72,50 @@ but are never batched or anchored on-chain. Only verified v3 events (`V3Batch`: 
 Status as of 2026-10-11: **built** — the port, the local adapter, migration 0006, v3 hashing,
 `merkle.py`. **M6.3, committed in `e3c0fe1` (PostgreSQL integration tests in `1ce4c14`);
 M6.1–M6.3 accepted with deferred items** — batch persistence (migration 0007), sealing,
-commitments, database-only reconciliation; validation (2026-10-11): full backend run 1088
-passed, 18 skipped, the 18 opt-in PostgreSQL tests (including migration 0007) passing against a
-disposable scratch database; CI job `backend-postgres` runs them (commits pushed; GitHub results
-not checked here). **Patient-facing verification gap:** `GET /audit-logs/{id}/verification` and
-the integrity field on `GET /audit-logs` read only per-event anchors, which v3 events never
-receive, so every current event reports `NOT_ANCHORED`; batch membership is not surfaced by any
-API, and the patient portal does not display the integrity status. **Deferred** — everything
+commitments, database-only reconciliation; the opt-in PostgreSQL tests (including migration
+0007) run in CI job `backend-postgres`. **Built since (2026-10-25):** the verification API and
+patient UI described in §Verification surfaces. **Deferred** — the scheduler and everything
 chain-facing: on-chain batch submission, receipts, chain-side verification. The M6 gate is not
 complete; M6.4 is not authorized.
+
+### Verification surfaces (API and UI)
+
+| Surface | Who | What it returns |
+|---|---|---|
+| `GET /audit-logs` (each item's `integrity`) | PATIENT, own trail | `status`, `network`, `reference`, `anchoredAt`; a fixed 3 queries per page (`verify_many`) |
+| `GET /audit-logs/{id}/verification` | PATIENT, own events (else 404) | single-event verdict |
+| `GET /audit-logs/{id}/proof` | PATIENT, own sealed events (404 for unsealed or foreign) | `batchNumber`, `leafIndex`, `leafCount`, `root`, `commitment`, `eventDigest`, `recomputedDigest`, `isEventValid`, `isProofValid`, `proofStepsCount`, `proof {leafIndex, leafCount, steps[{sibling, siblingOnLeft}]}` |
+| `GET /audit-batches/{batch_number}` | any authenticated role, rate limit `audit_batch_verify` 30/60 s | `VALID` / `TAMPERED` plus findings (may name opaque audit-log ids; no PHI) |
+
+Statuses: `NOT_ANCHORED`, `VERIFIED`, `EVENT_ALTERED`, `ANCHOR_ALTERED`.
+
+**Inclusion rule — every surface.** For a v3 batched event, `VERIFIED` requires all of: the event
+digest recomputes, the stored member digest matches it, the leaf index is within the batch's
+leaf count, the commitment rebuilds, **and** the batch's stored members rebuild into a tree in
+which the event's path verifies against the stored root. All three event surfaces share one
+rule (`rebuild_stored_batch` / `verify_stored_inclusion` in `consent/merkle.py`; list and detail
+rebuild each batch once per request), and the proof endpoint reports `VERIFIED` only when its
+own check and the event's verdict both do — so no surface can say `VERIFIED` on weaker evidence
+than another. A member whose batch row is missing reports `ANCHOR_ALTERED`. Tampered membership
+(duplicate or malformed digests, index gaps) never raises: the proof endpoint returns
+`ANCHOR_ALTERED`, `isProofValid: false`, `proof: null` rather than HTTP 500. (Before 2026-10-25
+the list and detail verdicts could report `VERIFIED` without checking inclusion.)
+
+**Precedence — batch evidence first; per-event anchors never verify v3.** An event with a
+membership row is judged only by its batch, whatever its `hash_version` label now says (a sealed
+event relabelled v2 cannot fall back to the per-event check). Without membership, a per-event
+`audit_anchors` row is still assessed, but for a v3 event it can only count *against* it
+(`EVENT_ALTERED`/`ANCHOR_ALTERED`); a matching row yields `NOT_ANCHORED`, never `VERIFIED` — the
+application never writes v3 per-event anchors and the local anchor's reference is forgeable.
+Historical v3 per-event anchors (written between M6.1 and M6.3) are kept but no longer verify;
+those events read `NOT_ANCHORED` until sealed. v1/v2 events keep per-event verification.
+**Residual limit (local-only):** an *unsealed* v3 event relabelled v2, rehashed under SHA-256 and
+given a forged v2 anchor still reads `VERIFIED`; only an external anchor (not built) closes it.
+
+**Patient portal.** Audit History shows a per-entry badge from the API verdict (Integrity
+verified / Not yet sealed / Integrity check failed / Integrity unavailable) and a "View proof"
+dialog for batched entries that calls the proof endpoint. The copy states it is a local Merkle
+batch, not a public blockchain. Doctor and hospital portals show no integrity status.
 
 - **`AuditAnchor` interface** (`consent/anchoring.py`, built): `submit(digest) -> AnchorReceipt`,
   `verify(digest, receipt) -> bool` — only a bare 64-hex value crosses it (`require_digest`). Under
@@ -88,7 +142,7 @@ complete; M6.4 is not authorized.
   `abi.encodePacked` exactly as above; must **not** use OpenZeppelin `MerkleProof` /
   `StandardMerkleTree` (sorted pairs, no node prefix — incompatible); any on-chain proof check must
   handle promoted nodes and reject `leafCount == 0` / `leafIndex >= leafCount`.
-- **Reconciliation** (database-only library at M6.3; developer CLI workflow in `scripts/audit_integrity.py`; chain-side checks deferred): reports
+- **Reconciliation** (database-only library at M6.3; developer CLI workflow in `scripts/audit_integrity.py`, where `seal` requires an explicit `PULSEOS_ENVIRONMENT` and matching `--confirm-env`; chain-side checks deferred): reports
   v3 events unbatched beyond the backlog threshold (initially 900 s), per-batch membership
   integrity (count, contiguous indices, rows recompute to sealed digests, root and `C` rebuild),
   `batch_number` gaps, backdated (late-arriving) events, and unbatched events of any version that
@@ -116,8 +170,9 @@ complete; M6.4 is not authorized.
 ## Verification Story (for the paper & demo)
 
 *Target, not current capability:* no step involving receipts or the Amoy explorer exists. Local
-batch sealing and verification can be exercised via the developer CLI (`scripts/audit_integrity.py`),
-but API v3 verification and patient UI integration remain outstanding. Demo script: show a consent
+batch sealing and verification can be exercised today via the developer CLI
+(`scripts/audit_integrity.py`), the verification/proof API and the patient Audit History badge
+and proof dialog. Demo script: show a consent
 grant → its batch membership and leaf index → the batch commitment and its receipt → the tx on the
 Amoy explorer → manually tamper a copy of the audit row → run reconciliation → tampering flagged. Experiment for RC-2: compare detection guarantees + overhead
 (latency, cost per event amortised over a batch) vs a plain DB-log baseline.

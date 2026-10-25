@@ -74,7 +74,7 @@ portal now *creates* access requests and reads granted records, which was the on
 that the M0.3 and M2 gates carry: a live browser walk-through against running infrastructure.
 Deferred backend findings are in TODO.md.
 
-## M4 — Core Features Complete (Month 4) — substantially done, status 2026-10-17 (`d09d721`)
+## M4 — Core Features Complete (Month 4) — substantially done, status 2026-10-25
 
 **Carried forward from M3, all shipped:**
 
@@ -131,9 +131,9 @@ Deferred backend findings are in TODO.md.
 
 - ⬜ **QR identity generation and scanning.** Designed in ADR-012 (`pulseos://p/v1/<healthId>`,
   no PHI); no code exists.
-- ⬜ **Hospital verification lifecycle gaps**: verification does not yet persist verifier user ID
-  or timestamp on the row, nor emit an administrative audit log event. Rejection/suspension
-  lifecycle is not implemented.
+- 🟡 **Hospital verification lifecycle gaps**: verifier user ID and timestamp are persisted
+  (`15e0b1c`, migration 0009). Still open: an administrative audit event (blocked: `audit_logs.patient_id`
+  is NOT NULL — needs an ADR) and a rejection/suspension lifecycle (policy decision for the PO).
 - ⬜ Hospital portal **bulk upload** (single-record upload is done) and **request management on
   behalf of their doctors** (the `⭕` dual-consent cell in DOMAIN_MODEL §3) — both were in this
   milestone's original scope and neither is built.
@@ -141,9 +141,10 @@ Deferred backend findings are in TODO.md.
   timing (ADR-010 is still a placeholder); `mobile/` is a README.*
 
 **Gate:** all three web portals demo the full interoperability story end-to-end with seed data,
-including the M3 consent journey and System Admin verification. *Status (2026-10-17, `d09d721`):
-the portals and the journeys exist and pass CI (1209 backend passed / 25 skipped, 611 web passed).
-The gate's live browser demo run is a PO ops task; QR identity and verification audit metadata
+including the M3 consent journey and System Admin verification. *Status (2026-10-25, local, not
+CI): the portals and the journeys exist; backend 1351 passed / 26 skipped, web 689 passed, web
+production build succeeds. CI last reported green on `d09d721`; later commits have no CI result.
+The gate's live browser demo run is a PO ops task; QR identity and the verification audit event
 remain open.*
 
 ## M5 — AI Layer (Month 5)
@@ -196,8 +197,8 @@ commitment per batch on-chain (amends ADR-004 decision 2; no per-event on-chain 
   chain, scheduler, API or CLI. Validation (2026-10-11): full backend run 1088 passed, 18 skipped;
   the 18 opt-in PostgreSQL tests (batch sealing/classification and migration 0007) passed against
   a disposable scratch PostgreSQL 16, and CI job `backend-postgres` runs them (commits pushed;
-  GitHub results not yet checked). Sealing and reconciliation are invoked only by tests, and the
-  patient verification endpoint reports every v3 event as `NOT_ANCHORED` (per-event anchors only).
+  GitHub results not yet checked). *(Superseded: the CLI (`e350b2a`/`278bbfc`) now seals and
+  reconciles, and API v3 (`c7e5359`) verifies batched v3 events — see Final review priorities.)*
 - **M6.4 — not authorized.**
 - **Later (deferred by ADR-027):** receipts and retry-safe submission; Solidity commitment registry
   and `PolygonAuditAnchor` on Amoy; scheduler; reconciliation CLI with chain-side checks; integrity
@@ -222,11 +223,11 @@ the guide; all docs current.
 
 ---
 
-## Final review priorities (status 2026-10-17, `d09d721`)
+## Final review priorities (status 2026-10-25, Session 021)
 
-The remaining major implementations, in the recommended order. **Items 1, 2, and 3 are implemented
-and committed; Item 4 is partially implemented (developer CLI); Item 5 is outstanding.** Detail and acceptance
-criteria: TODO.md §0a.
+The remaining major implementations, in the recommended order. **Items 1, 2, 4 and 5 are
+implemented for the review; item 3 has policy-dependent gaps.**
+Detail and acceptance criteria: TODO.md §0a.
 
 1. ✅ **Authorization and audit correctness** (committed in `a09d41f`, `7c27aa0`) — audit + rate-limit
    the clinician AI search endpoint (`AuditAction.RECORDS_SEARCHED`, `ai_search`); require a VERIFIED hospital
@@ -239,17 +240,22 @@ criteria: TODO.md §0a.
    guarded provisioning script (`scripts/dev_provision_system_admin.py`) setting Firebase custom claims;
    admin hospital directory API (`GET /api/v1/hospitals`); dedicated System Admin dashboard with metrics and
    verification controls in hospital portal (`AdminLayout`).
-   *Remaining gaps:* hospital verification does not yet persist verifier user ID or timestamp on the row,
-   nor emit an administrative audit log event; hospital rejection/suspension lifecycle is not implemented.
-4. 🟡 **Demonstrable audit integrity (local)** (partially implemented in `e350b2a`) — developer CLI workflow
-   (`scripts/audit_integrity.py`) supporting `seal`, `verify-batch`, `verify-event`, and `reconcile`
-   backed by `AuditBatchService`.
-   *Remaining gaps:* missing production-safety guard in CLI, scheduled background sealing daemon,
-   API v3 Merkle verification endpoint (`GET /audit-logs/{id}/verification` currently evaluates only
-   legacy per-event `audit_anchors`), and patient UI integration remain outstanding.
-   Public-chain anchoring stays deferred (Polygon Amoy / M6.4 not authorized).
-5. ⬜ **FHIR R4 export** (outstanding) — a consent-enforced, audited, read-only Bundle export of granted, non-hidden
-   records, validated against R4 in tests; plus a `subject` consistency check in the importer.
+   Verifier user ID and timestamp are now persisted (`15e0b1c`, migration 0009) and shown in the
+   admin verification queue.
+   *Remaining gaps:* no administrative audit event for verification (schema blocker, needs an ADR);
+   hospital rejection/suspension lifecycle not implemented (PO policy decision).
+4. ✅ **Demonstrable audit integrity (local)** — CLI (`e350b2a`) with an environment safety guard on
+   `seal` (`278bbfc`); API v3 verification, per-event Merkle proofs and batch verification (`c7e5359`);
+   Session 021: VERIFIED requires Merkle inclusion on every surface, proof endpoint returns
+   a verdict instead of 500 on tampered membership, patient Audit History shows the per-entry verdict
+   and a proof dialog.
+   *Remaining gaps:* no sealing scheduler (seal manually before a demo); no append-only DB triggers;
+   commitments are local only. Public-chain anchoring stays deferred (Polygon Amoy / M6.4 not authorized).
+5. ✅ **FHIR R4 export** (`2e05ee4`, consent re-check `0ea4bac`) — consent-enforced, audited, read-only
+   `collection` Bundle: patients export their own records (patient portal button, Session 021);
+   clinicians export currently granted, non-hidden categories (API only).
+   *Remaining gaps:* not validated with an HL7 validator (tests are structural); uploaded PDFs/images
+   are excluded (no DocumentReference); importer `subject` consistency check not added.
 
 ---
 

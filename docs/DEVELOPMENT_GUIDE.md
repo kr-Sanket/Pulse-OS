@@ -54,6 +54,7 @@ pulse-os/
   Merkle integrity inspection and sealing tools (`verify-batch`, `verify-event`, `reconcile`, `seal`).
   The mutating `seal` command is protected by a safety guard requiring `--confirm-env <ENVIRONMENT>`
   matching an explicitly configured `PULSEOS_ENVIRONMENT`; read-only verification commands do not.
+  There is no scheduler; sealing happens only when this command is run.
 - **Two `.env` files:** the root `.env` (created by `make env` from `.env.example`) is read by
   Docker Compose; the API reads `.env` relative to its working directory, i.e. `backend/.env`
   under `make dev-api` (there is no `backend/.env.example` yet — see TODO.md).
@@ -105,11 +106,13 @@ server that touches nothing else (no volume, removed on stop):
 -e POSTGRES_PASSWORD=<throwaway> -e POSTGRES_DB=pulseos_scratch -p 127.0.0.1:55432:5432
 --tmpfs /var/lib/postgresql/data pgvector/pgvector:pg16`, then `docker stop pulseos-pgtest`.
 
-**Recorded results (not a guarantee of the current tree):** 2026-10-17, `d09d721`, local — backend
-**1209 passed, 25 skipped** without the URL (the 25 skips are the opt-in PostgreSQL tests);
-`mypy` clean (166 source files); `ruff check` and `ruff format` clean; web **611 passed**
-(hospital 199, patient 188, doctor 166, ui 34, api-client 24); web formatting, linting, and
-typechecking clean. CI workflow on GitHub Actions for `d09d721` was reported **GREEN** across all jobs (workflow run #17, user-provided evidence; logs not stored in repository).
+**Recorded results (not a guarantee of the current tree):** 2026-10-25, `0ea4bac` plus the
+Session 021 changes, local only — backend **1351 passed, 26 skipped** without the
+URL (the 25 skips are the opt-in PostgreSQL tests, not run locally); strict `mypy` clean (173
+source files); `ruff check` and `ruff format` clean; web **689 passed** (hospital 252, patient 229,
+doctor 158, ui 33, api-client 17); web formatting, linting, typechecking and `pnpm build` clean.
+The last CI result on record is GitHub Actions run #17 for `d09d721`, reported **GREEN** across all
+jobs (user-provided evidence; logs not stored in repository); later commits have no CI result yet.
 
 Rules: consent enforcement gets *negative* tests (wrong role, revoked grant, wrong patient) for
 every endpoint that touches records. External services (LLM, chain, S3, FCM) are faked in tests —
@@ -123,13 +126,17 @@ changes run everything):
 - `backend` — `ruff format --check`, `ruff check`, `mypy`, `pytest`. All four steps clean.
 - `backend-postgres` — a disposable PostgreSQL 16 service running the opt-in PostgreSQL tests
   (`test_audit_batches_postgres.py`, `test_alembic_postgres.py`, `test_consent_postgres.py`).
-  Passes with 25 passed, 0 skipped.
-- `web` — prettier, eslint, `tsc`, vitest. All clean across all 6 workspace packages.
+  Must run all 26 tests with none skipped (the job fails on any skip); last reported passing in run #17.
+- `web` — prettier, eslint, `tsc`, vitest, then **Generated api-client is current** (regenerates
+  `schema.ts` from the committed `openapi.json` and fails on `git diff --exit-code`) and
+  **Production build** (`pnpm build`).
 - There is no E2E job (see Testing Strategy).
 
 `make ci` runs the lint, typecheck and test targets locally; it does not run the opt-in PostgreSQL
-tests. The API client is regenerated manually (`make api-client`), not in CI. No deployment job
-exists (ADR-009 pending).
+tests. The API client is regenerated manually (`make api-client` / `scripts/generate-api-client.sh`);
+CI only checks that the committed `schema.ts` matches the committed spec. There is no backend
+spec-drift check (re-exporting `openapi.json` in CI) because there is no Python lockfile, so CI
+could resolve different FastAPI/Pydantic versions. No deployment job exists (ADR-009 pending).
 
 ## Documentation Duties
 

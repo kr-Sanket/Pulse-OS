@@ -42,6 +42,16 @@ Operational scripts (owned here, run from repo root):
   *second* hospital-admin row for the same hospital (`hospital_admins.hospital_id` is not
   unique). There is deliberately no unlink command yet — restoring the original subject is
   a destructive edit to a row a real account is signing in with, and needs its own slice.
+- **`dev_provision_system_admin.py`** — **local development only.** Provisions a real Firebase
+  UID as `SYSTEM_ADMIN` and stamps the PulseOS custom claims through the auth module's port.
+  Same guard as `dev_link_identity.py` (`PULSEOS_ENVIRONMENT=local` **and** a local database
+  host; no `--force`); refuses synthetic or empty UIDs and never converts a user that already
+  holds another role.
+
+  ```bash
+  backend/.venv/bin/python scripts/dev_provision_system_admin.py \
+      --firebase-uid <FIREBASE_UID> --email sysadmin@example.test
+  ```
 - **`seed.py`** — idempotent development/demo seed: the 3 simulated hospitals
   (HID-0001..0003), the 13-code record-category vocabulary, one demo admin and one demo doctor
   per hospital, and 3 synthetic patients with pinned Health IDs. Safe to run any number of times;
@@ -71,9 +81,11 @@ Operational scripts (owned here, run from repo root):
     ```bash
     PULSEOS_ENVIRONMENT=local backend/.venv/bin/python scripts/audit_integrity.py seal --confirm-env local
     ```
-    Fails closed on missing confirmation, implicit default environment, or mismatched targets
-    (e.g., remote hosts in local mode or port 5433 in non-local modes). Supports `--json` for
-    machine-readable outputs.
+    Fails closed (exit code 2, before any database engine is created) on missing confirmation,
+    implicit default environment, or mismatched targets (e.g., remote hosts in local mode or
+    `localhost:5433` in staging/production). `--limit` caps the events sealed per run. Every
+    subcommand supports `--json` for machine-readable outputs. Sealing is manual — there is no
+    scheduler — and commitments stay in the local database; nothing is submitted to a chain.
 
 `review1_deck/` is presentation tooling (regenerates `PulseOS_Review1.pptx` via
 `python3 build.py`), not part of the product.

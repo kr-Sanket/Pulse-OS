@@ -34,7 +34,7 @@
         └───────────┘             └─────────────┘
 
    Planned, not implemented: public-chain submission of batch commitments (ADR-027;
-   M6.4+ not authorized) · OCR/embedding workers (ADR-029) · FHIR export.
+   M6.4+ not authorized) · audit sealing scheduler · OCR/embedding workers (ADR-029).
    Out of scope by decision: push/email/SMS notifications (ADR-031 is in-app only).
 ```
 
@@ -46,10 +46,10 @@ wherever `PULSEOS_OLLAMA_BASE_URL` points. No deployment target is decided yet (
 
 | Module | Owns | Never does |
 |---|---|---|
-| `auth` | Firebase token verification, role claims (patient/doctor/hospital_admin), RBAC dependencies | Business logic |
+| `auth` | Firebase token verification (with revocation check), per-request DB account-status and claim/role consistency check, role claims (patient/doctor/hospital_admin/system_admin), RBAC dependencies. Suspending users or revoking tokens has no API (out-of-band) | Business logic |
 | `patients` | Patient profile, Health ID issuance (ADR-012), health profile data; patient lookup by Health ID (ADR-021). QR identity is **planned, not built** | Reading record content |
-| `records` | Upload, FHIR-aligned metadata (DocumentReference-shaped), categorization, presigned URL issuance, hide/unhide, Synthea FHIR R4 **import** via CLI (proposed ADR-030). There is no FHIR export or FHIR API | Deciding *whether* access is allowed |
-| `consent` | Request → per-category grant/reject → revoke lifecycle; **the consent-enforcement dependency**; append-only audit log with versioned digests; `AuditAnchor` port + local adapter; Merkle batch sealing and database-only reconciliation (ADR-027) | Storing files or record content |
+| `records` | Upload, FHIR-aligned metadata (DocumentReference-shaped), categorization, presigned URL issuance, hide/unhide, Synthea FHIR R4 **import** via CLI (proposed ADR-030); consent-gated FHIR R4-shaped Bundle **export** (`GET /records/export/fhir`, proposed ADR-032) of stored FHIR records only. There is no FHIR read/search API | Deciding *whether* access is allowed |
+| `consent` | Request → per-category grant/reject → revoke lifecycle; **the consent-enforcement dependency**; append-only audit log with versioned digests; `AuditAnchor` port + local adapter; Merkle batch sealing (manual CLI), database-only reconciliation, and patient-facing verification/proof plus any-role batch verification endpoints (ADR-027) | Storing files or record content |
 | `ai` | FHIR-resource ingestion into chunks, deterministic consent-scoped lexical retrieval, clinical assistant and patient copilot answers via the `AnswerGenerator` protocol (Ollama). See AI_ARCHITECTURE.md for what is **not** built (OCR, embeddings, summaries, timeline, explainer, redaction) | Bypassing consent to fetch content |
 | `notifications` | In-app notifications for the four consent events (ADR-031): `notifications` table (migration 0008), rows written by `consent` in the same transaction as the consent change, four `/notifications` endpoints for patients and doctors. No push, email, SMS or reminders | Holding audit evidence (notifications are mutable convenience rows) |
 
@@ -87,14 +87,17 @@ wherever `PULSEOS_OLLAMA_BASE_URL` points. No deployment target is decided yet (
 6. Revocation deactivates grants immediately and notifies the doctor (`CONSENT_REVOKED`);
    subsequent reads are refused as 404 (never 403, so existence is not disclosed) and logged as
    `ACCESS_DENIED` — including ids the clinician already holds from step 4, because a listing
-   permits nothing. Consent-related portal screens refresh by polling every 15–30 s and on window
-   focus.
+   permits nothing. AI search, AI answers and the doctor FHIR export re-check grants after their
+   reads and discard anything a concurrent revocation removed (AI_ARCHITECTURE.md). A presigned URL
+   already issued stays valid until its TTL (default 300 s) and cannot be recalled. Consent-related
+   portal screens refresh by polling every 15–30 s and on window focus.
 
 ## Cross-Cutting Concerns
 
 - **Async work (ADR-008/014):** uploads return fast and enqueue `record_uploaded`, which only
   logs today; records stay `UPLOADED`. The OCR/embedding pipeline is not built (ADR-029). Batch
-  sealing is an operation without a scheduler yet (ADR-027).
+  sealing is a manual CLI operation (`scripts/audit_integrity.py seal`, environment-guarded) without a
+  scheduler yet (ADR-027).
 - **Caching:** no AI result caching exists. Redis is used for rate limiting (ADR-024) and the job
   queue.
 - **Observability:** structured JSON logging with request IDs (no PHI in logs), `/health` +

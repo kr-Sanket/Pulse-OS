@@ -5,10 +5,10 @@
 > Owner codes: FE (frontend lead), BE (backend lead), AI (AI+blockchain lead), PO (product owner), ANY (whoever/Claude).
 
 **Milestones:** M0 ✅ · M2 ✅ · M3 ✅ (gate criteria met in code) · **M4 substantially
-done — notifications, per-category consent decisions, and System Admin provisioning/directory/dashboard shipped; QR and verification audit metadata remain** · **M5 (AI) partially built** · **M6.1–M6.3 ✅** (local only, CLI sealing workflow available; M6.4+ **not authorized**) · M7 (hardening/deploy/paper) **not started**.
+done — notifications, per-category consent decisions, System Admin provisioning/directory/dashboard and verifier metadata shipped; QR, the verification audit event and hospital rejection remain** · **M5 (AI) partially built** · **M6.1–M6.3 ✅** (local only, CLI sealing workflow available; M6.4+ **not authorized**) · M7 (hardening/deploy/paper) **not started**.
 
-State as of `d09d721` (2026-10-17): `main` is level with `origin/main` (commits `a09d41f` through `d09d721` pushed, CI workflow run #17 reported green via user-provided evidence).
-Full picture: [SESSION.md](SESSION.md) §Session 020. Milestone status is owned by ROADMAP.md.
+State as of 2026-10-25: Session 021's series and the four earlier commits are pushed to
+`origin/main`; its CI result is in GitHub Actions (last in-repo record: run #17 on `d09d721`). Full picture: [SESSION.md](SESSION.md) §Session 021. Milestone status is owned by ROADMAP.md.
 
 ---
 
@@ -24,11 +24,20 @@ Full picture: [SESSION.md](SESSION.md) §Session 020. Milestone status is owned 
       (`make dev-api` runs from `backend/`), while the root `.env` is docker-compose only. The
       absence of an example is what makes that invisible; it has cost debugging time twice.
 
-## 0a. Final review priorities (status 2026-10-17, `d09d721`)
+- [x] PO: Session 021 work reviewed, committed and pushed with the 4 earlier commits (2026-10-25).
+- [ ] PO/ANY: confirm that push's CI run is green, including the first run of "Generated
+      api-client is current" and "Production build" (CI runs Python 3.12; local used 3.14).
+- [x] PO: hidden-record policy — **confirmed 2026-10-25**: the uploading hospital keeps access to
+      its own uploads when the patient hides them; keep it disclosed and documented.
+- [x] PO: `audit_batch_verify` (30/60 s) and the any-role `/audit-batches/{n}` policy — accepted
+      2026-10-25, together with the ADR-027 decision-7 amendment.
+- [ ] ANY: backend OpenAPI drift check in CI — blocked on a Python lockfile (CI could resolve
+      different FastAPI/Pydantic versions and produce spurious spec diffs).
+
+## 0a. Final review priorities (status 2026-10-25)
 
 Recommended order 1 → 2 → 3 → 4 → 5. Summary in ROADMAP.md §Final review priorities.
-Items 1 and 2 are implemented and committed; Items 3 and 4 are partially implemented;
-Item 5 is outstanding.
+Items 1, 2, 4 and 5 are implemented for the review item 3 is partial.
 
 1. [x] BE: **Authorization and audit correctness** — implemented in `a09d41f`, `7c27aa0`
    (ADR-017/020/021 amendments). AI search audited (`AuditAction.RECORDS_SEARCHED`) + `ai_search`
@@ -70,18 +79,23 @@ Item 5 is outstanding.
    in `b045f10`, `98f3b33`, `e48017a`, `96a2191`. Local provisioning script sets Firebase custom claims;
    `GET /api/v1/hospitals` lists directory for `Role.SYSTEM_ADMIN`; dedicated System Admin dashboard and
    `AdminLayout` with metrics and verification controls in hospital portal.
-   *Remaining gaps:* verifier user ID and verification timestamp not recorded on row; administrative
-   audit event not emitted; hospital rejection/suspension lifecycle is not implemented.
-4. [-] BE/FE: **Demonstrable audit integrity (local only)** — developer CLI workflow implemented
-   in `e350b2a` (`scripts/audit_integrity.py` supporting `seal`, `verify-batch`, `verify-event`, `reconcile`).
-   *Remaining gaps:* production-safety environment guard for CLI, scheduled background sealing daemon,
-   API v3 Merkle verification endpoint (`GET /audit-logs/{id}/verification` currently checks only
-   legacy per-event `audit_anchors`), and patient UI integration remain outstanding.
+   Verifier user ID and timestamp recorded since `15e0b1c` (migration 0009).
+   *Remaining gaps:* administrative audit event not emitted (needs ADR: `audit_logs.patient_id` is
+   NOT NULL); hospital rejection/suspension lifecycle is not implemented (PO policy decision).
+4. [x] BE/FE: **Demonstrable audit integrity (local only)** — CLI (`e350b2a`), sealing guard
+   (`278bbfc`), API v3 verification/proof/batch endpoints (`c7e5359`), and Session 021
+   inclusion required for VERIFIED everywhere, proof endpoint 500 fixed, patient
+   integrity badge + proof dialog.
+   - [ ] BE: sealing scheduler (`audit_batch_interval_seconds` is configured but unused).
+   - [ ] BE: append-only enforcement in the database (trigger/REVOKE) — needs a migration + ADR.
    Public-chain anchoring stays deferred (Polygon Amoy / M6.4 not authorized).
-5. [ ] BE: **FHIR R4 export** — consent-enforced, audited, read-only Bundle of granted,
-   non-hidden records (stored resources + DocumentReference metadata for uploads), validated
-   against R4 in tests; add a `subject`-matches-bundle-Patient check to the importer. Out of
-   scope: FHIR server, SMART on FHIR, FHIR write-back. Supersedes the §1b "FHIR export" item.
+5. [x] BE/FE: **FHIR R4 export** — `GET /records/export/fhir` (`2e05ee4`, re-check `0ea4bac`);
+   patient portal download (Session 021). Still open:
+   - [ ] BE: validate exported Bundles with an HL7 validator (none in the toolchain today).
+   - [ ] BE: DocumentReference entries for uploaded PDFs/images (currently excluded).
+   - [ ] BE: `subject`-matches-bundle-Patient check in the importer.
+   - [ ] FE: doctor-portal export (API exists; no UI).
+   Out of scope: FHIR server, SMART on FHIR, FHIR write-back.
 
 ## 1. M4 — Core Features Complete (current milestone, substantially done)
 
@@ -109,8 +123,8 @@ What is left, ordered by dependency. Each item is demonstrable on its own.
 - [x] BE: **SYSTEM_ADMIN provisioning and directory** — implemented in `b045f10`
       (`scripts/dev_provision_system_admin.py`) and `98f3b33` (`GET /api/v1/hospitals`). Dedicated
       System Admin dashboard and `AdminLayout` in hospital portal implemented in `96a2191`.
-      Remaining gaps: verifier user ID and verification timestamp not persisted on row;
-      administrative audit event not emitted; rejection/suspension lifecycle not implemented.
+      Verifier/timestamp persisted since `15e0b1c`. Remaining gaps: administrative audit event
+      not emitted; rejection/suspension lifecycle not implemented.
 - [x] BE/FE: **`notifications` module** — shipped in `15b2d1b` per ADR-031 (in-app only,
       written in the consent transaction, polled by the patient and doctor portals). Follow-ups,
       not scheduled: notification items do not link to the referenced request; the hospital
@@ -161,9 +175,7 @@ Phase A shipped ten pinned patients and 889 records; these are the parts deliber
       records. Their names survive as text inside the stored FHIR.
 - [ ] BE: **full-corpus import via arq** for the other 1,170 patients; the mapping layer is
       already pure so the worker can reuse it unchanged.
-- [ ] BE: **FHIR export** — ADR-006 promised the mapping is trivial in both directions and
-      only the import half now exists. A reviewer will notice the asymmetry. *Promoted to §0a
-      item 5.*
+- [x] BE: **FHIR export** — built (`2e05ee4`); see §0a item 5 for what remains.
 - [ ] BE/PO: **`SYNTHETIC_IMPORT` record origin.** Phase A reuses `PATIENT_LOCKER` (OD-S1,
       zero ripple). A truthful value costs the backend enum + OpenAPI + client regen + the
       exhaustive `ORIGIN_LABELS` map in `@pulseos/ui`.
