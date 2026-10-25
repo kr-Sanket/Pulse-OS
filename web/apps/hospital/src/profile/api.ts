@@ -4,7 +4,13 @@
 // nothing throws, and lib/apiResult (shared) owns the result shape.
 
 import type { components, PulseOSClient } from "@pulseos/api-client";
-import { attempt, statusFailure, type ApiResult } from "@pulseos/ui";
+import {
+  ACCOUNT_SUSPENDED_MESSAGE,
+  attempt,
+  isAccountSuspended,
+  statusFailure,
+  type ApiResult,
+} from "@pulseos/ui";
 
 export type HospitalAdminProfile = components["schemas"]["HospitalAdminProfileResponse"];
 export type HospitalVerificationStatus = components["schemas"]["HospitalVerificationStatus"];
@@ -26,7 +32,8 @@ export type HospitalVerificationStatus = components["schemas"]["HospitalVerifica
 export type HospitalIdentity =
   { kind: "registered"; profile: HospitalAdminProfile } | { kind: "unregistered" };
 
-/** 403 and 404 are handled above as `unregistered`, so they are absent here by design. */
+/** 403 and 404 are handled above (`unregistered`, or suspended), so they are absent here by
+ * design. */
 const PROFILE_FAILURES: Readonly<Record<number, string>> = {
   401: "Your session has expired. Sign in again to continue.",
 };
@@ -41,6 +48,11 @@ export async function loadHospitalProfile(
 ): Promise<ApiResult<HospitalIdentity>> {
   return attempt<HospitalIdentity>(async () => {
     let result = await client.GET("/api/v1/hospitals/me", { signal });
+    // A suspended account is a 403 too, but not an unprovisioned one: refreshing the token
+    // cannot help and onboarding would be refused, so it is reported, never routed.
+    if (result.data === undefined && isAccountSuspended(result.response.status, result.error)) {
+      return { status: "error", message: ACCOUNT_SUSPENDED_MESSAGE };
+    }
     // Registration sets custom claims server-side. A normal getIdToken() may still return
     // the pre-registration token, including after a browser reload. Refresh only after the
     // expected unprovisioned response, then let the API make the authorization decision again.
@@ -49,6 +61,9 @@ export async function loadHospitalProfile(
       result = await client.GET("/api/v1/hospitals/me", { signal });
     }
     if (result.data === undefined) {
+      if (isAccountSuspended(result.response.status, result.error)) {
+        return { status: "error", message: ACCOUNT_SUSPENDED_MESSAGE };
+      }
       if (UNREGISTERED_STATUSES.has(result.response.status)) {
         return { status: "ready", data: { kind: "unregistered" } };
       }

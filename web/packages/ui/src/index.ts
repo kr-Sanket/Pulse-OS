@@ -37,7 +37,16 @@ export { ProtectedRoute } from "./components/ProtectedRoute";
 
 export { HealthcareArtwork } from "./brand/HealthcareArtwork";
 
-export { attempt, failure, statusFailure, NETWORK_FAILURE, type ApiResult } from "./lib/apiResult";
+export {
+  ACCOUNT_SUSPENDED_DETAIL,
+  ACCOUNT_SUSPENDED_MESSAGE,
+  attempt,
+  failure,
+  isAccountSuspended,
+  statusFailure,
+  NETWORK_FAILURE,
+  type ApiResult,
+} from "./lib/apiResult";
 export {
   useApiResource,
   type Loader,

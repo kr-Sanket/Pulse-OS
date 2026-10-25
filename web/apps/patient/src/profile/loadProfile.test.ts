@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 
 import type { PatientProfile, PulseOSClient } from "@pulseos/api-client";
+import { ACCOUNT_SUSPENDED_MESSAGE } from "@pulseos/ui";
 
 import { loadOrRegisterProfile, registrationFullName } from "./loadProfile";
 
@@ -108,4 +109,15 @@ test("registrationFullName falls back from display name to email to placeholder"
   expect(registrationFullName({ displayName: null, email: "asha.r@example.test" })).toBe("asha.r");
   expect(registrationFullName({ displayName: "  ", email: null })).toBe("PulseOS Patient");
   expect(registrationFullName({ displayName: "x".repeat(200), email: null })).toHaveLength(120);
+});
+
+test("a suspended account is reported and never registered", async () => {
+  const { client, POST } = stubClient([fail(403, { detail: "Account is suspended." })]);
+  const refresh = vi.fn(() => Promise.resolve());
+
+  const result = await loadOrRegisterProfile(client, IDENTITY, refresh);
+
+  expect(result).toEqual({ status: "error", message: ACCOUNT_SUSPENDED_MESSAGE });
+  expect(POST).not.toHaveBeenCalled();
+  expect(refresh).not.toHaveBeenCalled();
 });

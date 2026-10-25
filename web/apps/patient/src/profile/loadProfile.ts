@@ -6,6 +6,7 @@
 // claims are in it → retry /me. Any other failure surfaces as a message.
 
 import { problemDetail, type PatientProfile, type PulseOSClient } from "@pulseos/api-client";
+import { ACCOUNT_SUSPENDED_MESSAGE, isAccountSuspended } from "@pulseos/ui";
 
 export interface RegistrationIdentity {
   displayName: string | null;
@@ -44,6 +45,11 @@ export async function loadOrRegisterProfile(
   }
   if (first.response.status !== 403) {
     return failure(first.error, "Could not load your profile.");
+  }
+  // A suspended account is refused with a 403 as well. It is never "unregistered": do not
+  // attempt registration for it (the API would refuse), just say what happened.
+  if (isAccountSuspended(first.response.status, first.error)) {
+    return { status: "error", message: ACCOUNT_SUSPENDED_MESSAGE };
   }
 
   const registration = await client.POST("/api/v1/patients/register", {

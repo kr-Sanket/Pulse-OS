@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 
 import type { PulseOSClient } from "@pulseos/api-client";
+import { ACCOUNT_SUSPENDED_MESSAGE } from "@pulseos/ui";
 
 import { loadHospitalProfile } from "./api";
 
@@ -99,4 +100,37 @@ test("a rejected fetch becomes an error result rather than throwing", async () =
   const result = await loadHospitalProfile(client, SIGNAL);
 
   expect(result.status).toBe("error");
+});
+
+test("a suspended account is reported, never routed to onboarding or refreshed", async () => {
+  const get = vi.fn().mockResolvedValue({
+    error: { detail: "Account is suspended." },
+    response: { status: 403 },
+  });
+  const refreshToken = vi.fn().mockResolvedValue(undefined);
+  const client = { GET: get } as unknown as PulseOSClient;
+
+  expect(await loadHospitalProfile(client, SIGNAL, refreshToken)).toEqual({
+    status: "error",
+    message: ACCOUNT_SUSPENDED_MESSAGE,
+  });
+  expect(refreshToken).not.toHaveBeenCalled();
+  expect(get).toHaveBeenCalledOnce();
+});
+
+test("an account suspended between the refresh and the retry is still reported", async () => {
+  const get = vi
+    .fn()
+    .mockResolvedValueOnce({ error: {}, response: { status: 403 } })
+    .mockResolvedValueOnce({
+      error: { detail: "Account is suspended." },
+      response: { status: 403 },
+    });
+  const refreshToken = vi.fn().mockResolvedValue(undefined);
+  const client = { GET: get } as unknown as PulseOSClient;
+
+  expect(await loadHospitalProfile(client, SIGNAL, refreshToken)).toEqual({
+    status: "error",
+    message: ACCOUNT_SUSPENDED_MESSAGE,
+  });
 });
