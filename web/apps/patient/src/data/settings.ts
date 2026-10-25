@@ -192,16 +192,21 @@ export interface DataControl {
   icon: LucideIcon;
   /** Renders the row and its button in the destructive tone. */
   destructive: boolean;
+  /** False for an action with no backend yet: the button renders disabled, never dead. */
+  available: boolean;
 }
 
 export const DATA_CONTROLS: readonly DataControl[] = [
   {
     id: "export",
     title: "Export health data",
-    description: "Download every record and grant on your account in a portable format.",
-    actionLabel: "Export Data",
+    description:
+      "Download your structured clinical records as a FHIR R4 JSON bundle. Uploaded PDFs " +
+      "and images are not included in the bundle — download those from Medical Records.",
+    actionLabel: "Export FHIR (JSON)",
     icon: Download,
     destructive: false,
+    available: true,
   },
   {
     id: "delete",
@@ -210,6 +215,7 @@ export const DATA_CONTROLS: readonly DataControl[] = [
     actionLabel: "Delete Account",
     icon: Trash2,
     destructive: true,
+    available: false,
   },
 ];
 

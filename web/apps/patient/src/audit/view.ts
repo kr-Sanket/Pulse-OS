@@ -23,7 +23,7 @@ import type { Tone } from "@/components/dashboard/StatusBadge";
 import { formatInstantDate, formatInstantTime, formatRelativeTime } from "@pulseos/ui";
 import { categoryLabel } from "@pulseos/ui";
 
-import type { ActorRole, AuditAction, AuditEvent } from "./api";
+import type { ActorRole, AuditAction, AuditEvent, AuditIntegrity, AuditProof } from "./api";
 
 /** Shown for an event whose actor this build cannot name — the projection found no staff
  * row, so the role is all the trail knows. */
@@ -56,7 +56,7 @@ interface ActionPresentation {
   tone: Tone;
 }
 
-/** The eleven actions the backend defines (AuditAction), and nothing more. */
+/** The twelve actions the backend defines (AuditAction), and nothing more. */
 const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   RECORD_VIEWED: { label: "Viewed", tone: "info" },
   RECORD_DOWNLOADED: { label: "Downloaded", tone: "primary" },
@@ -74,6 +74,9 @@ const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   // A clinician's AI search across the records your consent covers. Unlike a listing it
   // returns record text, so it is named for what it is. One entry per search.
   RECORDS_SEARCHED: { label: "Records searched (AI)", tone: "info" },
+  // A FHIR R4 bundle of records was exported — by you, or by a clinician within the
+  // categories your consent covers. One entry per export.
+  RECORD_EXPORTED: { label: "Records exported (FHIR)", tone: "primary" },
 };
 
 /** "SOMETHING_NEW" → "Something new". The graceful path for an action added server-side
@@ -106,6 +109,8 @@ export interface AuditEventView {
   hashPreview: string;
   /** The whole digest, for a title attribute — the page shows a preview, not a secret. */
   eventHash: string;
+  /** The backend's verdict on this row, worded. Never inferred from the hash being present. */
+  integrity: IntegrityView;
   /** The rail icon: a person for the patient's own actions, an organisation otherwise. */
   icon: LucideIcon;
 }
@@ -165,6 +170,7 @@ export function toEventView(
     time: formatInstantTime(event.occurredAt),
     hashPreview: previewHash(event.eventHash),
     eventHash: event.eventHash,
+    integrity: integrityView(event.integrity),
     icon: event.actorRole === "PATIENT" ? UserRound : Building2,
   };
 }
@@ -174,6 +180,103 @@ export function toEventViews(
   labels: ReadonlyMap<string, string>,
 ): readonly AuditEventView[] {
   return events.map((event) => toEventView(event, labels));
+}
+
+// -- integrity --------------------------------------------------------------------------
+//
+// The verdict comes from the API (`integrity.status`), computed server-side on every read:
+// the row's digest is recomputed and, for a sealed event, proven a leaf of its Merkle batch.
+// The page words that verdict and nothing more. It never upgrades a row to "verified"
+// because it has a hash, and it never calls a local Merkle batch a blockchain anchor —
+// PulseOS publishes nothing to any chain today.
+
+/** The batch network the API reports for local Merkle sealing (ADR-027). */
+export const LOCAL_MERKLE_BATCH_NETWORK = "local-merkle-batch";
+
+export interface IntegrityView {
+  status: AuditIntegrity["status"] | "UNKNOWN";
+  label: string;
+  tone: Tone;
+  /** One sentence on what the verdict does and does not mean. */
+  detail: string;
+  /** True when the event sits in a local Merkle batch, so a membership proof exists. */
+  batched: boolean;
+}
+
+const INTEGRITY_UNAVAILABLE: IntegrityView = {
+  status: "UNKNOWN",
+  label: "Integrity unavailable",
+  tone: "neutral",
+  detail: "PulseOS did not report an integrity result for this entry.",
+  batched: false,
+};
+
+export function integrityView(integrity: AuditIntegrity | null | undefined): IntegrityView {
+  if (integrity === null || integrity === undefined) {
+    return INTEGRITY_UNAVAILABLE;
+  }
+  const batched = integrity.network === LOCAL_MERKLE_BATCH_NETWORK;
+  switch (integrity.status) {
+    case "VERIFIED":
+      return {
+        status: "VERIFIED",
+        label: "Integrity verified",
+        tone: "success",
+        detail: batched
+          ? "Unchanged since it was sealed into a local Merkle batch. Not anchored to a public blockchain."
+          : "Unchanged since it was anchored by the local development anchor. Not a public blockchain.",
+        batched,
+      };
+    case "NOT_ANCHORED":
+      return {
+        status: "NOT_ANCHORED",
+        label: "Not yet sealed",
+        tone: "warning",
+        detail:
+          "Recorded, but not yet sealed into an integrity batch, so it cannot be verified yet.",
+        batched: false,
+      };
+    case "EVENT_ALTERED":
+      return {
+        status: "EVENT_ALTERED",
+        label: "Integrity check failed",
+        tone: "destructive",
+        detail: "This entry no longer matches the digest it was sealed with.",
+        batched,
+      };
+    case "ANCHOR_ALTERED":
+      return {
+        status: "ANCHOR_ALTERED",
+        label: "Integrity check failed",
+        tone: "destructive",
+        detail: "The seal recorded for this entry does not verify.",
+        batched,
+      };
+    default:
+      return INTEGRITY_UNAVAILABLE;
+  }
+}
+
+export interface ProofRow {
+  label: string;
+  value: string;
+  /** Long hex values render monospaced and wrap. */
+  mono?: boolean;
+}
+
+/** The proof endpoint's answer as label/value rows. Digests are public attestation
+ * material — they reveal nothing about the event beyond what this page already shows. */
+export function proofRows(proof: AuditProof): readonly ProofRow[] {
+  return [
+    { label: "Batch", value: `#${proof.batchNumber}` },
+    { label: "Position", value: `Leaf ${proof.leafIndex + 1} of ${proof.leafCount}` },
+    { label: "Event digest matches", value: proof.isEventValid ? "Yes" : "No" },
+    { label: "Inclusion proof valid", value: proof.isProofValid ? "Yes" : "No" },
+    { label: "Proof steps", value: `${proof.proofStepsCount}` },
+    { label: "Event digest (Keccak-256)", value: proof.eventDigest, mono: true },
+    { label: "Batch Merkle root", value: proof.root, mono: true },
+    { label: "Batch commitment", value: proof.commitment, mono: true },
+  ];
 }
 
 // -- the default view ------------------------------------------------------------------
@@ -492,8 +595,10 @@ export const AUDIT_PRIVACY = {
     "Every access to your medical records is permanently logged to provide complete " +
     "transparency.",
   points: [
-    "Entries are append-only — they can never be edited or deleted, by anyone.",
+    "Entries are append-only in PulseOS: the application never edits or deletes them, and " +
+      "sealed entries are checked for tampering every time you open this page.",
     "You see the same trail your providers do, including refused attempts.",
-    "Revoking a grant in Active Grants stops further access immediately.",
+    "Revoking a grant in Active Grants refuses every new request at once; a download link " +
+      "issued just before stays valid for at most five minutes.",
   ],
 } as const;

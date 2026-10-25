@@ -38,6 +38,8 @@ const ACTIONS: Readonly<Record<AuditAction, ActionPresentation>> = {
   CONSENT_REJECTED: { label: "Consent declined", tone: "destructive" },
   CONSENT_REVOKED: { label: "Access withdrawn", tone: "destructive" },
   SUMMARY_GENERATED: { label: "Summary generated", tone: "neutral" },
+  // A clinician's FHIR R4 export within a patient's consented categories.
+  RECORD_EXPORTED: { label: "Records exported (FHIR)", tone: "primary" },
 };
 
 /** Shown for an action this build has never heard of — one added server-side after it

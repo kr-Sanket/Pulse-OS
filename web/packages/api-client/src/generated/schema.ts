@@ -201,6 +201,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit-batches/{batch_number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify Audit Batch
+         * @description Independently verify a sealed Merkle batch against the database (ADR-027).
+         *
+         *     Recomputes the domain-separated Merkle root and Keccak commitment from the batch's
+         *     members and compares them with persisted values. Reports any tampering or inconsistencies.
+         *     Contains zero PHI and zero patient identifiers.
+         *
+         *     Roles: Any authenticated user (PATIENT, DOCTOR, HOSPITAL_ADMIN, SYSTEM_ADMIN) — batch
+         *     roots and commitments are public-by-design attestation material. Rate limited
+         *     (``audit_batch_verify``, ADR-024) because each call recomputes the whole batch.
+         *     Findings may name an ``audit_log_id`` (an opaque UUID, never content or a patient id).
+         *     Failure modes: 401, 404 (no such batch), 422 (batch_number < 1), 429.
+         */
+        get: operations["verify_audit_batch_api_v1_audit_batches__batch_number__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-logs": {
         parameters: {
             query?: never;
@@ -224,6 +254,35 @@ export interface paths {
          *     Failure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).
          */
         get: operations["list_audit_events_api_v1_audit_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit-logs/{audit_log_id}/proof": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Audit Event Proof
+         * @description Get the cryptographic Merkle membership proof for an entry of the caller's trail (ADR-027).
+         *
+         *     Proves that this audit record is a committed leaf in an immutable Merkle batch.
+         *     Re-verifies the proof against the batch's root and recomputes the event digest.
+         *     Contains zero PHI.
+         *
+         *     Roles: PATIENT (own trail only). Enforces patient isolation: another patient's
+         *     event answers 404.
+         *     Failure modes: 401, 403, 404 (no such event for this caller, or unbatched event),
+         *     422 (malformed id).
+         */
+        get: operations["get_audit_event_proof_api_v1_audit_logs__audit_log_id__proof_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -965,6 +1024,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/records/export/fhir": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Patient Fhir
+         * @description Export consented clinical records as a canonical FHIR R4 Bundle.
+         *
+         *     Roles:
+         *     - PATIENT: Exports their own clinical records across all categories. `patientHealthId`
+         *       must be absent (identity derived strictly from token).
+         *     - DOCTOR: Exports records within active consent scope for the patient specified by
+         *       `patientHealthId`. If no active grant exists (or consent is expired/revoked), access
+         *       is denied and audited as ACCESS_DENIED.
+         *     Hospital admins and platform admins are rejected with 403.
+         *
+         *     Returns:
+         *     Direct FHIR R4 Bundle (type: collection) with Content-Type: application/fhir+json.
+         */
+        get: operations["export_patient_fhir_api_v1_records_export_fhir_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/records/{record_id}": {
         parameters: {
             query?: never;
@@ -1313,18 +1403,102 @@ export interface components {
          *     shape as a listing: one scope-level row, no target. Rows written before it existed keep
          *     ``RECORDS_LISTED``; nothing is rewritten.
          *
+         *     ``RECORD_EXPORTED`` extends it a fourth time (FHIR-01): a patient self-export or a
+         *     consented clinician's export of structured FHIR R4 clinical records. Like listings,
+         *     an export spans a scope of records, so it sets none of the three target columns;
+         *     ``patient_id`` carries the subject.
+         *
          *     ``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own
          *     ADR (.claude/TODO.md parking lot), and an unused member here would imply a capability
          *     that docs/SECURITY.md's no-break-glass invariant denies.
          * @enum {string}
          */
-        AuditAction: "RECORD_UPLOADED" | "ACCESS_REQUESTED" | "CONSENT_APPROVED" | "CONSENT_REJECTED" | "CONSENT_REVOKED" | "RECORD_VIEWED" | "RECORD_DOWNLOADED" | "SUMMARY_GENERATED" | "ACCESS_DENIED" | "RECORDS_LISTED" | "RECORDS_SEARCHED";
+        AuditAction: "RECORD_UPLOADED" | "ACCESS_REQUESTED" | "CONSENT_APPROVED" | "CONSENT_REJECTED" | "CONSENT_REVOKED" | "RECORD_VIEWED" | "RECORD_DOWNLOADED" | "SUMMARY_GENERATED" | "ACCESS_DENIED" | "RECORDS_LISTED" | "RECORDS_SEARCHED" | "RECORD_EXPORTED";
+        /** AuditBatchFindingResponse */
+        AuditBatchFindingResponse: {
+            /** Auditlogid */
+            auditLogId: string | null;
+            /** Batchnumber */
+            batchNumber: number | null;
+            /** Kind */
+            kind: string;
+        };
+        /**
+         * AuditBatchResponse
+         * @description The answer to 'is this sealed Merkle batch valid and intact?'.
+         *
+         *     Zero PHI: contains only batch metadata, roots, commitments, and discrepancy findings.
+         */
+        AuditBatchResponse: {
+            /**
+             * Batchid
+             * Format: uuid
+             */
+            batchId: string;
+            /** Batchnumber */
+            batchNumber: number;
+            /** Commitment */
+            commitment: string;
+            /** Findings */
+            findings: components["schemas"]["AuditBatchFindingResponse"][];
+            /** Firstoccurredat */
+            firstOccurredAt: string | null;
+            /** Hashversion */
+            hashVersion: number;
+            /** Isvalid */
+            isValid: boolean;
+            /** Lastoccurredat */
+            lastOccurredAt: string | null;
+            /** Leafcount */
+            leafCount: number;
+            /** Protocolversion */
+            protocolVersion: number;
+            /** Root */
+            root: string;
+            /** Status */
+            status: string;
+        };
         /** AuditEventListResponse */
         AuditEventListResponse: {
             /** Items */
             items: components["schemas"]["AuditEventResponse"][];
             /** Nextcursor */
             nextCursor: string | null;
+        };
+        /** AuditEventProofResponse */
+        AuditEventProofResponse: {
+            /**
+             * Auditlogid
+             * Format: uuid
+             */
+            auditLogId: string;
+            /**
+             * Batchid
+             * Format: uuid
+             */
+            batchId: string;
+            /** Batchnumber */
+            batchNumber: number;
+            /** Commitment */
+            commitment: string;
+            /** Eventdigest */
+            eventDigest: string;
+            /** Iseventvalid */
+            isEventValid: boolean;
+            /** Isproofvalid */
+            isProofValid: boolean;
+            /** Leafcount */
+            leafCount: number;
+            /** Leafindex */
+            leafIndex: number;
+            proof: components["schemas"]["MerkleProofResponse"] | null;
+            /** Proofstepscount */
+            proofStepsCount: number;
+            /** Recomputeddigest */
+            recomputedDigest: string | null;
+            /** Root */
+            root: string;
+            status: components["schemas"]["IntegrityStatus"];
         };
         /**
          * AuditEventResponse
@@ -1901,6 +2075,15 @@ export interface components {
             /** Count */
             count: number;
         };
+        /** MerkleProofResponse */
+        MerkleProofResponse: {
+            /** Leafcount */
+            leafCount: number;
+            /** Leafindex */
+            leafIndex: number;
+            /** Steps */
+            steps: components["schemas"]["ProofStepResponse"][];
+        };
         /**
          * NotificationEventType
          * @description Consent lifecycle events that trigger an in-app notification (ADR-031).
@@ -2007,6 +2190,13 @@ export interface components {
             /** Fullname */
             fullName: string;
             gender?: components["schemas"]["Gender"] | null;
+        };
+        /** ProofStepResponse */
+        ProofStepResponse: {
+            /** Sibling */
+            sibling: string;
+            /** Siblingonleft */
+            siblingOnLeft: boolean;
         };
         /** RecordCategoryListResponse */
         RecordCategoryListResponse: {
@@ -2708,6 +2898,64 @@ export interface operations {
             };
         };
     };
+    verify_audit_batch_api_v1_audit_batches__batch_number__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditBatchResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Audit batch not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
     list_audit_events_api_v1_audit_logs_get: {
         parameters: {
             query?: {
@@ -2763,6 +3011,64 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_audit_event_proof_api_v1_audit_logs__audit_log_id__proof_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                audit_log_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventProofResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Role not permitted */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description No such audit event or proof for this patient */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3762,6 +4068,56 @@ export interface operations {
             };
             /** @description Rate limit exceeded */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    export_patient_fhir_api_v1_records_export_fhir_get: {
+        parameters: {
+            query?: {
+                patientHealthId?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FHIR R4 collection Bundle of the patient's clinical records. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/fhir+json": unknown;
+                };
+            };
+            /** @description Unauthenticated or revoked token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden (unauthorized role or missing/expired/revoked consent). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Patient or doctor profile not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error (invalid parameters or patientHealthId mismatch). */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

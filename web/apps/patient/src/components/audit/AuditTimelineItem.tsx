@@ -7,12 +7,15 @@
 // Presentational: everything it renders is already worded by audit/view.ts, including the
 // action label, who the actor was and whether a category was recorded.
 
-import { CalendarDays, Clock } from "lucide-react";
+import { useState } from "react";
+
+import { CalendarDays, Clock, ShieldCheck } from "lucide-react";
 
 import { Detail } from "@/components/common/Detail";
 import { IconChip } from "@/components/dashboard/IconChip";
 import { StatusBadge } from "@/components/dashboard/StatusBadge";
-import { Badge, Card, CardContent } from "@pulseos/ui";
+import { AuditProofDialog } from "@/components/audit/AuditProofDialog";
+import { Badge, Button, Card, CardContent } from "@pulseos/ui";
 
 import type { AuditEventView } from "@/audit/view";
 
@@ -23,6 +26,7 @@ export interface AuditTimelineItemProps {
 }
 
 export function AuditTimelineItem({ event, isLast = false }: AuditTimelineItemProps) {
+  const [proofOpen, setProofOpen] = useState(false);
   return (
     <li className="flex gap-4">
       <div className="flex flex-col items-center" aria-hidden>
@@ -59,6 +63,22 @@ export function AuditTimelineItem({ event, isLast = false }: AuditTimelineItemPr
                   {event.hashPreview}
                 </span>
               </Detail>
+              <Detail label="Integrity">
+                <span className="flex flex-wrap items-center gap-2" title={event.integrity.detail}>
+                  <StatusBadge tone={event.integrity.tone}>{event.integrity.label}</StatusBadge>
+                  {event.integrity.batched ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1.5 px-2 text-xs"
+                      onClick={() => setProofOpen(true)}
+                    >
+                      <ShieldCheck className="size-3.5" aria-hidden />
+                      View proof
+                    </Button>
+                  ) : null}
+                </span>
+              </Detail>
             </dl>
 
             <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
@@ -73,6 +93,9 @@ export function AuditTimelineItem({ event, isLast = false }: AuditTimelineItemPr
             </div>
           </CardContent>
         </Card>
+        {event.integrity.batched ? (
+          <AuditProofDialog auditLogId={event.id} open={proofOpen} onOpenChange={setProofOpen} />
+        ) : null}
       </div>
     </li>
   );

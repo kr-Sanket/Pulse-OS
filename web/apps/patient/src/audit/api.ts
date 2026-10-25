@@ -1,4 +1,4 @@
-// Every backend call the Audit History page makes — one, for now.
+// Every backend call the Audit History page makes: the trail itself, and one entry's proof.
 //
 // Same contract as the other feature api modules: the client is injected, nothing throws,
 // every call answers with a discriminated result, and lib/apiResult.ts owns the shape.
@@ -16,6 +16,8 @@ export type Actor = components["schemas"]["StaffDisplayResponse"];
  * actor's current employer — that is `Actor.hospitalName`, and it answers a different
  * question. Null for the patient's own actions and for events predating attribution. */
 export type AuditHospital = components["schemas"]["AuditHospitalResponse"];
+export type AuditIntegrity = components["schemas"]["AuditIntegrityResponse"];
+export type AuditProof = components["schemas"]["AuditEventProofResponse"];
 
 /** One page of the trail. Small enough to render grouped without a wall of rows, and the
  * page has a Load more, so it is a page size rather than the cap it used to be. */
@@ -51,6 +53,40 @@ export async function listAuditEvents(
         result.response.status,
         LISTING_FAILURES,
         "Could not load your audit history.",
+      );
+    }
+    return { status: "ready", data: result.data };
+  });
+}
+
+const PROOF_FAILURES: Readonly<Record<number, string>> = {
+  401: "Your session has expired. Sign in again to see this proof.",
+  403: "This account cannot view this proof.",
+  404: "No integrity proof exists for this entry yet — it has not been sealed into a batch.",
+};
+
+/**
+ * The Merkle membership proof for one entry of the caller's own trail.
+ *
+ * The API re-verifies it on every call and answers 404 both for an unsealed entry and for
+ * an entry that is not the caller's — the two are deliberately indistinguishable.
+ */
+export async function getAuditProof(
+  client: PulseOSClient,
+  auditLogId: string,
+  signal: AbortSignal,
+): Promise<ApiResult<AuditProof>> {
+  return attempt(async () => {
+    const result = await client.GET("/api/v1/audit-logs/{audit_log_id}/proof", {
+      params: { path: { audit_log_id: auditLogId } },
+      signal,
+    });
+    if (result.data === undefined) {
+      return statusFailure(
+        result.error,
+        result.response.status,
+        PROOF_FAILURES,
+        "Could not load the integrity proof.",
       );
     }
     return { status: "ready", data: result.data };

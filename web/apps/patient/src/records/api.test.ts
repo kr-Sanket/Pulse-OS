@@ -4,6 +4,9 @@ import type { PulseOSClient } from "@pulseos/api-client";
 
 import {
   createDownloadUrl,
+  exportFhirBundle,
+  FHIR_JSON_TYPE,
+  fhirExportFilename,
   getRecord,
   listCategories,
   listRecords,
@@ -254,4 +257,62 @@ test("a rejected fetch becomes an error result rather than a thrown exception", 
   const result = await setRecordVisibility(client, "rec-1", true);
 
   expect(result.status).toBe("error");
+});
+
+// -- FHIR export ------------------------------------------------------------------------
+
+const EXPORT_DAY = new Date("2026-10-25T09:30:00Z");
+
+test("the export asks for a blob and sends no patient identifier", async () => {
+  const bundle = new Blob(['{"resourceType":"Bundle"}'], { type: FHIR_JSON_TYPE });
+  const { client, call } = stubClient(ok(bundle));
+
+  const result = await exportFhirBundle(client, EXPORT_DAY);
+
+  expect(call).toHaveBeenCalledWith("/api/v1/records/export/fhir", { parseAs: "blob" });
+  expect(result).toEqual({
+    status: "ready",
+    data: { blob: bundle, filename: "pulseos-fhir-export-2026-10-25.json" },
+  });
+});
+
+test("the saved bundle is byte-for-byte the API body, typed as FHIR JSON", async () => {
+  const body = '{"resourceType":"Bundle","type":"collection","entry":[]}';
+  const { client } = stubClient(ok(new Blob([body])));
+
+  const result = await exportFhirBundle(client, EXPORT_DAY);
+
+  if (result.status !== "ready") throw new Error("expected a ready export");
+  expect(result.data.blob.type).toBe(FHIR_JSON_TYPE);
+  expect(await result.data.blob.text()).toBe(body);
+});
+
+test("export failures prefer the API detail and fall back per status", async () => {
+  const withDetail = stubClient(fail(403, { detail: "Account is suspended." }));
+  expect(await exportFhirBundle(withDetail.client, EXPORT_DAY)).toEqual({
+    status: "error",
+    message: "Account is suspended.",
+  });
+
+  const expired = stubClient(fail(401));
+  expect(await exportFhirBundle(expired.client, EXPORT_DAY)).toEqual({
+    status: "error",
+    message: "Your session has expired. Sign in again to export your records.",
+  });
+
+  const storage = stubClient(fail(503));
+  const storageResult = await exportFhirBundle(storage.client, EXPORT_DAY);
+  expect(storageResult.status).toBe("error");
+});
+
+test("an unreachable API is a network failure, not a crash", async () => {
+  const { client } = stubClient(new Error("offline"));
+  const result = await exportFhirBundle(client, EXPORT_DAY);
+  expect(result.status).toBe("error");
+});
+
+test("the export filename is dated in UTC", () => {
+  expect(fhirExportFilename(new Date("2026-01-02T23:59:59Z"))).toBe(
+    "pulseos-fhir-export-2026-01-02.json",
+  );
 });

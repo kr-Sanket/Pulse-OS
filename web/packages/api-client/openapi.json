@@ -349,7 +349,7 @@
         "type": "object"
       },
       "AuditAction": {
-        "description": "The audit action vocabulary of docs/DOMAIN_MODEL.md \u00a71, verbatim.\n\n``ACCESS_DENIED`` extends that list. The M3 gate requires that \"attempted unauthorized\nreads are denied AND logged\" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only\nsuccesses, so a refused read had no truthful action to write. Adding it costs nothing:\nmembers are values in a VARCHAR(32) column, so the vocabulary extends without a\nmigration.\n\n``RECORDS_LISTED`` extends it again, for the same reason and by the same precedent\n(ADR-020). A clinician asking which of a patient's records they may read is a real\naccess event \u2014 SYSTEM_ARCHITECTURE rule 3 covers \"metadata-beyond-existence\" \u2014 and no\nexisting member states it truthfully: ``RECORD_VIEWED`` means one document was read and\nis paired with a record id, so reusing it would either invent views that never happened\nor leave that pairing unfilled. It is the one member whose event has **no** target at\nall: its subject is a scope, which ``patient_id`` already carries. See the target-column\nnote on ``AuditLog``.\n\n``RECORDS_SEARCHED`` extends it a third time (ADR-020, amendment of 2026-10-15): a\nclinician's AI record search (``GET /ai/patients/{id}/search``) returns record *text*\nfrom the granted scope, which ``RECORDS_LISTED`` \u2014 a chooser of ids \u2014 understated. Same\nshape as a listing: one scope-level row, no target. Rows written before it existed keep\n``RECORDS_LISTED``; nothing is rewritten.\n\n``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own\nADR (.claude/TODO.md parking lot), and an unused member here would imply a capability\nthat docs/SECURITY.md's no-break-glass invariant denies.",
+        "description": "The audit action vocabulary of docs/DOMAIN_MODEL.md \u00a71, verbatim.\n\n``ACCESS_DENIED`` extends that list. The M3 gate requires that \"attempted unauthorized\nreads are denied AND logged\" (.claude/ROADMAP.md) and ``RECORD_VIEWED`` records only\nsuccesses, so a refused read had no truthful action to write. Adding it costs nothing:\nmembers are values in a VARCHAR(32) column, so the vocabulary extends without a\nmigration.\n\n``RECORDS_LISTED`` extends it again, for the same reason and by the same precedent\n(ADR-020). A clinician asking which of a patient's records they may read is a real\naccess event \u2014 SYSTEM_ARCHITECTURE rule 3 covers \"metadata-beyond-existence\" \u2014 and no\nexisting member states it truthfully: ``RECORD_VIEWED`` means one document was read and\nis paired with a record id, so reusing it would either invent views that never happened\nor leave that pairing unfilled. It is the one member whose event has **no** target at\nall: its subject is a scope, which ``patient_id`` already carries. See the target-column\nnote on ``AuditLog``.\n\n``RECORDS_SEARCHED`` extends it a third time (ADR-020, amendment of 2026-10-15): a\nclinician's AI record search (``GET /ai/patients/{id}/search``) returns record *text*\nfrom the granted scope, which ``RECORDS_LISTED`` \u2014 a chooser of ids \u2014 understated. Same\nshape as a listing: one scope-level row, no target. Rows written before it existed keep\n``RECORDS_LISTED``; nothing is rewritten.\n\n``RECORD_EXPORTED`` extends it a fourth time (FHIR-01): a patient self-export or a\nconsented clinician's export of structured FHIR R4 clinical records. Like listings,\nan export spans a scope of records, so it sets none of the three target columns;\n``patient_id`` carries the subject.\n\n``EMERGENCY_ACCESS`` is deliberately absent: break-glass is Phase 2 and needs its own\nADR (.claude/TODO.md parking lot), and an unused member here would imply a capability\nthat docs/SECURITY.md's no-break-glass invariant denies.",
         "enum": [
           "RECORD_UPLOADED",
           "ACCESS_REQUESTED",
@@ -361,10 +361,138 @@
           "SUMMARY_GENERATED",
           "ACCESS_DENIED",
           "RECORDS_LISTED",
-          "RECORDS_SEARCHED"
+          "RECORDS_SEARCHED",
+          "RECORD_EXPORTED"
         ],
         "title": "AuditAction",
         "type": "string"
+      },
+      "AuditBatchFindingResponse": {
+        "properties": {
+          "auditLogId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auditlogid"
+          },
+          "batchNumber": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batchnumber"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "batchNumber",
+          "auditLogId"
+        ],
+        "title": "AuditBatchFindingResponse",
+        "type": "object"
+      },
+      "AuditBatchResponse": {
+        "description": "The answer to 'is this sealed Merkle batch valid and intact?'.\n\nZero PHI: contains only batch metadata, roots, commitments, and discrepancy findings.",
+        "properties": {
+          "batchId": {
+            "format": "uuid",
+            "title": "Batchid",
+            "type": "string"
+          },
+          "batchNumber": {
+            "title": "Batchnumber",
+            "type": "integer"
+          },
+          "commitment": {
+            "title": "Commitment",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/AuditBatchFindingResponse"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "firstOccurredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firstoccurredat"
+          },
+          "hashVersion": {
+            "title": "Hashversion",
+            "type": "integer"
+          },
+          "isValid": {
+            "title": "Isvalid",
+            "type": "boolean"
+          },
+          "lastOccurredAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastoccurredat"
+          },
+          "leafCount": {
+            "title": "Leafcount",
+            "type": "integer"
+          },
+          "protocolVersion": {
+            "title": "Protocolversion",
+            "type": "integer"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batchNumber",
+          "batchId",
+          "protocolVersion",
+          "hashVersion",
+          "leafCount",
+          "root",
+          "commitment",
+          "firstOccurredAt",
+          "lastOccurredAt",
+          "isValid",
+          "status",
+          "findings"
+        ],
+        "title": "AuditBatchResponse",
+        "type": "object"
       },
       "AuditEventListResponse": {
         "properties": {
@@ -392,6 +520,98 @@
           "nextCursor"
         ],
         "title": "AuditEventListResponse",
+        "type": "object"
+      },
+      "AuditEventProofResponse": {
+        "properties": {
+          "auditLogId": {
+            "format": "uuid",
+            "title": "Auditlogid",
+            "type": "string"
+          },
+          "batchId": {
+            "format": "uuid",
+            "title": "Batchid",
+            "type": "string"
+          },
+          "batchNumber": {
+            "title": "Batchnumber",
+            "type": "integer"
+          },
+          "commitment": {
+            "title": "Commitment",
+            "type": "string"
+          },
+          "eventDigest": {
+            "title": "Eventdigest",
+            "type": "string"
+          },
+          "isEventValid": {
+            "title": "Iseventvalid",
+            "type": "boolean"
+          },
+          "isProofValid": {
+            "title": "Isproofvalid",
+            "type": "boolean"
+          },
+          "leafCount": {
+            "title": "Leafcount",
+            "type": "integer"
+          },
+          "leafIndex": {
+            "title": "Leafindex",
+            "type": "integer"
+          },
+          "proof": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MerkleProofResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proofStepsCount": {
+            "title": "Proofstepscount",
+            "type": "integer"
+          },
+          "recomputedDigest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recomputeddigest"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IntegrityStatus"
+          }
+        },
+        "required": [
+          "auditLogId",
+          "status",
+          "batchNumber",
+          "batchId",
+          "leafIndex",
+          "leafCount",
+          "root",
+          "commitment",
+          "eventDigest",
+          "recomputedDigest",
+          "isEventValid",
+          "isProofValid",
+          "proofStepsCount",
+          "proof"
+        ],
+        "title": "AuditEventProofResponse",
         "type": "object"
       },
       "AuditEventResponse": {
@@ -1483,6 +1703,32 @@
         "title": "MarkAllReadResponse",
         "type": "object"
       },
+      "MerkleProofResponse": {
+        "properties": {
+          "leafCount": {
+            "title": "Leafcount",
+            "type": "integer"
+          },
+          "leafIndex": {
+            "title": "Leafindex",
+            "type": "integer"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ProofStepResponse"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "leafIndex",
+          "leafCount",
+          "steps"
+        ],
+        "title": "MerkleProofResponse",
+        "type": "object"
+      },
       "NotificationEventType": {
         "description": "Consent lifecycle events that trigger an in-app notification (ADR-031).",
         "enum": [
@@ -1756,6 +2002,24 @@
           "fullName"
         ],
         "title": "PatientRegistrationRequest",
+        "type": "object"
+      },
+      "ProofStepResponse": {
+        "properties": {
+          "sibling": {
+            "title": "Sibling",
+            "type": "string"
+          },
+          "siblingOnLeft": {
+            "title": "Siblingonleft",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sibling",
+          "siblingOnLeft"
+        ],
+        "title": "ProofStepResponse",
         "type": "object"
       },
       "RecordCategoryListResponse": {
@@ -2723,6 +2987,63 @@
         ]
       }
     },
+    "/api/v1/audit-batches/{batch_number}": {
+      "get": {
+        "description": "Independently verify a sealed Merkle batch against the database (ADR-027).\n\nRecomputes the domain-separated Merkle root and Keccak commitment from the batch's\nmembers and compares them with persisted values. Reports any tampering or inconsistencies.\nContains zero PHI and zero patient identifiers.\n\nRoles: Any authenticated user (PATIENT, DOCTOR, HOSPITAL_ADMIN, SYSTEM_ADMIN) \u2014 batch\nroots and commitments are public-by-design attestation material. Rate limited\n(``audit_batch_verify``, ADR-024) because each call recomputes the whole batch.\nFindings may name an ``audit_log_id`` (an opaque UUID, never content or a patient id).\nFailure modes: 401, 404 (no such batch), 422 (batch_number < 1), 429.",
+        "operationId": "verify_audit_batch_api_v1_audit_batches__batch_number__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_number",
+            "required": true,
+            "schema": {
+              "title": "Batch Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Audit batch not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Rate limit exceeded"
+          }
+        },
+        "summary": "Verify Audit Batch",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/v1/audit-logs": {
       "get": {
         "description": "The patient's own audit trail, most recent event first.\n\nEvery consent decision, revocation and record access concerning this patient, refusals\nincluded \u2014 the append-only log is what makes the platform's promise checkable by the\nperson it is about. Ordered and paginated on the application-assigned event time, which\nis also the value the tamper-evidence hash covers.\n\nRoles: PATIENT (own trail only \u2014 the scope comes from the token, never a parameter; no\nclinician or administrator reads a patient's log through this API). Consent requirement:\nnone, an audit entry is not record content, and it names no file, date or description.\nReading the trail is not itself an audited event.\nFailure modes: 401, 403, 404 (no patient profile), 422 (bad cursor or limit).",
@@ -2794,6 +3115,68 @@
           }
         },
         "summary": "List Audit Events",
+        "tags": [
+          "consent"
+        ]
+      }
+    },
+    "/api/v1/audit-logs/{audit_log_id}/proof": {
+      "get": {
+        "description": "Get the cryptographic Merkle membership proof for an entry of the caller's trail (ADR-027).\n\nProves that this audit record is a committed leaf in an immutable Merkle batch.\nRe-verifies the proof against the batch's root and recomputes the event digest.\nContains zero PHI.\n\nRoles: PATIENT (own trail only). Enforces patient isolation: another patient's\nevent answers 404.\nFailure modes: 401, 403, 404 (no such event for this caller, or unbatched event),\n422 (malformed id).",
+        "operationId": "get_audit_event_proof_api_v1_audit_logs__audit_log_id__proof_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "audit_log_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Audit Log Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventProofResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Role not permitted"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "No such audit event or proof for this patient"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Audit Event Proof",
         "tags": [
           "consent"
         ]
@@ -4145,6 +4528,56 @@
           }
         },
         "summary": "List Record Existence",
+        "tags": [
+          "records"
+        ]
+      }
+    },
+    "/api/v1/records/export/fhir": {
+      "get": {
+        "description": "Export consented clinical records as a canonical FHIR R4 Bundle.\n\nRoles:\n- PATIENT: Exports their own clinical records across all categories. `patientHealthId`\n  must be absent (identity derived strictly from token).\n- DOCTOR: Exports records within active consent scope for the patient specified by\n  `patientHealthId`. If no active grant exists (or consent is expired/revoked), access\n  is denied and audited as ACCESS_DENIED.\nHospital admins and platform admins are rejected with 403.\n\nReturns:\nDirect FHIR R4 Bundle (type: collection) with Content-Type: application/fhir+json.",
+        "operationId": "export_patient_fhir_api_v1_records_export_fhir_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "patientHealthId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Patienthealthid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/fhir+json": {}
+            },
+            "description": "FHIR R4 collection Bundle of the patient's clinical records."
+          },
+          "401": {
+            "description": "Unauthenticated or revoked token."
+          },
+          "403": {
+            "description": "Forbidden (unauthorized role or missing/expired/revoked consent)."
+          },
+          "404": {
+            "description": "Patient or doctor profile not found."
+          },
+          "422": {
+            "description": "Validation error (invalid parameters or patientHealthId mismatch)."
+          }
+        },
+        "summary": "Export Patient Fhir",
         "tags": [
           "records"
         ]

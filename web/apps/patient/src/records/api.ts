@@ -193,3 +193,54 @@ export async function uploadRecord(
     return { status: "ready", data: result.data };
   });
 }
+
+/** Per-status wording for the FHIR export, used only when the API sends no problem detail. */
+const EXPORT_FAILURES: Readonly<Record<number, string>> = {
+  401: "Your session has expired. Sign in again to export your records.",
+  403: "Your account is not allowed to export records.",
+  404: "Your patient profile is not set up yet.",
+  503: "Storage is unavailable right now — nothing was exported. Try again shortly.",
+};
+
+/** The FHIR media type the export answers with; kept on the saved file. */
+export const FHIR_JSON_TYPE = "application/fhir+json";
+
+/** One finished export, ready to be saved. The payload is passed through untouched. */
+export interface FhirExport {
+  blob: Blob;
+  filename: string;
+}
+
+/** `pulseos-fhir-export-2026-10-25.json` — dated by the caller's clock, never by content. */
+export function fhirExportFilename(now: Date): string {
+  return `pulseos-fhir-export-${now.toISOString().slice(0, 10)}.json`;
+}
+
+/**
+ * The caller's own records as a FHIR R4 `collection` Bundle (`GET /records/export/fhir`).
+ *
+ * No patient identifier is sent, and none may be: the API takes the patient from the token
+ * and rejects `patientHealthId` from a patient. The body is read as a Blob and never parsed
+ * or summarised here, so what is saved is byte-for-byte what the API produced.
+ */
+export async function exportFhirBundle(
+  client: PulseOSClient,
+  now: Date = new Date(),
+): Promise<ApiResult<FhirExport>> {
+  return attempt(async () => {
+    const result = await client.GET("/api/v1/records/export/fhir", { parseAs: "blob" });
+    if (result.data === undefined) {
+      return statusFailure(
+        result.error,
+        result.response.status,
+        EXPORT_FAILURES,
+        "Could not export your records.",
+      );
+    }
+    const blob =
+      result.data.type === FHIR_JSON_TYPE
+        ? result.data
+        : new Blob([result.data], { type: FHIR_JSON_TYPE });
+    return { status: "ready", data: { blob, filename: fhirExportFilename(now) } };
+  });
+}

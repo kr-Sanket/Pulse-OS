@@ -27,6 +27,7 @@ import { RecordFilters } from "@/components/records/RecordFilters";
 import { RecordListSkeleton } from "@/components/records/RecordListSkeleton";
 import { ErrorState } from "@/components/common/ErrorState";
 import { HealthCopilotPanel } from "@/components/copilot/HealthCopilotPanel";
+import { FhirExportButton } from "@/components/records/FhirExportButton";
 import { UploadRecordDialog } from "@/components/records/UploadRecordDialog";
 import {
   createDownloadUrl,
@@ -232,10 +233,13 @@ export function RecordsPage() {
             View and manage all of your health records from connected healthcare providers.
           </p>
         </div>
-        <Button className="gap-2" onClick={() => setUploadOpen(true)}>
-          <Upload className="size-4" aria-hidden />
-          Upload Record
-        </Button>
+        <div className="flex flex-wrap items-start gap-3">
+          <FhirExportButton />
+          <Button className="gap-2" onClick={() => setUploadOpen(true)}>
+            <Upload className="size-4" aria-hidden />
+            Upload Record
+          </Button>
+        </div>
       </div>
 
       <RecordFilters
