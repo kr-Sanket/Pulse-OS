@@ -120,3 +120,13 @@ jobs:
 
       - name: Tests
         run: pnpm test
+
+      - name: Generated api-client is current
+        # Regenerates schema.ts from the committed spec; a diff means it was hand-edited or
+        # not regenerated alongside openapi.json.
+        run: |
+          pnpm --filter @pulseos/api-client generate
+          git diff --exit-code -- packages/api-client/src/generated
+
+      - name: Production build
+        run: pnpm build
