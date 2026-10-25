@@ -230,64 +230,42 @@ class AIQueryService:
     ) -> GeneratedAnswer:
         now = datetime.now(UTC)
 
-        # Empty-context check: do NOT call generator, do NOT write audit
+        # Empty-context check: do NOT call generator, do NOT write audit. A granted scope
+        # that simply matched nothing is not an access to anything.
         if not context.items:
-            provider = getattr(
-                generator,
-                "provider",
-                "fake" if "Fake" in type(generator).__name__ else "ollama",
-            )
-            model = getattr(
-                generator,
-                "model",
-                "fake-v1" if "Fake" in type(generator).__name__ else "qwen3:8b",
-            )
-            return GeneratedAnswer(
-                answer=DEFAULT_EMPTY_EVIDENCE_ANSWER,
-                citations=(),
-                provider=str(provider),
-                model=str(model),
-                generated_at=now,
-            )
+            return _empty_answer(generator, now)
 
         # Context has evidence: invoke generator
         generated = await generator.generate_answer(context)
 
         # For doctor answer generation, perform authoritative post-synthesis verification:
         # if any category of evidence used to construct the answer was revoked or expired
-        # while the generator was running, discard the answer, citations, and audit.
+        # while the generator was running, discard the answer and citations, and record the
+        # refusal (ACCESS_DENIED) rather than a summary the clinician never received.
+        # Fails closed: evidence whose category cannot be mapped back to an id counts as
+        # no longer authorized, so a missing vocabulary can never skip the check.
         if requester.role is Role.DOCTOR and self._consent is not None:
             code_to_id = (
                 {code: uid for uid, code in category_codes.items()} if category_codes else {}
             )
             used_categories: set[UUID] = set()
+            unmapped = False
             for item in context.items:
                 cat_id = code_to_id.get(item.category_code)
-                if cat_id is not None:
+                if cat_id is None:
+                    unmapped = True
+                else:
                     used_categories.add(cat_id)
 
-            if used_categories:
-                final_granted = await self._consent.granted_category_ids(
-                    requester, patient_id=patient_id, at=datetime.now(UTC)
+            final_at = datetime.now(UTC)
+            final_granted = await self._consent.granted_category_ids(
+                requester, patient_id=patient_id, at=final_at
+            )
+            if unmapped or not used_categories.issubset(final_granted):
+                await self._record_denial(
+                    requester, patient_id=patient_id, at=final_at, request_context=request_context
                 )
-                if not used_categories.issubset(final_granted):
-                    provider = getattr(
-                        generator,
-                        "provider",
-                        "fake" if "Fake" in type(generator).__name__ else "ollama",
-                    )
-                    model = getattr(
-                        generator,
-                        "model",
-                        "fake-v1" if "Fake" in type(generator).__name__ else "qwen3:8b",
-                    )
-                    return GeneratedAnswer(
-                        answer=DEFAULT_EMPTY_EVIDENCE_ANSWER,
-                        citations=(),
-                        provider=str(provider),
-                        model=str(model),
-                        generated_at=datetime.now(UTC),
-                    )
+                return _empty_answer(generator, final_at)
 
         # Audit recording: only after successful generation
         if self._auditor is not None:
@@ -299,6 +277,31 @@ class AIQueryService:
             )
 
         return generated
+
+    async def _record_denial(
+        self,
+        requester: AuthenticatedUser,
+        *,
+        patient_id: UUID,
+        at: datetime,
+        request_context: str | None,
+    ) -> None:
+        """ACCESS_DENIED for a refused or discarded clinician answer, when attributable.
+
+        Reuses the scope-event writer search uses: an empty scope is written as
+        ``ACCESS_DENIED`` with no target and no query text. An id that names no patient
+        has no trail to join, exactly as for search.
+        """
+        if self._search_auditor is None or self._patients is None:
+            return
+        if patient_id in await self._patients.health_ids_by_id([patient_id]):
+            await self._search_auditor.record_search(
+                requester,
+                patient_id=patient_id,
+                granted_category_ids=frozenset(),
+                at=at,
+                request_context=request_context,
+            )
 
     async def generate_answer(
         self,
@@ -314,7 +317,8 @@ class AIQueryService:
     ) -> GeneratedAnswer:
         """Coordinate retrieval, context assembly, and answer synthesis with audit recording.
 
-        1. Resolves consent-authorized categories and retrieves matching chunks.
+        1. Resolves consent-authorized categories and retrieves matching chunks. An empty
+           scope writes ACCESS_DENIED and returns the empty-evidence answer.
         2. Deterministically assembles context adhering to token budget.
         3. If context contains no evidence:
            - Bypasses AnswerGenerator (neither Ollama nor Fake is called).
@@ -322,15 +326,36 @@ class AIQueryService:
            - Returns deterministic empty-evidence GeneratedAnswer immediately.
         4. If context contains evidence:
            - Invokes the injected AnswerGenerator.
-           - Only AFTER successful generation, records SUMMARY_GENERATED audit event.
+           - Re-checks consent; if any evidence category was revoked meanwhile, discards
+             the answer and citations and records ACCESS_DENIED instead.
+           - Otherwise, only AFTER successful generation, records SUMMARY_GENERATED.
            - Returns the GeneratedAnswer.
         """
-        context = await self.assemble_context(
-            requester,
+        at = datetime.now(UTC)
+        category_ids = await self._consent.granted_category_ids(
+            requester, patient_id=patient_id, at=at
+        )
+        if not category_ids:
+            # No live grant (or an inactive clinician): nothing is retrieved, the generator
+            # is not called, and the attempt is on the patient's trail as ACCESS_DENIED —
+            # the same verdict search and export record for a refused clinician.
+            await self._record_denial(
+                requester, patient_id=patient_id, at=at, request_context=request_context
+            )
+            return _empty_answer(generator, at)
+
+        chunks = await self._retrieval.search(
             patient_id=patient_id,
+            category_ids=category_ids,
             query=query,
-            category_codes=category_codes,
+            visibility=RetrievalVisibility.GRANTEE,
             limit=limit,
+        )
+        context = assemble_context(
+            query=query,
+            patient_id=patient_id,
+            chunks=chunks,
+            category_codes=category_codes,
             max_tokens=max_tokens,
         )
 
@@ -385,3 +410,17 @@ class AIQueryService:
             generator,
             request_context=request_context,
         )
+
+
+def _empty_answer(generator: AnswerGenerator, at: datetime) -> GeneratedAnswer:
+    """The deterministic no-evidence answer, labelled with the generator it bypassed."""
+    fake = "Fake" in type(generator).__name__
+    provider = getattr(generator, "provider", "fake" if fake else "ollama")
+    model = getattr(generator, "model", "fake-v1" if fake else "qwen3:8b")
+    return GeneratedAnswer(
+        answer=DEFAULT_EMPTY_EVIDENCE_ANSWER,
+        citations=(),
+        provider=str(provider),
+        model=str(model),
+        generated_at=at,
+    )

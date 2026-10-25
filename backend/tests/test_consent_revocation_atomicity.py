@@ -642,6 +642,63 @@ def test_ai_generate_answer_concurrent_revocation_discards_derived_summary() -> 
             summaries = list((await session.execute(stmt)).scalars())
             assert len(summaries) == 0
 
+            # The discarded answer is on the patient's trail as a refusal, exactly once.
+            denials = list(
+                (
+                    await session.execute(
+                        select(AuditLog).where(
+                            AuditLog.patient_id == w.patient.id,
+                            AuditLog.action == AuditAction.ACCESS_DENIED,
+                            AuditLog.actor_user_id == w.doctor_auth.user_id,
+                        )
+                    )
+                ).scalars()
+            )
+            assert len(denials) == 1
+            assert denials[0].target_record_id is None
+            assert denials[0].target_category_id is None
+
+    asyncio.run(scenario())
+
+
+def test_ai_generate_answer_without_grant_audits_denial_and_skips_generator() -> None:
+    """A clinician with no live grant gets the empty-evidence answer, the generator is never
+    called, and the attempt is recorded as ACCESS_DENIED (never SUMMARY_GENERATED)."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            w = await _setup_world(session)
+            await w.consent_service.revoke_grant(w.patient_auth, w.grant_condition.id)
+            await w.consent_service.revoke_grant(w.patient_auth, w.grant_observation.id)
+
+            generator = DelayedAnswerGenerator()
+            started = asyncio.Event()
+            generator.generation_started = started
+            answer = await w.query_service.generate_answer(
+                w.doctor_auth,
+                patient_id=w.patient.id,
+                query="cardiovascular",
+                category_codes={w.cat_condition.id: "CONDITION"},
+                generator=generator,
+            )
+            assert answer.answer == DEFAULT_EMPTY_EVIDENCE_ANSWER
+            assert answer.citations == ()
+            assert not started.is_set()
+
+            actions = [
+                row.action
+                for row in (
+                    await session.execute(
+                        select(AuditLog).where(
+                            AuditLog.patient_id == w.patient.id,
+                            AuditLog.actor_user_id == w.doctor_auth.user_id,
+                        )
+                    )
+                ).scalars()
+            ]
+            assert actions.count(AuditAction.ACCESS_DENIED) == 1
+            assert AuditAction.SUMMARY_GENERATED not in actions
+
     asyncio.run(scenario())
 
 
