@@ -49,8 +49,11 @@ class RecordOrigin(StrEnum):
 
 
 class RecordProcessingStatus(StrEnum):
-    """ADR-008 pipeline states. M2 only ever writes UPLOADED — the OCR/embedding worker
-    that advances records to PROCESSING/INDEXED/FAILED is the M5 AI milestone."""
+    """ADR-008 pipeline states, written by the upload-indexing worker
+    (records/upload_indexing.py). INDEXED: a text-layer PDF whose text joined AI retrieval.
+    FAILED: a PDF with no readable text (scanned, encrypted, unparseable) or storage still
+    failing on the last attempt. Images stay UPLOADED — there is no OCR. PROCESSING is
+    reserved; the worker commits in one transaction, so it is never observable."""
 
     UPLOADED = "UPLOADED"
     PROCESSING = "PROCESSING"

@@ -2,19 +2,20 @@
 //
 // Self-contained: owns its in-flight flag and its last outcome, so it can sit in the Records
 // header and on the Settings page without either page holding export state. The bundle is
-// saved as-is — never parsed, logged or previewed here.
+// saved as-is; a copy of its text is read only to count the records for the success line —
+// it is never logged, previewed or altered.
 
 import { useRef, useState } from "react";
 
 import { FileJson } from "lucide-react";
 
 import { api } from "@/api";
-import { exportFhirBundle } from "@/records/api";
+import { exportFhirBundle, exportSavedMessage } from "@/records/api";
 import { saveBlob } from "@/records/saveFile";
 import { Button, cn } from "@pulseos/ui";
 
 type ExportOutcome =
-  { kind: "idle" } | { kind: "saved"; filename: string } | { kind: "error"; message: string };
+  { kind: "idle" } | { kind: "saved"; message: string } | { kind: "error"; message: string };
 
 interface FhirExportButtonProps {
   variant?: "default" | "outline";
@@ -45,7 +46,7 @@ export function FhirExportButton({
         return;
       }
       saveBlob(result.data.blob, result.data.filename);
-      setOutcome({ kind: "saved", filename: result.data.filename });
+      setOutcome({ kind: "saved", message: exportSavedMessage(result.data) });
     } finally {
       inFlight.current = false;
       setExporting(false);
@@ -71,7 +72,7 @@ export function FhirExportButton({
       ) : null}
       {outcome.kind === "saved" ? (
         <p role="status" className="text-muted-foreground max-w-xs text-xs leading-relaxed">
-          Saved {outcome.filename}
+          {outcome.message}
         </p>
       ) : null}
     </div>

@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.modules.auth.domain import AuthenticatedUser, Role
 
+from .citations import reconcile_citations
 from .context import AssembledContext, ContextAudience, assemble_context
 from .generation import AnswerGenerator, GeneratedAnswer
 from .retrieval import RetrievedChunk
@@ -235,8 +236,10 @@ class AIQueryService:
         if not context.items:
             return _empty_answer(generator, now)
 
-        # Context has evidence: invoke generator
-        generated = await generator.generate_answer(context)
+        # Context has evidence: invoke generator, then hold its provenance to the evidence
+        # actually supplied — markers naming nothing are removed, and only indices that appear
+        # as markers in the text are returned as citations (ai/citations.py).
+        generated = reconcile_citations(await generator.generate_answer(context), context)
 
         # For doctor answer generation, perform authoritative post-synthesis verification:
         # if any category of evidence used to construct the answer was revoked or expired

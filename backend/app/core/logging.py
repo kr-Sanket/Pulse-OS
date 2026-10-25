@@ -13,7 +13,7 @@ import logging
 import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
@@ -70,6 +70,16 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+#: Loggers that can emit SQL parameters or document bytes; never below WARNING.
+PHI_BEARING_LOGGERS: Final = (
+    "sqlalchemy.engine",
+    "sqlalchemy.pool",
+    "aiosqlite",
+    "asyncpg",
+    "pypdf",
+)
+
+
 def configure_logging(level: str) -> None:
     """Route all logging (including uvicorn's) through one JSON handler on stdout."""
     handler = logging.StreamHandler(sys.stdout)
@@ -85,3 +95,8 @@ def configure_logging(level: str) -> None:
         uvicorn_logger.propagate = True
     # RequestContextMiddleware emits the access log; uvicorn's would be a duplicate.
     logging.getLogger("uvicorn.access").disabled = True
+    # Database drivers log statements *with bound parameters* at INFO/DEBUG — patient names,
+    # extracted document text. They inherit the root level, so PULSEOS_LOG_LEVEL=DEBUG would
+    # otherwise write PHI to the log. Pinned to WARNING whatever the root level (SECURITY.md).
+    for name in PHI_BEARING_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)

@@ -3,8 +3,9 @@
 Reads already-stored sanitized FHIR JSON from object storage and feeds it through
 the same AI ingestion pipeline used by new Synthea imports.
 
-Non-FHIR records are intentionally skipped because OCR/document extraction is
-outside the A1 FHIR ingestion scope.
+Non-FHIR records are skipped by default. ``--uploads`` instead indexes uploaded PDFs that
+have a text layer (records/upload_indexing.py: the same code the worker runs); images and
+scanned PDFs are never indexed — there is no OCR.
 
 This script is non-destructive:
 - never modifies medical_records
@@ -43,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="read and validate objects without writing AI rows",
     )
     parser.add_argument(
+        "--uploads",
+        action="store_true",
+        help="index uploaded text-layer PDFs not yet indexed (instead of FHIR records)",
+    )
+    parser.add_argument(
         "--reindex",
         action="store_true",
         help="re-index records whose normalized content changed",
@@ -71,6 +77,21 @@ async def run(args: argparse.Namespace) -> int:
     engine = create_db_engine(settings)
     factory = create_session_factory(engine)
     storage = S3ObjectStorage(settings)
+
+    if args.uploads:
+        if args.dry_run or args.reindex:
+            print("--uploads does not support --dry-run or --reindex.", file=sys.stderr)
+            await engine.dispose()
+            return 2
+        from app.modules.records.upload_indexing import backfill_uploaded_records
+
+        try:
+            counts = await backfill_uploaded_records(factory, storage, limit=args.limit)
+        finally:
+            await engine.dispose()
+        for outcome, count in sorted(counts.items()):
+            print(f"{outcome.value:<18}: {count}")
+        return 0
 
     indexed = 0
     reindexed = 0

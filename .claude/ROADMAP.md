@@ -169,9 +169,9 @@ uploads and the worker pipeline, embeddings/pgvector, cached patient summary, ti
 explainer, redaction layer. Hidden-record fix (2026-10-11): clinician retrieval now excludes
 patient-hidden records in the query; the patient copilot keeps owner access (AI_ARCHITECTURE.md).
 It was validated locally on SQLite and a disposable PostgreSQL 16.15 and is now pushed. Still
-open: uploaded
-files are never indexed (the worker only logs); `[N]` citation markers in answer text are not
-validated. Retrieval is substring-based lexical matching (AI_ARCHITECTURE.md). No test exercises a
+open on `main`: uploaded files are never indexed (the worker only logs). On branch
+`feature/upload-ai-indexing` (unmerged): text-layer PDF indexing and `[N]` marker reconciliation;
+OCR remains out of scope. Retrieval is substring-based lexical matching (AI_ARCHITECTURE.md). No test exercises a
 real model. The gate as written (timeline, summary, redaction, uploaded reports) needs either
 the missing features or a PO-approved restatement; no evaluation results exist (RC-3).
 

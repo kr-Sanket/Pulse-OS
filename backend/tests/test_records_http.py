@@ -5,12 +5,14 @@ ID; the file lands in (fake) object storage; metadata is queryable; RBAC is enfo
 a patient cannot call hospital surfaces, a doctor/system-admin has no record access at all.
 """
 
+import asyncio
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from app.core.config import get_settings
+from app.core.db import create_session_factory
 from app.core.queue import InMemoryJobQueue, QueueUnavailableError
 from app.modules.auth.domain import Role
 from app.modules.auth.fake import FakeAuthProvider
@@ -23,10 +25,12 @@ from app.modules.records.models import Doctor, DoctorStatus, HospitalAdmin, Medi
 from app.modules.records.repository import HospitalRepository
 from app.modules.records.seed import seed_reference_data
 from app.modules.records.service import MAX_FILENAME_LENGTH
+from app.workers.tasks import record_uploaded
 from fastapi.testclient import TestClient
 from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from tests.pdf_fixtures import text_pdf
 from tests.support import run_with_session
 
 RECORDS = "/api/v1/records"
@@ -1114,3 +1118,36 @@ def test_hiding_does_not_disturb_search_filtering_sorting_or_paging(
         if cursor is None:
             break
     assert walked == [newest, middle, oldest]
+
+
+def test_uploaded_text_pdf_is_indexed_by_the_enqueued_job_and_status_is_visible(
+    client: TestClient,
+    actors: Actors,
+    db_engine: AsyncEngine,
+    fake_storage: FakeObjectStorage,
+    fake_queue: InMemoryJobQueue,
+) -> None:
+    """The real upload → the job it enqueues → the worker task: INDEXED, visible over the API.
+    A fake "PDF" (the fixture bytes above) is FAILED, never INDEXED."""
+    real = ("labs.pdf", text_pdf(["Ferritin 8 ng/mL low"]), "application/pdf")
+    uploaded = client.post(RECORDS, data=UPLOAD_FORM, files={"file": real}, headers=actors.patient)
+    fake = _upload(client, actors.patient, health_id=None)
+    assert uploaded.status_code == fake.status_code == 201
+
+    ctx = {
+        "session_factory": create_session_factory(db_engine),
+        "storage": fake_storage,
+        "job_try": 1,
+    }
+    outcomes = [asyncio.run(record_uploaded(ctx, **kwargs)) for _, kwargs in fake_queue.jobs]  # type: ignore[arg-type]
+    assert outcomes == ["INDEXED", "UNREADABLE"]
+
+    real_id, fake_id = uploaded.json()["id"], fake.json()["id"]
+    assert (
+        client.get(f"{RECORDS}/{real_id}", headers=actors.patient).json()["processingStatus"]
+        == "INDEXED"
+    )
+    assert (
+        client.get(f"{RECORDS}/{fake_id}", headers=actors.patient).json()["processingStatus"]
+        == "FAILED"
+    )

@@ -80,6 +80,11 @@ FHIR-export, consent-revalidation and audit-verification rows updated 2026-10-25
 - `X-Request-Id` is client-supplied; it is sanitized and length-capped before it is stored on
   audit events.
 - The audit log is a patient-visible product feature; debug logs are ephemeral.
+- Database-driver and PDF-parser loggers (`sqlalchemy.engine`, `sqlalchemy.pool`, `aiosqlite`,
+  `asyncpg`, `pypdf`) are pinned to WARNING by `configure_logging` whatever the root level:
+  they emit bound SQL parameters or raw document bytes, so `PULSEOS_LOG_LEVEL=DEBUG` must not
+  turn them on (branch `feature/upload-ai-indexing`). The indexing worker logs record ids and
+  outcome codes only.
 - **Error tracking (Sentry): Absent** — only a commented placeholder exists in `.env.example`.
 
 ## AI-specific rules

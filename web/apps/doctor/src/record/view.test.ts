@@ -107,14 +107,14 @@ test("the three accepted formats are named, and anything else is shown verbatim"
 
 test("every pipeline state has wording and a tone, and none implies an unbuilt capability", () => {
   expect(processingLabel("UPLOADED")).toBe("Stored");
-  expect(processingLabel("PROCESSING")).toBe("Being processed");
-  expect(processingLabel("INDEXED")).toBe("Indexed");
-  expect(processingLabel("FAILED")).toBe("Processing failed");
+  expect(processingLabel("PROCESSING")).toBe("Being indexed");
+  expect(processingLabel("INDEXED")).toBe("Indexed for AI search");
+  expect(processingLabel("FAILED")).toBe("Not indexed — no readable text");
 
   expect(processingTone("UPLOADED")).toBe("neutral");
   expect(processingTone("PROCESSING")).toBe("info");
   expect(processingTone("INDEXED")).toBe("success");
-  expect(processingTone("FAILED")).toBe("destructive");
+  expect(processingTone("FAILED")).toBe("warning");
 });
 
 test("the blocked-popup message does not claim nothing happened", () => {

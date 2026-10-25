@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.ai.models import AIChunk, AIDocument
@@ -124,6 +124,13 @@ class AIRepository:
     ) -> AIDocument | None:
         result = await self._session.execute(select(AIDocument).where(AIDocument.id == document_id))
         return result.scalar_one_or_none()
+
+    async def count_chunks_for_document(self, document_id: UUID) -> int:
+        """How many chunks a document has — reported by indexing, never their content."""
+        result = await self._session.execute(
+            select(func.count()).select_from(AIChunk).where(AIChunk.document_id == document_id)
+        )
+        return int(result.scalar_one())
 
     async def delete_chunks_by_document_id(
         self,

@@ -79,14 +79,14 @@ test("components are handed formatted values, never raw ones", () => {
 test("processing states are worded as where the document is, not what was done to it", () => {
   // UPLOADED is the only state the backend writes today; the M5 worker adds the rest.
   expect(processingLabel("UPLOADED")).toBe("Stored");
-  expect(processingLabel("PROCESSING")).toBe("Being processed");
-  expect(processingLabel("INDEXED")).toBe("Indexed");
-  expect(processingLabel("FAILED")).toBe("Processing failed");
+  expect(processingLabel("PROCESSING")).toBe("Being indexed");
+  expect(processingLabel("INDEXED")).toBe("Indexed for AI search");
+  expect(processingLabel("FAILED")).toBe("Not indexed — no readable text");
 });
 
 test("processing tones distinguish a failure from a resting state", () => {
   expect(processingTone("UPLOADED")).toBe("neutral");
-  expect(processingTone("FAILED")).toBe("destructive");
+  expect(processingTone("FAILED")).toBe("warning");
   expect(processingTone("INDEXED")).toBe("success");
 });
 

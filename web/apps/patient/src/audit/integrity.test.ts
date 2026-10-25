@@ -3,7 +3,13 @@ import { expect, test, vi } from "vitest";
 import type { PulseOSClient } from "@pulseos/api-client";
 
 import { getAuditProof, type AuditIntegrity, type AuditProof } from "./api";
-import { actionPresentation, integrityView, LOCAL_MERKLE_BATCH_NETWORK, proofRows } from "./view";
+import {
+  actionPresentation,
+  integrityView,
+  LOCAL_MERKLE_BATCH_NETWORK,
+  proofRows,
+  toEventView,
+} from "./view";
 
 const SIGNAL = new AbortController().signal;
 
@@ -110,4 +116,26 @@ test("an unsealed entry's 404 is explained, not shown as an error code", async (
     status: "error",
     message: "No integrity proof exists for this entry yet — it has not been sealed into a batch.",
   });
+});
+
+test("each row's proof button names the entry it opens", () => {
+  const base = {
+    id: "evt-9",
+    action: "RECORD_VIEWED" as const,
+    actorUserId: "u-1",
+    actorRole: "DOCTOR" as const,
+    actor: null,
+    actorHospital: null,
+    targetRecordId: null,
+    targetCategoryCode: null,
+    targetRequestId: null,
+    occurredAt: "2026-10-01T10:15:00Z",
+    eventHash: "a".repeat(64),
+    hashVersion: 3,
+    integrity: integrity("VERIFIED", LOCAL_MERKLE_BATCH_NETWORK),
+  };
+  const view = toEventView(base as unknown as Parameters<typeof toEventView>[0], new Map());
+  expect(view.proofButtonLabel).toMatch(/^View integrity proof: Viewed, /);
+  expect(view.proofButtonLabel).toContain(view.date);
+  expect(view.proofButtonLabel).toContain(view.time);
 });

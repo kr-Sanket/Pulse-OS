@@ -111,6 +111,9 @@ export interface AuditEventView {
   eventHash: string;
   /** The backend's verdict on this row, worded. Never inferred from the hash being present. */
   integrity: IntegrityView;
+  /** Accessible name for this row's "View proof" button — every row's visible text is the
+   * same, so the name carries which entry it opens. */
+  proofButtonLabel: string;
   /** The rail icon: a person for the patient's own actions, an organisation otherwise. */
   icon: LucideIcon;
 }
@@ -171,6 +174,9 @@ export function toEventView(
     hashPreview: previewHash(event.eventHash),
     eventHash: event.eventHash,
     integrity: integrityView(event.integrity),
+    proofButtonLabel: `View integrity proof: ${presentation.label}, ${formatInstantDate(
+      event.occurredAt,
+    )} at ${formatInstantTime(event.occurredAt)}`,
     icon: event.actorRole === "PATIENT" ? UserRound : Building2,
   };
 }

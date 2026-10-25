@@ -261,10 +261,14 @@ Each is a stated security or correctness gap. M3-D is closed by ADR-024.
       redaction requirement are not built (ROADMAP §M5); no RC-3 evaluation exists.
 - [ ] PO: Define and authorize M6.4 (or not) — receipts/submission, scheduler, CLI, contract and
       toolchain, Amoy access are all open (ROADMAP §M6, roadmap review proposals).
-- [ ] BE: Stale source docstrings (`app/workers/__init__.py`, `workers/tasks.py`,
-      `records/models.py` processing status) and the `scripts/anchor_audit_events.py` reference in
-      `consent/router.py` → regenerate the OpenAPI/client after fixing. Code + generated
-      artefacts; not done by the documentation task.
+- [-] BE: Stale source docstrings — `app/workers/__init__.py`, `workers/tasks.py` and the
+      `records/models.py` processing status fixed on `feature/upload-ai-indexing` (client
+      regenerated); the `scripts/anchor_audit_events.py` reference in `consent/router.py` remains.
+- [ ] PO: review `feature/upload-ai-indexing` — text-layer PDF indexing (proposed ADR-033, new
+      `pypdf` dependency), citation-marker reconciliation, FHIR export record count, audit
+      accessibility, download revoke delay, test-harness engine disposal.
+- [ ] BE: OCR for images and scanned PDFs — not built; needs its own ADR (local engine choice,
+      accuracy, CPU cost). Until then only text-layer PDFs join AI retrieval.
 - [x] ANY: Repo-wide ruff (39), ruff format (20 files) and mypy (158 lines) findings recorded
       2026-10-11 — fixed in `10bec8f`/`4d8e181`/`2cb0851`; mypy is clean at `72b55e2`. New ruff
       findings from `15b2d1b` are tracked in §0.

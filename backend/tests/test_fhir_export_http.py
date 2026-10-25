@@ -646,6 +646,63 @@ def test_empty_export_for_patient_with_no_records(test_env: dict[str, Any]) -> N
     assert bundle["entry"][0]["resource"]["resourceType"] == "Patient"
 
 
+def test_export_for_patient_with_only_binary_uploads_is_profile_only(
+    test_env: dict[str, Any],
+) -> None:
+    """A patient whose records are all uploaded PDFs/images: the export still succeeds as a
+    Patient-only Bundle — no binary content, no placeholder resources — and is audited."""
+    client: TestClient = test_env["client"]
+    storage: FakeObjectStorage = test_env["storage"]
+    other_user = test_env["data"]["other_patient_user"]
+    categories = test_env["data"]["categories"]
+
+    async def add_binaries(session: AsyncSession) -> UUID:
+        other = (
+            await session.execute(select(Patient).where(Patient.user_id == other_user.id))
+        ).scalar_one()
+        for name, content_type, body in (
+            ("scan.pdf", "application/pdf", b"%PDF-1.4 binary-payload-marker"),
+            ("xray.png", "image/png", b"\x89PNG binary-payload-marker"),
+        ):
+            record = MedicalRecord(
+                patient_id=other.id,
+                category_id=categories["LAB_REPORT"],
+                origin=RecordOrigin.PATIENT_LOCKER,
+                date_of_service=date(2026, 3, 1),
+                original_filename=name,
+                content_type=content_type,
+                size_bytes=len(body),
+                s3_key=f"records/{other.id}/{name}",
+            )
+            session.add(record)
+            await session.flush()
+            await storage.put_object(record.s3_key, body, content_type=content_type)
+        return other.id
+
+    other_patient_id = run_with_session(test_env["db_engine"], add_binaries)
+
+    response = client.get(EXPORT_URL, headers=test_env["headers"]["other_patient"])
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/fhir+json")
+    assert b"binary-payload-marker" not in response.content
+    bundle = response.json()
+    assert [entry["resource"]["resourceType"] for entry in bundle["entry"]] == ["Patient"]
+
+    async def exported_rows(session: AsyncSession) -> int:
+        rows = (
+            await session.execute(
+                select(AuditLog).where(
+                    AuditLog.action == AuditAction.RECORD_EXPORTED,
+                    AuditLog.patient_id == other_patient_id,
+                )
+            )
+        ).scalars()
+        return len(list(rows))
+
+    assert run_with_session(test_env["db_engine"], exported_rows) == 1
+
+
 def test_doctor_export_with_expired_consent_refused(test_env: dict[str, Any]) -> None:
     client: TestClient = test_env["client"]
     headers = test_env["headers"]["doctor"]
