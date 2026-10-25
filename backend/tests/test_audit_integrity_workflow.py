@@ -362,6 +362,7 @@ def test_merkle_proof_generation_and_independent_verification() -> None:
                 assert proof_res.leaf_count == 5
                 assert proof_res.is_event_valid is True
                 assert proof_res.is_proof_valid is True
+                assert proof_res.proof is not None
 
                 # Independent verification of the proof object
                 assert verify_proof(

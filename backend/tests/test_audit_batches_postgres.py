@@ -22,16 +22,23 @@ import pytest
 from app.core.db import Base
 from app.modules.auth.domain import Role
 from app.modules.auth.models import User
+from app.modules.consent.anchor_service import AuditAnchorService, IntegrityStatus
+from app.modules.consent.anchoring import LocalChainAuditAnchor
 from app.modules.consent.batch_service import AuditBatchService
 from app.modules.consent.errors import BatchSealConflictError, BatchSealIntegrityError
 from app.modules.consent.models import AuditAction, AuditBatch, AuditBatchMember, AuditLog
 from app.modules.consent.repository import (
+    AuditAnchorRepository,
     AuditBatchRepository,
+    AuditLogRepository,
     IntegrityViolation,
     classify_integrity_error,
 )
 from app.modules.consent.service import HASH_SCHEME_V3, recompute_event_hash
+from app.modules.patients.directory import PatientDirectoryService
 from app.modules.patients.models import Patient
+from app.modules.patients.repository import PatientRepository
+from sqlalchemy import event as sqla_event
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -447,3 +454,85 @@ def test_real_postgres_integrity_errors_are_classified(
 def test_classification_types_are_the_repository_s_own() -> None:
     """Guards the import above against drifting to a test double of the same name."""
     assert IntegrityViolation.__module__ == "app.modules.consent.repository"
+
+
+def test_page_verification_on_postgres_uses_whole_batches_and_detects_tampering() -> None:
+    """``members_sharing_batch_with`` (an ``IN (subquery)`` on the same table) and the
+    once-per-batch inclusion check, executed on real PostgreSQL rather than only compiled:
+    a page spanning several batches gets every sibling row back, stays at three queries,
+    verifies intact batches and flags only the tampered one."""
+
+    async def scenario() -> None:
+        async with _scratch_schema() as engine:
+            ids = [uuid4() for _ in range(9)]
+            await _seed(engine, [BASE + dt.timedelta(seconds=i) for i in range(9)], ids)
+            assert await _seal_until_done(engine, 4) == 3  # batches of 4, 4, 1
+
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session:
+                batches = AuditBatchRepository(session)
+                # One event from batch 1 and one from batch 3: every member of both batches
+                # comes back, ordered by batch then position, and nothing from batch 2.
+                first, last = ids[0], ids[8]
+                rows = await batches.members_sharing_batch_with({first, last})
+                by_batch: dict[UUID, list[int]] = {}
+                for row in rows:
+                    by_batch.setdefault(row.batch_id, []).append(row.leaf_index)
+                assert sorted(len(v) for v in by_batch.values()) == [1, 4]
+                assert all(v == sorted(v) for v in by_batch.values())
+                assert await batches.members_sharing_batch_with(set()) == []
+
+            # Tamper one member of batch 2 (positions 4..7 of the canonical order).
+            async with factory() as session, session.begin():
+                member = (
+                    await session.execute(
+                        select(AuditBatchMember).where(AuditBatchMember.audit_log_id == ids[5])
+                    )
+                ).scalar_one()
+                member.digest = "cd" * 32
+
+            async with factory() as session:
+                service = AuditAnchorService(
+                    audit=AuditLogRepository(session),
+                    anchors=AuditAnchorRepository(session),
+                    anchor_provider=LocalChainAuditAnchor(),
+                    patients=PatientDirectoryService(PatientRepository(session)),
+                    batches=AuditBatchRepository(session),
+                )
+                events = list(
+                    (await session.execute(select(AuditLog).where(AuditLog.id.in_(ids)))).scalars()
+                )
+                selects: list[str] = []
+
+                def track(*args: object) -> None:
+                    statement = str(args[2])
+                    if statement.lstrip().upper().startswith("SELECT"):
+                        selects.append(statement)
+
+                sqla_event.listen(engine.sync_engine, "after_cursor_execute", track)
+                try:
+                    reports = await service.verify_many(events)
+                finally:
+                    sqla_event.remove(engine.sync_engine, "after_cursor_execute", track)
+                assert len(selects) <= 3
+
+                order = {e.id: (e.occurred_at, e.id) for e in events}
+                ranked = sorted(ids, key=lambda i: order[i])
+                tampered_batch = set(ranked[4:8])
+                for event_id in ids:
+                    status = reports[event_id].status
+                    if event_id in tampered_batch:
+                        assert status is not IntegrityStatus.VERIFIED, event_id
+                    else:
+                        assert status is IntegrityStatus.VERIFIED, event_id
+
+                single = await service.verify(next(e for e in events if e.id == ranked[0]))
+                assert single.status is IntegrityStatus.VERIFIED
+                proof = await AuditBatchService(
+                    batches=AuditBatchRepository(session),
+                    max_size=4,
+                    backlog_threshold=dt.timedelta(seconds=900),
+                ).get_proof_for_event(ranked[5])
+                assert proof is not None and proof.is_proof_valid is False
+
+    asyncio.run(scenario())

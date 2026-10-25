@@ -74,6 +74,9 @@ DEFAULT_LIMITS: Final[dict[str, RateLimit]] = {
     # Returns record text without generation, so it is cheaper than ai_generate but is a
     # content read: bounded like the granted-records listing it mirrors.
     "ai_search": RateLimit(limit=30, window_seconds=60),
+    # Recomputes a whole sealed batch (up to 256 leaves) per call. No PHI, but it is the
+    # one audit read open to every role, so it is bounded like the other content reads.
+    "audit_batch_verify": RateLimit(limit=30, window_seconds=60),
 }
 
 

@@ -31,6 +31,7 @@ BUCKETS = (
     "access_request_create",
     "ai_generate",
     "ai_search",
+    "audit_batch_verify",
 )
 
 
@@ -44,6 +45,7 @@ def test_the_four_protected_buckets_carry_their_approved_limits() -> None:
     assert DEFAULT_LIMITS["access_request_create"] == RateLimit(limit=10, window_seconds=60)
     assert DEFAULT_LIMITS["ai_generate"] == RateLimit(limit=10, window_seconds=60)
     assert DEFAULT_LIMITS["ai_search"] == RateLimit(limit=30, window_seconds=60)
+    assert DEFAULT_LIMITS["audit_batch_verify"] == RateLimit(limit=30, window_seconds=60)
     assert set(DEFAULT_LIMITS) == set(BUCKETS)
 
 

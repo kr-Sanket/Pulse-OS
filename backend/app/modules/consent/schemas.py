@@ -405,7 +405,8 @@ class AuditEventProofResponse(ApiModel):
     is_event_valid: bool
     is_proof_valid: bool
     proof_steps_count: int
-    proof: MerkleProofResponse
+    #: Null when the stored batch members do not form a tree (tampering): no path exists.
+    proof: MerkleProofResponse | None
 
 
 class AuditBatchFindingResponse(ApiModel):

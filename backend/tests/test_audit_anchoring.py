@@ -664,9 +664,12 @@ def test_the_sweep_never_queues_v3_events() -> None:
     asyncio.run(scenario())
 
 
-def test_an_existing_per_event_v3_anchor_stays_readable() -> None:
+def test_an_existing_per_event_v3_anchor_stays_readable_but_never_verifies() -> None:
     """A per-event anchor written for a v3 event before batching (between M6.1 and M6.3) is
-    historical evidence: it is never deleted or rewritten and still verifies as before."""
+    kept: it is never deleted or rewritten. But it is no longer *sufficient* evidence
+    (amended 2026-10-25): the local anchor's reference is forgeable and the application
+    never writes one for v3, so an injected matching row must not yield VERIFIED. The event
+    reads NOT_ANCHORED until it is sealed into a batch, where inclusion decides."""
 
     async def scenario() -> None:
         async with sqlite_session() as session:
@@ -686,8 +689,45 @@ def test_an_existing_per_event_v3_anchor_stays_readable() -> None:
             )
 
             report = await fixture.service.verify(fixture.event)
+            page = await fixture.service.verify_many([fixture.event])
 
-            assert report.status is IntegrityStatus.VERIFIED
+            assert report.status is IntegrityStatus.NOT_ANCHORED
+            assert page[fixture.event.id].status is IntegrityStatus.NOT_ANCHORED
+            # Kept, unchanged: historical rows are never deleted or rewritten.
+            kept = await fixture.anchors.get_by_audit_log_id(fixture.event.id)
+            assert kept is not None and kept.digest == fixture.event.event_hash
+
+    asyncio.run(scenario())
+
+
+def test_a_per_event_v3_anchor_that_contradicts_the_row_is_still_reported() -> None:
+    """The anchor can only count against a v3 event: an edited row that no longer matches
+    its historical anchor is EVENT_ALTERED, never quietly NOT_ANCHORED."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            fixture = await _fixture(session, HASH_SCHEME_V3)
+            receipt = await LocalChainAuditAnchor(clock=FixedClock(NOW)).submit(
+                fixture.event.event_hash
+            )
+            await fixture.anchors.add(
+                AuditAnchorEntry(
+                    audit_log_id=fixture.event.id,
+                    digest=fixture.event.event_hash,
+                    hash_version=HASH_SCHEME_V3,
+                    network=receipt.network,
+                    reference=receipt.reference,
+                    anchored_at=receipt.anchored_at,
+                )
+            )
+            fixture.event.action = AuditAction.RECORD_DOWNLOADED
+            await session.flush()
+
+            report = await fixture.service.verify(fixture.event)
+            page = await fixture.service.verify_many([fixture.event])
+
+            assert report.status is IntegrityStatus.EVENT_ALTERED
+            assert page[fixture.event.id].status is IntegrityStatus.EVENT_ALTERED
 
     asyncio.run(scenario())
 

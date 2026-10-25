@@ -23,7 +23,6 @@ from fastapi.responses import JSONResponse
 
 from app.core.errors import problem_response
 from app.modules.auth.dependencies import (
-    CurrentUser,
     RequireDoctor,
     RequireHospitalAdmin,
     RequirePatient,
@@ -742,9 +741,11 @@ async def get_audit_event_proof(
     #
     # Incorporate both event digest validity and cryptographic Merkle proof validity:
     # never return status=VERIFIED if is_proof_valid or is_event_valid is false.
-    if not proof_res.is_event_valid:
+    # VERIFIED only when the proof path and the event's own verdict both say so; otherwise
+    # the worse of the two, so this surface can never disagree with the list or detail one.
+    if not proof_res.is_event_valid or report.status is IntegrityStatus.EVENT_ALTERED:
         final_status = IntegrityStatus.EVENT_ALTERED
-    elif not proof_res.is_proof_valid or report.status is IntegrityStatus.ANCHOR_ALTERED:
+    elif not proof_res.is_proof_valid or report.status is not IntegrityStatus.VERIFIED:
         final_status = IntegrityStatus.ANCHOR_ALTERED
     else:
         final_status = IntegrityStatus.VERIFIED
@@ -763,16 +764,20 @@ async def get_audit_event_proof(
         is_event_valid=proof_res.is_event_valid,
         is_proof_valid=proof_res.is_proof_valid,
         proof_steps_count=proof_res.proof_steps_count,
-        proof=MerkleProofResponse(
-            leaf_index=proof_res.proof.leaf_index,
-            leaf_count=proof_res.proof.leaf_count,
-            steps=[
-                ProofStepResponse(
-                    sibling=s.sibling,
-                    sibling_on_left=s.sibling_on_left,
-                )
-                for s in proof_res.proof.steps
-            ],
+        proof=(
+            MerkleProofResponse(
+                leaf_index=proof_res.proof.leaf_index,
+                leaf_count=proof_res.proof.leaf_count,
+                steps=[
+                    ProofStepResponse(
+                        sibling=s.sibling,
+                        sibling_on_left=s.sibling_on_left,
+                    )
+                    for s in proof_res.proof.steps
+                ],
+            )
+            if proof_res.proof is not None
+            else None
         ),
     )
 
@@ -824,11 +829,12 @@ async def list_hospital_audit_events(
         **_UNAUTHENTICATED,
         404: {"description": "Audit batch not found", "content": PROBLEM},
         **_INVALID,
+        **_RATE_LIMITED,
     },
 )
 async def verify_audit_batch(
     batch_number: int,
-    user: CurrentUser,
+    user: Annotated[AuthenticatedUser, Depends(rate_limited("audit_batch_verify"))],
     batches: AuditBatchServiceDep,
 ) -> AuditBatchResponse:
     """Independently verify a sealed Merkle batch against the database (ADR-027).
@@ -837,10 +843,13 @@ async def verify_audit_batch(
     members and compares them with persisted values. Reports any tampering or inconsistencies.
     Contains zero PHI and zero patient identifiers.
 
-    Roles: Any authenticated user (PATIENT, DOCTOR, HOSPITAL_ADMIN, SYSTEM_ADMIN).
-    Failure modes: 401, 404 (no such batch), 422 (batch_number < 1).
+    Roles: Any authenticated user (PATIENT, DOCTOR, HOSPITAL_ADMIN, SYSTEM_ADMIN) — batch
+    roots and commitments are public-by-design attestation material. Rate limited
+    (``audit_batch_verify``, ADR-024) because each call recomputes the whole batch.
+    Findings may name an ``audit_log_id`` (an opaque UUID, never content or a patient id).
+    Failure modes: 401, 404 (no such batch), 422 (batch_number < 1), 429.
     """
-    del user  # auth gate guarantees authenticated caller
+    del user  # auth + rate-limit gate guarantees an authenticated, unthrottled caller
     if batch_number < 1:
         raise HTTPException(status_code=422, detail="batch_number must be at least 1")
     res = await batches.verify_batch(batch_number)

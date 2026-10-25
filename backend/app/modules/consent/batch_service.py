@@ -31,7 +31,7 @@ from app.modules.consent.merkle import (
     MerkleTree,
     V3Batch,
     batch_commitment,
-    verify_proof,
+    verify_stored_inclusion,
 )
 from app.modules.consent.models import AuditBatch, AuditBatchMember, AuditLog
 from app.modules.consent.repository import AuditBatchRepository
@@ -143,7 +143,8 @@ class EventProofResult:
     recomputed_digest: str | None
     is_event_valid: bool
     is_proof_valid: bool
-    proof: MerkleProof
+    #: ``None`` when the stored members do not form a tree, so no path exists.
+    proof: MerkleProof | None
     proof_steps_count: int
 
 
@@ -324,17 +325,17 @@ class AuditBatchService:
         event = await self._batches.get_event_by_id(audit_log_id)
         all_members = await self._batches.list_members_for_batch(batch.id)
 
-        digests = [m.digest for m in all_members]
-        tree = MerkleTree(digests)
-        proof = tree.proof(member.leaf_index)
-
-        is_proof_valid = verify_proof(
-            member.digest,
-            proof,
-            batch.root,
-            trusted_leaf_index=member.leaf_index,
-            trusted_leaf_count=batch.leaf_count,
+        # Tampered membership rows (duplicates, malformed digests, gaps, a wrong count) are a
+        # finding, not a crash: they come back as an invalid proof with no path.
+        inclusion = verify_stored_inclusion(
+            [(m.leaf_index, m.digest) for m in all_members],
+            leaf_index=member.leaf_index,
+            digest=member.digest,
+            root=batch.root,
+            leaf_count=batch.leaf_count,
         )
+        proof = inclusion.proof
+        is_proof_valid = inclusion.is_valid
 
         recomputed: str | None = None
         is_event_valid = False
@@ -362,7 +363,7 @@ class AuditBatchService:
             is_event_valid=is_event_valid,
             is_proof_valid=is_proof_valid,
             proof=proof,
-            proof_steps_count=len(proof.steps),
+            proof_steps_count=len(proof.steps) if proof is not None else 0,
         )
 
     def _backlog(self, unbatched: Sequence[AuditLog]) -> list[Finding]:

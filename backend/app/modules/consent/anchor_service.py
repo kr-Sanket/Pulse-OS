@@ -49,7 +49,9 @@ from app.modules.consent.errors import (
 from app.modules.consent.merkle import (
     MERKLE_PROTOCOL_VERSION,
     InvalidCommitmentInputError,
+    StoredBatch,
     batch_commitment,
+    rebuild_stored_batch,
 )
 from app.modules.consent.models import AuditAnchorEntry, AuditBatch, AuditBatchMember, AuditLog
 from app.modules.consent.repository import (
@@ -261,72 +263,110 @@ class AuditAnchorService:
         return await self.verify(entry)
 
     async def verify(self, entry: AuditLog) -> IntegrityReport:
-        """The integrity verdict for one audit event."""
-        anchor = await self._anchors.get_by_audit_log_id(entry.id)
-        if anchor is not None:
-            return await self._assess(entry, anchor)
+        """The integrity verdict for one audit event.
+
+        **Batch evidence takes precedence, and a per-event anchor can never make a v3 event
+        VERIFIED.** An event with a membership row is judged only by its batch (whatever its
+        ``hash_version`` now says — that label is outside the hashed payload, so a batched
+        event relabelled v2 must not escape to the weaker per-event check). Without
+        membership, a per-event anchor is still assessed (``_assess_unbatched``) so that a
+        contradiction is reported — but for a v3 event agreement proves nothing: the
+        application never writes such a row (``BatchAnchoredEventError``) and the local
+        anchor's reference is forgeable, so the best a v3 event can get from it is
+        ``NOT_ANCHORED`` until it is sealed. v1/v2 events keep per-event verification.
+        """
         if self._batches is not None:
             member = await self._batches.get_member_by_audit_log_id(entry.id)
             if member is not None:
                 batch = await self._batches.get_batch_by_id(member.batch_id)
-                if batch is not None:
-                    return self._assess_batched(entry, member, batch)
-        return IntegrityReport(
-            audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
-        )
+                if batch is None:
+                    return _orphaned_member(entry)
+                siblings = await self._batches.list_members_for_batch(batch.id)
+                return self._assess_batched(entry, member, batch, _rebuild(batch, siblings))
+        anchor = await self._anchors.get_by_audit_log_id(entry.id)
+        return await self._assess_unbatched(entry, anchor)
 
     async def verify_many(self, entries: Sequence[AuditLog]) -> Mapping[UUID, IntegrityReport]:
-        """Verdicts for a page of events, in a fixed number of *queries*.
+        """Verdicts for a page of events, in a fixed number of *queries*, under exactly the
+        precedence ``verify`` applies (batch evidence first; a per-event anchor never makes
+        a v3 event VERIFIED).
 
-        One anchor lookup for the whole page, then a batch lookup for unanchored rows,
-        and finally in-memory comparison per row. Fixed query count ensures no N+1.
+        Three queries for the whole page: anchors, the full membership of every batch the
+        page's events sit in, and those batches. **Each distinct batch is rebuilt once per
+        page** (``rebuild_stored_batch``) and every entry of it is then checked against that
+        rebuild, so CPU cost is one tree per batch rather than one per event. Nothing is
+        cached across requests.
         """
-        anchors = await self._anchors.by_audit_log_ids([entry.id for entry in entries])
-        reports: dict[UUID, IntegrityReport] = {}
-        unanchored_entries: list[AuditLog] = []
+        page_ids = {entry.id for entry in entries}
+        anchors = await self._anchors.by_audit_log_ids(list(page_ids))
 
-        for entry in entries:
-            anchor = anchors.get(entry.id)
-            if anchor is not None:
-                reports[entry.id] = await self._assess(entry, anchor)
-            else:
-                unanchored_entries.append(entry)
-
-        if not unanchored_entries:
-            return reports
-
+        members: dict[UUID, AuditBatchMember] = {}
+        siblings_by_batch: dict[UUID, list[AuditBatchMember]] = {}
+        batches: Mapping[UUID, AuditBatch] = {}
         if self._batches is not None:
-            members = await self._batches.by_audit_log_ids([e.id for e in unanchored_entries])
-            batch_ids = {m.batch_id for m in members.values()}
-            batches = await self._batches.get_batches_by_ids(batch_ids)
+            for row in await self._batches.members_sharing_batch_with(page_ids):
+                siblings_by_batch.setdefault(row.batch_id, []).append(row)
+                if row.audit_log_id in page_ids:
+                    members[row.audit_log_id] = row
+            if siblings_by_batch:
+                batches = await self._batches.get_batches_by_ids(siblings_by_batch.keys())
+        rebuilt = {
+            batch_id: _rebuild(batch, siblings_by_batch.get(batch_id, []))
+            for batch_id, batch in batches.items()
+        }
 
-            for entry in unanchored_entries:
-                member = members.get(entry.id)
-                if member is not None and member.batch_id in batches:
-                    batch = batches[member.batch_id]
-                    reports[entry.id] = self._assess_batched(entry, member, batch)
-                else:
-                    reports[entry.id] = IntegrityReport(
-                        audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
-                    )
-        else:
-            for entry in unanchored_entries:
-                reports[entry.id] = IntegrityReport(
-                    audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
+        reports: dict[UUID, IntegrityReport] = {}
+        for entry in entries:
+            member = members.get(entry.id)
+            anchor = anchors.get(entry.id)
+            if member is not None:
+                batch = batches.get(member.batch_id)
+                reports[entry.id] = (
+                    _orphaned_member(entry)
+                    if batch is None
+                    else self._assess_batched(entry, member, batch, rebuilt[batch.id])
                 )
-
+            else:
+                reports[entry.id] = await self._assess_unbatched(entry, anchor)
         return reports
 
+    async def _assess_unbatched(
+        self, entry: AuditLog, anchor: AuditAnchorEntry | None
+    ) -> IntegrityReport:
+        """The verdict for an event with no batch membership.
+
+        v1/v2: the per-event anchor decides, as it always has. v3: the anchor can only count
+        *against* the event — a contradiction (``EVENT_ALTERED``/``ANCHOR_ALTERED``) is
+        reported, because an anchor that disagrees with the row is evidence of a change —
+        but a matching anchor is not evidence for it, so the verdict is ``NOT_ANCHORED``.
+        """
+        if anchor is None:
+            return IntegrityReport(
+                audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
+            )
+        report = await self._assess(entry, anchor)
+        if entry.hash_version == HASH_SCHEME_V3 and report.status is IntegrityStatus.VERIFIED:
+            return IntegrityReport(
+                audit_log_id=entry.id, status=IntegrityStatus.NOT_ANCHORED, anchor=None
+            )
+        return report
+
     def _assess_batched(
-        self, entry: AuditLog, member: AuditBatchMember, batch: AuditBatch
+        self,
+        entry: AuditLog,
+        member: AuditBatchMember,
+        batch: AuditBatch,
+        stored: StoredBatch,
     ) -> IntegrityReport:
         """The comparisons for a v3 Merkle-batched audit event (ADR-027).
 
-        Ordinary event-list and single-event verification checks event digest
-        recomputation, member digest consistency, batch commitment consistency against
-        the sealed batch root, and leaf index bounds. Cryptographic Merkle inclusion
-        verification (path proof) is performed on demand by the proof endpoint
-        (GET /api/v1/audit-logs/{id}/proof).
+        VERIFIED requires every link of the chain, the same rule the proof endpoint applies
+        (``verify_stored_inclusion``): the event recomputes to its stored digest, that digest
+        is the member's, the batch commitment matches the stored root, **and the member is
+        provably a leaf under that root** — ``stored`` is the batch rebuilt from its stored
+        members (once per batch per request) and the member must be the leaf at its index of
+        a tree whose root is the sealed one. A member digest edited to match an edited event
+        therefore no longer passes: it changes the rebuilt root.
 
         Distinguishes local Merkle batch verification from external blockchain anchoring:
         network is set to 'local-merkle-batch' and anchored_at represents the local batch
@@ -368,6 +408,7 @@ class AuditAnchorService:
             or batch.protocol_version != MERKLE_PROTOCOL_VERSION
             or batch.hash_version != HASH_SCHEME_V3
             or expected_commitment != batch.commitment
+            or not stored.includes(leaf_index=member.leaf_index, digest=member.digest)
         ):
             return IntegrityReport(
                 audit_log_id=entry.id,
@@ -459,3 +500,26 @@ def _require_consistent(entry: AuditLog) -> None:
 def anchored_event_ids(reports: Collection[IntegrityReport]) -> set[UUID]:
     """The subset that carries an anchor — a convenience for callers summarising a page."""
     return {report.audit_log_id for report in reports if report.is_anchored}
+
+
+def _rebuild(batch: AuditBatch, siblings: Sequence[AuditBatchMember]) -> StoredBatch:
+    """One batch's stored membership rebuilt into its tree, from rows read in this request."""
+    return rebuild_stored_batch(
+        [(sibling.leaf_index, sibling.digest) for sibling in siblings],
+        root=batch.root,
+        leaf_count=batch.leaf_count,
+    )
+
+
+def _orphaned_member(entry: AuditLog) -> IntegrityReport:
+    """An event whose membership row points at a batch that no longer exists.
+
+    Not NOT_ANCHORED: the event *was* sealed, and the record of that sealing has been
+    damaged. Reported as the anchor side being altered, with no anchor facts to show.
+    """
+    return IntegrityReport(
+        audit_log_id=entry.id,
+        status=IntegrityStatus.ANCHOR_ALTERED,
+        anchor=None,
+        network=LOCAL_MERKLE_BATCH_NETWORK,
+    )

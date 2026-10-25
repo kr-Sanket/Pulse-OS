@@ -742,23 +742,35 @@ class AuditBatchRepository:
         )
         return result.scalar_one_or_none()
 
-    async def by_audit_log_ids(
-        self, audit_log_ids: Collection[UUID]
-    ) -> dict[UUID, AuditBatchMember]:
-        """Batch members for a collection of audit event ids, keyed by audit_log_id."""
-        if not audit_log_ids:
-            return {}
-        result = await self._session.execute(
-            select(AuditBatchMember).where(AuditBatchMember.audit_log_id.in_(audit_log_ids))
-        )
-        return {member.audit_log_id: member for member in result.scalars()}
-
     async def get_batches_by_ids(self, batch_ids: Collection[UUID]) -> dict[UUID, AuditBatch]:
         """Fetch multiple batches by their UUID primary keys, keyed by batch id."""
         if not batch_ids:
             return {}
         result = await self._session.execute(select(AuditBatch).where(AuditBatch.id.in_(batch_ids)))
         return {batch.id: batch for batch in result.scalars()}
+
+    async def members_sharing_batch_with(
+        self, audit_log_ids: Collection[UUID]
+    ) -> list[AuditBatchMember]:
+        """Every member of every batch that contains any of ``audit_log_ids``, in one query.
+
+        Ordered by batch then leaf position. Verification needs a batch's full membership to
+        rebuild its root, and fetching it alongside the page's own memberships keeps a page
+        of verdicts at a fixed query count.
+        """
+        if not audit_log_ids:
+            return []
+        containing = (
+            select(AuditBatchMember.batch_id)
+            .where(AuditBatchMember.audit_log_id.in_(list(audit_log_ids)))
+            .scalar_subquery()
+        )
+        result = await self._session.execute(
+            select(AuditBatchMember)
+            .where(AuditBatchMember.batch_id.in_(containing))
+            .order_by(AuditBatchMember.batch_id, AuditBatchMember.leaf_index.asc())
+        )
+        return list(result.scalars())
 
     async def list_members_for_batch(self, batch_id: UUID) -> list[AuditBatchMember]:
         """Fetch all members of a batch ordered by leaf position (0 .. n-1)."""

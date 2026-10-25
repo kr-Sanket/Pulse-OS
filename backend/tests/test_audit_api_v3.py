@@ -31,7 +31,7 @@ from app.modules.consent.anchor_service import (
 )
 from app.modules.consent.anchoring import LocalChainAuditAnchor
 from app.modules.consent.batch_service import AuditBatchService
-from app.modules.consent.merkle import batch_commitment
+from app.modules.consent.merkle import batch_commitment, rebuild_stored_batch
 from app.modules.consent.models import (
     AuditAction,
     AuditAnchorEntry,
@@ -436,7 +436,13 @@ def test_negative_and_out_of_range_leaf_indices_report_anchor_altered(
                 leaf_index=-1,
                 digest=target.event_hash,
             )
-            rep = service._assess_batched(target, neg_member, seed.batch)
+            siblings = await batches_repo.list_members_for_batch(seed.batch.id)
+            stored = rebuild_stored_batch(
+                [(s.leaf_index, s.digest) for s in siblings],
+                root=seed.batch.root,
+                leaf_count=seed.batch.leaf_count,
+            )
+            rep = service._assess_batched(target, neg_member, seed.batch, stored)
             assert rep.status is IntegrityStatus.ANCHOR_ALTERED
 
     asyncio.run(_test_negative_service())
@@ -796,7 +802,8 @@ def test_bounded_queries_for_paginated_verification(
                 sqla_event.remove(db_engine.sync_engine, "after_cursor_execute", _track)
 
             assert len(reports) == 5
-            # Exactly 3 queries: audit_anchors IN, audit_batch_members IN, audit_batches IN
+            # Exactly 3 queries: audit_anchors IN, audit_batch_members (whole batches of the
+            # page's events, for the inclusion check), audit_batches IN
             select_statements = [s for s in statements if s.strip().upper().startswith("SELECT")]
             assert len(select_statements) <= 3
 

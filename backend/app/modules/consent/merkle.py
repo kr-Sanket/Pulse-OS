@@ -287,6 +287,94 @@ def verify_proof(
 
 
 @dataclass(frozen=True, slots=True)
+class StoredBatch:
+    """A sealed batch rebuilt from its stored ``(leaf_index, digest)`` membership rows.
+
+    Built once per batch and then asked about any number of its leaves, so verifying a page
+    of events costs one tree per batch rather than one per event. ``tree`` is ``None`` when
+    the stored rows do not form a tree at all (duplicates, malformed digests, a gap in the
+    positions, the wrong count); ``root_matches`` is whether the rebuilt root equals the
+    sealed one. Both are derived from rows read in the current request — nothing is cached.
+    """
+
+    tree: MerkleTree | None
+    root_matches: bool
+
+    def includes(self, *, leaf_index: int, digest: str) -> bool:
+        """Whether ``digest`` is the leaf at ``leaf_index`` of a tree whose root is the sealed
+        root. With the root matching, the leaf's path recomputes to it by construction, so no
+        separate path walk is needed here; the proof endpoint still walks the path it returns.
+        """
+        if self.tree is None or not self.root_matches:
+            return False
+        if not 0 <= leaf_index < self.tree.leaf_count:
+            return False
+        return self.tree.digests[leaf_index] == digest
+
+
+def rebuild_stored_batch(
+    members: Sequence[tuple[int, str]], *, root: str, leaf_count: int
+) -> StoredBatch:
+    """Rebuild a sealed batch from its stored membership rows. **Never raises for tampered
+    rows**: positions must be exactly ``0 .. leaf_count - 1`` and the digests must form a valid
+    tree, otherwise ``tree`` is ``None``."""
+    ordered = sorted(members, key=lambda member: member[0])
+    if len(ordered) != leaf_count or [index for index, _ in ordered] != list(range(leaf_count)):
+        return StoredBatch(tree=None, root_matches=False)
+    try:
+        tree = MerkleTree([member_digest for _, member_digest in ordered])
+    except (MerkleError, InvalidDigestError):
+        return StoredBatch(tree=None, root_matches=False)
+    return StoredBatch(tree=tree, root_matches=tree.root == root)
+
+
+@dataclass(frozen=True, slots=True)
+class StoredInclusion:
+    """Whether a stored member is provably a leaf under its batch's stored root.
+
+    ``proof`` is ``None`` when no path could be built at all (the stored members do not form
+    a tree: duplicates, malformed digests, a gap in the leaf positions, the wrong count).
+    """
+
+    is_valid: bool
+    proof: MerkleProof | None
+
+
+def verify_stored_inclusion(
+    members: Sequence[tuple[int, str]],
+    *,
+    leaf_index: int,
+    digest: str,
+    root: str,
+    leaf_count: int,
+) -> StoredInclusion:
+    """Rebuild a sealed batch from its stored ``(leaf_index, digest)`` rows and check one leaf.
+
+    The single inclusion rule every verifier shares: list and detail verification use
+    ``rebuild_stored_batch(...).includes(...)`` directly (one rebuild per batch per page), and
+    the proof endpoint uses this, which additionally returns and walks the path. True only
+    when the rows are exactly positions ``0 .. leaf_count - 1``, they form a valid tree whose
+    root is ``root``, the leaf at ``leaf_index`` is ``digest``, and its path recomputes to
+    ``root`` under the trusted index and count. **Never raises for tampered rows.**
+    """
+    stored = rebuild_stored_batch(members, root=root, leaf_count=leaf_count)
+    if stored.tree is None:
+        return StoredInclusion(is_valid=False, proof=None)
+    try:
+        proof = stored.tree.proof(leaf_index)
+    except MerkleError:
+        return StoredInclusion(is_valid=False, proof=None)
+    is_valid = stored.includes(leaf_index=leaf_index, digest=digest) and verify_proof(
+        digest,
+        proof,
+        root,
+        trusted_leaf_index=leaf_index,
+        trusted_leaf_count=leaf_count,
+    )
+    return StoredInclusion(is_valid=is_valid, proof=proof)
+
+
+@dataclass(frozen=True, slots=True)
 class BatchLeaf:
     """One event's place in a batch: which event, and the digest committed for it."""
 
