@@ -52,6 +52,7 @@ APP_TABLES = {
     "audit_batch_members",
     "notifications",
     "hospital_audit_logs",
+    "audit_batch_anchors",
 }
 
 
@@ -421,3 +422,64 @@ def test_0010_downgrade_removes_hospital_audit_logs_cleanly(tmp_path: Path) -> N
         assert "hospital_audit_logs" in tables_reup
     finally:
         engine.dispose()
+
+
+def test_0011_creates_audit_batch_anchors_with_constraints(tmp_path: Path) -> None:
+    db_file = tmp_path / "anchors_0011.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+    command.upgrade(config, "0011")
+
+    unique, checks, foreign = _constraints(db_file, "audit_batch_anchors")
+    assert unique == {"uq_audit_batch_anchors_batch_id_network"}
+    assert checks == {
+        "ck_audit_batch_anchors_status_valid",
+        "ck_audit_batch_anchors_confirmed_has_evidence",
+        "ck_audit_batch_anchors_pending_has_tx",
+    }
+    assert foreign == {"fk_audit_batch_anchors_audit_batches_batch_id"}
+
+
+def test_0011_matches_model_metadata() -> None:
+    from app.core.db import Base
+    from app.modules.consent.models import AuditBatchAnchor  # noqa: F401
+
+    table = Base.metadata.tables["audit_batch_anchors"]
+    assert set(table.columns.keys()) == {
+        "id",
+        "batch_id",
+        "network",
+        "chain_id",
+        "contract_address",
+        "commitment",
+        "status",
+        "tx_hash",
+        "block_number",
+        "block_timestamp",
+        "failure_reason",
+        "submitted_at",
+        "confirmed_at",
+        "created_at",
+        "updated_at",
+    }
+    nullable = {name for name, column in table.columns.items() if column.nullable}
+    assert nullable == {
+        "tx_hash",
+        "block_number",
+        "block_timestamp",
+        "failure_reason",
+        "submitted_at",
+        "confirmed_at",
+    }
+
+
+def test_0011_downgrade_removes_only_audit_batch_anchors(tmp_path: Path) -> None:
+    db_file = tmp_path / "anchors_down.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+    command.upgrade(config, "head")
+    assert "audit_batch_anchors" in _table_names(db_file)
+    command.downgrade(config, "0010")
+    tables = _table_names(db_file)
+    assert "audit_batch_anchors" not in tables
+    assert tables >= APP_TABLES - {"audit_batch_anchors"}
+    command.upgrade(config, "head")
+    assert "audit_batch_anchors" in _table_names(db_file)

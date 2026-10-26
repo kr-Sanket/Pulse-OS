@@ -616,3 +616,67 @@ class AuditBatchMember(UUIDPrimaryKeyMixin, Base):
         ),
         CheckConstraint("leaf_index >= 0", name="leaf_index_non_negative"),
     )
+
+
+class ChainAnchorStatus(StrEnum):
+    """Where one batch's on-chain submission stands (ADR-035).
+
+    Operational state of a *submission*, not an integrity verdict: whether the commitment
+    really is on-chain is always re-read from the chain on demand (ADR-027 decision 9).
+    ``CONFIRMED`` is terminal — its evidence columns are never rewritten. ``FAILED`` may be
+    retried, which re-checks the chain before sending anything (decision 11).
+    """
+
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+
+
+class AuditBatchAnchor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One sealed batch's submission to one public-chain registry (ADR-027 decision 8 receipt,
+    ADR-035).
+
+    UNIQUE ``(batch_id, network)``: a batch is anchored at most once per network; a retry
+    updates this row rather than adding another. ``commitment`` is copied from the batch at
+    submission so a later divergence of the batch row is detectable. Ids, hashes and chain
+    coordinates only — ``failure_reason`` is a short code, never an RPC message, so nothing
+    an RPC node echoes back (or a secret) can land here.
+    """
+
+    __tablename__ = "audit_batch_anchors"
+
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("audit_batches.id"), nullable=False
+    )
+    network: Mapped[str] = mapped_column(String(32), nullable=False)
+    chain_id: Mapped[int] = mapped_column(BigInteger(), nullable=False)
+    contract_address: Mapped[str] = mapped_column(String(42), nullable=False)
+    commitment: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[ChainAnchorStatus] = mapped_column(
+        Enum(
+            ChainAnchorStatus,
+            name="chain_anchor_status",
+            native_enum=False,
+            length=16,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    #: ``0x`` + 64 hex. Null only for a submission that failed before a transaction existed.
+    tx_hash: Mapped[str | None] = mapped_column(String(66))
+    block_number: Mapped[int | None] = mapped_column(BigInteger())
+    block_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_reason: Mapped[str | None] = mapped_column(String(64))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("batch_id", "network", name="uq_audit_batch_anchors_batch_id_network"),
+        CheckConstraint("status IN ('PENDING', 'CONFIRMED', 'FAILED')", name="status_valid"),
+        # A confirmation is evidence only with the transaction and block that carry it.
+        CheckConstraint(
+            "status <> 'CONFIRMED' OR (tx_hash IS NOT NULL AND block_number IS NOT NULL)",
+            name="confirmed_has_evidence",
+        ),
+        CheckConstraint("status <> 'PENDING' OR tx_hash IS NOT NULL", name="pending_has_tx"),
+    )

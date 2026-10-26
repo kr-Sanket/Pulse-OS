@@ -48,7 +48,7 @@
 
 | Technology | Intended use | Status |
 |---|---|---|
-| Solidity commitment registry + toolchain (Hardhat or Foundry) | On-chain batch-commitment registry | **Undecided**; no contract exists; M6.4+ not authorized |
+| Solidity 0.8.24 + Foundry; `eth-account` (Python signing) | On-chain batch-commitment registry (`contracts/`) and its JSON-RPC adapter | ADR-035 (accepted for local implementation); working tree only; tested on a local `anvil` EVM; **not deployed to any public network** |
 | Polygon Amoy testnet | Publishing batch commitments (hash only) | **Not implemented** (ADR-004 as amended, ADR-027) |
 | web3 client library | Backend → chain submission | **Not chosen, not a dependency** |
 | EasyOCR / Tesseract | OCR of uploaded documents | **Not implemented** (original plan) |

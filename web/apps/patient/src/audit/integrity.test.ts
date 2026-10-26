@@ -22,7 +22,7 @@ test("a verified batched entry says verified, and says it is local, not a blockc
   expect(view).toMatchObject({ status: "VERIFIED", tone: "success", batched: true });
   expect(view.label).toBe("Integrity verified");
   expect(view.detail).toMatch(/local Merkle batch/);
-  expect(view.detail).toMatch(/Not anchored to a public blockchain/);
+  expect(view.detail).toMatch(/This is a local check/);
 });
 
 test("a legacy per-event anchor verifies but offers no Merkle proof", () => {

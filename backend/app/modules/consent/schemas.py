@@ -20,6 +20,7 @@ wired yet — see the deferred notes in the router.
 """
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import Field, field_validator
@@ -433,3 +434,60 @@ class AuditBatchResponse(ApiModel):
     is_valid: bool
     status: str
     findings: list[AuditBatchFindingResponse]
+
+
+class ChainAnchorSubmissionResponse(ApiModel):
+    """The stored submission of a batch commitment to a public-chain registry (ADR-035).
+
+    Operational record only — whether the commitment is really on-chain is
+    ``chainVerification``, re-read from the chain on every request.
+    """
+
+    status: Literal["PENDING", "CONFIRMED", "FAILED"]
+    tx_hash: str | None
+    block_number: int | None
+    block_timestamp: datetime | None
+    submitted_at: datetime | None
+    confirmed_at: datetime | None
+    #: Short stable code (e.g. ``rpc_unavailable``, ``transaction_reverted``), never an RPC body.
+    failure_reason: str | None
+    #: Public block-explorer link for ``tx_hash``; null without a configured explorer.
+    explorer_tx_url: str | None
+
+
+class ChainVerificationResponse(ApiModel):
+    """A fresh read of the registry for the batch's expected commitment."""
+
+    status: Literal[
+        "NOT_CONFIGURED",
+        "UNAVAILABLE",
+        "LOCAL_INTEGRITY_FAILED",
+        "NOT_ON_CHAIN",
+        "VERIFIED",
+        "MISMATCH",
+    ]
+    #: ``C`` recomputed from the locally verified batch; null when local verification fails.
+    expected_commitment: str | None
+    on_chain_block_number: int | None
+    checked_at: datetime
+
+
+class AuditBatchAnchorResponse(ApiModel):
+    """Local Merkle verification and public-chain anchoring of one sealed batch, side by side.
+
+    Zero PHI: batch metadata, hashes and chain coordinates only. Only ``commitment`` is ever
+    published on-chain; the Merkle ``root`` stays off-chain (ADR-027 decision 12).
+    """
+
+    batch_number: int
+    leaf_count: int
+    root: str
+    commitment: str
+    #: Local Merkle verification of the batch (database-only).
+    local_status: Literal["VALID", "TAMPERED"]
+    network: str | None
+    chain_id: int | None
+    contract_address: str | None
+    explorer_contract_url: str | None
+    anchor: ChainAnchorSubmissionResponse | None
+    chain_verification: ChainVerificationResponse

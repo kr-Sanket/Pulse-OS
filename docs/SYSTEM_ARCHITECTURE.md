@@ -33,8 +33,10 @@
         │  AI chunks│ └─────────┘ │ stub only)  │
         └───────────┘             └─────────────┘
 
-   Planned, not implemented: public-chain submission of batch commitments (ADR-027;
-   M6.4+ not authorized) · audit sealing scheduler · OCR/embedding workers (ADR-029).
+   Implemented in the uncommitted working tree, ADR-035 (accepted for local implementation): operator-run public-testnet
+   submission of batch commitments (verified on a local EVM only; **no public-testnet
+   transaction yet**). Not implemented: sealing/anchoring scheduler · OCR/embedding workers
+   (ADR-029).
    Out of scope by decision: push/email/SMS notifications (ADR-031 is in-app only).
 ```
 
@@ -77,7 +79,8 @@ wherever `PULSEOS_OLLAMA_BASE_URL` points. No deployment target is decided yet (
    `CONSENT_APPROVED`/`CONSENT_REJECTED` notification for the doctor in one transaction. The API
    accepts a subset of the requested categories per call; the patient portal currently sends all
    of them at once. Audit events are later sealed into Merkle batches **asynchronously** (v3
-   events; ADR-027) — nothing is submitted on-chain yet, and no clinical request waits on it.
+   events; ADR-027) — on-chain submission is a separate operator CLI step (ADR-035;
+   no public-testnet transaction yet), and no clinical request waits on either.
 4. Doctor lists what the grant covers (`GET /granted-records`, ADR-020) — the step that turns an
    approval into reachable record ids. The page is *filtered* by the granted categories, audited
    once as `RECORDS_LISTED`, and discloses a chooser (category, date, hospital), never a document.

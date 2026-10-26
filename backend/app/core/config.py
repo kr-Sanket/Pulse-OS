@@ -8,6 +8,7 @@ Secrets never get real defaults.
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -72,6 +73,21 @@ class Settings(BaseSettings):
     audit_batch_max_size: int = 256
     audit_batch_interval_seconds: int = 300
     audit_batch_backlog_threshold_seconds: int = 900
+
+    # Public-chain anchoring of batch commitments (ADR-035). All unset = not configured: the
+    # API reports NOT_CONFIGURED and nothing is ever sent. Only testnet / local chain ids are
+    # accepted (consent/chain.py ALLOWED_CHAIN_IDS). The RPC URL may embed a provider API key
+    # and the private key signs transactions, so both are secrets: never logged or echoed.
+    # The private key is read only by the operator CLI (scripts/audit_integrity.py anchor);
+    # the API needs read access alone.
+    chain_rpc_url: SecretStr | None = None
+    chain_id: int | None = None
+    chain_contract_address: str | None = None
+    # Block explorer base, e.g. https://amoy.polygonscan.com — links only, never queried.
+    chain_explorer_base_url: str | None = None
+    chain_anchorer_private_key: SecretStr | None = None
+    chain_min_confirmations: int = 2
+    chain_rpc_timeout_seconds: float = 10.0
 
 
 @lru_cache

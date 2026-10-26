@@ -1728,3 +1728,73 @@ registration and existence discovery check status without a row lock (an operati
 suspension commits, or is answered, as if ordered just before it; none of them grants access).
 The records-side 409 detail reads "Hospital is not verified yet." also when suspended. The
 admin history panel shows the first page only.
+
+## ADR-035 — Public-testnet anchoring of Merkle batch commitments (M6.4)
+**Date:** 2026-10-26 · **Status:** **Accepted** by the Product Owner 2026-10-26 **for the design
+and the local implementation only. Public-testnet deployment and on-chain transaction
+verification remain pending** — no public chain anchor exists. Supersedes the earlier "M6.4
+not authorized" notes (ADR-027 amendment, ROADMAP) for the scope accepted here.
+**Verification status, kept separate:** (a) *implementation* — verified locally 2026-10-26:
+contract tests (Foundry), adapter/service/CLI/API tests with a mocked RPC and an in-memory
+chain, migration 0011 on SQLite and scratch PostgreSQL, and an opt-in end-to-end run on a
+**local `anvil` EVM** (deploy → submit → confirm → contract re-read = VERIFIED); (b) *public
+testnet deployment* — **not performed**: no contract is deployed on Amoy or Sepolia and no
+public transaction exists. Nothing here is a production or mainnet deployment.
+**Implements:** ADR-027 decisions 8, 11, 12, 14 ·
+**Builds on:** ADR-004, ADR-027.
+
+**Context:** M6.1–M6.3 seal v3 audit events into local Merkle batches with a commitment `C`
+(ADR-027 decision 5), but commitments live in the same database as the events, so nothing
+resists an attacker who can rewrite the database consistently. ADR-027 fixed the requirements
+for public anchoring and deferred the contract, adapter, receipts and API.
+
+**Decision:**
+1. **Contract** `contracts/src/AuditCommitmentRegistry.sol` (Solidity 0.8.24, Foundry, no
+   libraries): `anchor(bytes32 C)` callable only by an immutable `anchorer`; records
+   `C → block.number`; emits `CommitmentAnchored(bytes32 indexed C)`; reverts on zero or
+   already-recorded `C`; `anchoredBlock(C)` view; pure `computeCommitment(v, n, c, root)`
+   reproducing ADR-027's pinned vectors (contract tests assert both vectors). Only `C` is ever
+   on-chain — no root, digest, event id, patient or PHI (decision 12).
+2. **Port** `consent/chain.py` `CommitmentRegistry`, separate from the per-event `AuditAnchor`
+   port (a public chain's pending → mined → confirmed lifecycle does not fit a synchronous
+   `submit → receipt`). Adapter `JsonRpcCommitmentRegistry`: plain JSON-RPC over `httpx`, local
+   EIP-1559 signing with `eth-account` (new dependency). **Chain-id allow-list**: 80002 Polygon
+   Amoy, 11155111 Sepolia, 31337 local dev — every other id (all mainnets) is refused before any
+   request. The configured contract address is normalised to EIP-55 checksum form (a
+   mixed-case address with a bad checksum is refused). Errors carry short codes only (never RPC bodies, URLs or keys); `httpx`/`httpcore`
+   loggers are pinned to WARNING because they log request URLs, which embed provider keys.
+3. **Persistence** — migration 0011, `audit_batch_anchors`: one row per (batch, network);
+   chain id, contract, copied commitment, status PENDING/CONFIRMED/FAILED, tx hash, block,
+   block time, failure code, timestamps. CHECKs: CONFIRMED ⇒ tx and block; PENDING ⇒ tx. This is
+   an *operational submission record*, not an integrity verdict (ADR-027 decision 9 holds: the
+   on-chain verdict is recomputed on every read). A CONFIRMED row is never rewritten; a FAILED
+   one may be retried in place (deviation from decision 8's "append-only receipt", accepted
+   because the chain itself is the immutable evidence).
+4. **Submission** is operator-only: `scripts/audit_integrity.py anchor | anchor-refresh`, behind
+   the same environment guard as `seal`. No API endpoint triggers submission. Before sending:
+   local batch verification must pass (a tampered batch is never published), the RPC chain id
+   must equal the configured one, a PENDING row is refreshed instead of re-sent, and the
+   registry is asked whether `C` is already recorded — if so that record is adopted (retry-safe,
+   decision 11). Refresh confirms only when the receipt succeeded, carries
+   `CommitmentAnchored(C)` from the configured contract, has ≥ `chain_min_confirmations`
+   (default 2), and contract state agrees on the block.
+5. **Verification** `GET /api/v1/audit-batches/{n}/anchor` (any authenticated role, rate bucket
+   `audit_batch_verify`, read-only) and `verify-chain` CLI: recompute `C` from the locally
+   verified batch, read `anchoredBlock(C)` from the contract and, for a confirmed submission,
+   re-read its receipt. Verdicts: NOT_CONFIGURED, UNAVAILABLE, LOCAL_INTEGRITY_FAILED,
+   NOT_ON_CHAIN, VERIFIED, MISMATCH. A transaction hash alone is never reported as proof.
+6. **UI**: the patient proof dialog shows local Merkle membership and public-chain anchoring as
+   two separate sections; explorer links only for configured http(s) explorers.
+
+**Alternatives considered:** web3.py (heavier, more surface than four RPC calls need);
+Hardhat (Node toolchain + many packages vs. one Foundry binary); OpenZeppelin `Ownable`
+(an immutable anchorer is simpler to audit; no ownership transfer needed).
+
+**Risks / limitations:** no scheduler — sealing and anchoring are operator-run. One
+confirmation-depth policy for all networks; a VERIFIED read right after inclusion could be
+reorged on a testnet. An ambiguous broadcast failure is recorded FAILED; a retry adopts the
+on-chain record if it landed, otherwise may send a second transaction (the contract rejects the
+duplicate; gas only). Key custody is an environment secret on the operator's machine (testnet
+funds only). The sender address and anchoring cadence are public. **Real public-testnet
+deployment is not done** (no RPC endpoint, deployer key or test funds were available on
+2026-10-26); the full flow is verified on a local `anvil` EVM (opt-in test).

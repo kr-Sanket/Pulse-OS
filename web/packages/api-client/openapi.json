@@ -367,6 +367,107 @@
         "title": "AuditAction",
         "type": "string"
       },
+      "AuditBatchAnchorResponse": {
+        "description": "Local Merkle verification and public-chain anchoring of one sealed batch, side by side.\n\nZero PHI: batch metadata, hashes and chain coordinates only. Only ``commitment`` is ever\npublished on-chain; the Merkle ``root`` stays off-chain (ADR-027 decision 12).",
+        "properties": {
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChainAnchorSubmissionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "batchNumber": {
+            "title": "Batchnumber",
+            "type": "integer"
+          },
+          "chainId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chainid"
+          },
+          "chainVerification": {
+            "$ref": "#/components/schemas/ChainVerificationResponse"
+          },
+          "commitment": {
+            "title": "Commitment",
+            "type": "string"
+          },
+          "contractAddress": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contractaddress"
+          },
+          "explorerContractUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explorercontracturl"
+          },
+          "leafCount": {
+            "title": "Leafcount",
+            "type": "integer"
+          },
+          "localStatus": {
+            "enum": [
+              "VALID",
+              "TAMPERED"
+            ],
+            "title": "Localstatus",
+            "type": "string"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network"
+          },
+          "root": {
+            "title": "Root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batchNumber",
+          "leafCount",
+          "root",
+          "commitment",
+          "localStatus",
+          "network",
+          "chainId",
+          "contractAddress",
+          "explorerContractUrl",
+          "anchor",
+          "chainVerification"
+        ],
+        "title": "AuditBatchAnchorResponse",
+        "type": "object"
+      },
       "AuditBatchFindingResponse": {
         "properties": {
           "auditLogId": {
@@ -899,6 +1000,164 @@
           "categoryCodes"
         ],
         "title": "CategorySelectionRequest",
+        "type": "object"
+      },
+      "ChainAnchorSubmissionResponse": {
+        "description": "The stored submission of a batch commitment to a public-chain registry (ADR-035).\n\nOperational record only \u2014 whether the commitment is really on-chain is\n``chainVerification``, re-read from the chain on every request.",
+        "properties": {
+          "blockNumber": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocknumber"
+          },
+          "blockTimestamp": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocktimestamp"
+          },
+          "confirmedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmedat"
+          },
+          "explorerTxUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explorertxurl"
+          },
+          "failureReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failurereason"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "CONFIRMED",
+              "FAILED"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "submittedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submittedat"
+          },
+          "txHash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Txhash"
+          }
+        },
+        "required": [
+          "status",
+          "txHash",
+          "blockNumber",
+          "blockTimestamp",
+          "submittedAt",
+          "confirmedAt",
+          "failureReason",
+          "explorerTxUrl"
+        ],
+        "title": "ChainAnchorSubmissionResponse",
+        "type": "object"
+      },
+      "ChainVerificationResponse": {
+        "description": "A fresh read of the registry for the batch's expected commitment.",
+        "properties": {
+          "checkedAt": {
+            "format": "date-time",
+            "title": "Checkedat",
+            "type": "string"
+          },
+          "expectedCommitment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedcommitment"
+          },
+          "onChainBlockNumber": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onchainblocknumber"
+          },
+          "status": {
+            "enum": [
+              "NOT_CONFIGURED",
+              "UNAVAILABLE",
+              "LOCAL_INTEGRITY_FAILED",
+              "NOT_ON_CHAIN",
+              "VERIFIED",
+              "MISMATCH"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "expectedCommitment",
+          "onChainBlockNumber",
+          "checkedAt"
+        ],
+        "title": "ChainVerificationResponse",
         "type": "object"
       },
       "ConsentDecisionResponse": {
@@ -3151,6 +3410,63 @@
           }
         },
         "summary": "Verify Audit Batch",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit-batches/{batch_number}/anchor": {
+      "get": {
+        "description": "Local Merkle verification plus public-chain anchoring of one batch (ADR-035).\n\nRead-only: reports the stored submission (network, contract, transaction, block) and\nre-reads the registry contract for the commitment recomputed from the locally verified\nbatch. Never submits anything \u2014 submission is the operator CLI's\n(``scripts/audit_integrity.py anchor``). ``chainVerification.status`` is ``VERIFIED``\nonly when the chain records the expected commitment and, for a confirmed submission, its\nreceipt carries that commitment from the configured registry.\n\nRoles: any authenticated user, like ``GET /audit-batches/{n}`` (attestation material, no\nPHI). Rate limited (``audit_batch_verify``) \u2014 each call recomputes the batch and makes\nup to two RPC reads (bounded by ``chain_rpc_timeout_seconds``).\nFailure modes: 401, 404 (no such batch), 422 (batch_number < 1), 429.",
+        "operationId": "get_audit_batch_anchor_api_v1_audit_batches__batch_number__anchor_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_number",
+            "required": true,
+            "schema": {
+              "title": "Batch Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditBatchAnchorResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Missing or invalid credentials"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Audit batch not found"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Validation failed"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {}
+            },
+            "description": "Rate limit exceeded"
+          }
+        },
+        "summary": "Get Audit Batch Anchor",
         "tags": [
           "audit"
         ]

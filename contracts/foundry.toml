@@ -1,0 +1,14 @@
+# Foundry configuration for the audit commitment registry (ADR-035). No libraries are
+# vendored; tests declare the few cheatcodes they use.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+cache_path = "cache"
+libs = []
+solc_version = "0.8.24"
+evm_version = "paris"
+optimizer = true
+optimizer_runs = 200
+bytecode_hash = "none"
+cbor_metadata = false

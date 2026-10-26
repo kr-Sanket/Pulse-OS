@@ -37,6 +37,13 @@ from app.core.db import get_db_session
 from app.modules.consent.anchor_service import AuditAnchorService
 from app.modules.consent.anchoring import AuditAnchor, LocalChainAuditAnchor
 from app.modules.consent.batch_service import AuditBatchService
+from app.modules.consent.chain import (
+    ChainConfigError,
+    CommitmentRegistry,
+    JsonRpcCommitmentRegistry,
+    Signer,
+)
+from app.modules.consent.chain_anchor_service import BatchAnchorService
 from app.modules.consent.errors import (
     AccessDeniedError,
     AuditBatchNotFoundError,
@@ -62,6 +69,7 @@ from app.modules.consent.errors import (
 )
 from app.modules.consent.repository import (
     AuditAnchorRepository,
+    AuditBatchAnchorRepository,
     AuditBatchRepository,
     AuditLogRepository,
     ConsentDecisionRepository,
@@ -404,7 +412,77 @@ def get_audit_batch_service(
     return build_audit_batch_service(session, get_settings())
 
 
+def build_commitment_registry(
+    settings: Settings, *, with_signer: bool = False
+) -> CommitmentRegistry | None:
+    """The configured public-chain registry (ADR-035), or None when anchoring is unconfigured.
+
+    ``with_signer`` loads the anchorer key — only the operator CLI asks for it; the API reads
+    the chain and never holds a key. Raises ``ChainConfigError`` for a disallowed chain id,
+    a malformed contract address, or a requested signer that is not configured.
+    """
+    if (
+        settings.chain_rpc_url is None
+        or settings.chain_id is None
+        or settings.chain_contract_address is None
+    ):
+        return None
+    signer: Signer | None = None
+    if with_signer:
+        if settings.chain_anchorer_private_key is None:
+            raise ChainConfigError("signer_not_configured")
+        from eth_account import Account  # Imported here: only the CLI ever signs.
+
+        try:
+            signer = Account.from_key(settings.chain_anchorer_private_key.get_secret_value())
+        except (ValueError, TypeError):
+            # Never chain the original: its message may contain key material.
+            raise ChainConfigError("invalid_private_key") from None
+    return JsonRpcCommitmentRegistry(
+        rpc_url=settings.chain_rpc_url.get_secret_value(),
+        chain_id=settings.chain_id,
+        contract_address=settings.chain_contract_address,
+        signer=signer,
+        timeout_seconds=settings.chain_rpc_timeout_seconds,
+    )
+
+
+def build_batch_anchor_service(
+    session: AsyncSession, settings: Settings, registry: CommitmentRegistry | None
+) -> BatchAnchorService:
+    return BatchAnchorService(
+        batches=AuditBatchRepository(session),
+        anchors=AuditBatchAnchorRepository(session),
+        batch_service=build_audit_batch_service(session, settings),
+        registry=registry,
+        min_confirmations=settings.chain_min_confirmations,
+    )
+
+
+def get_commitment_registry() -> CommitmentRegistry | None:
+    """Read-only registry for the API (no signer). Misconfiguration reads as unconfigured
+    and is logged by code only, so a bad setting degrades the panel, never a request."""
+    from app.core.config import get_settings
+
+    try:
+        return build_commitment_registry(get_settings())
+    except ChainConfigError as error:
+        logger.warning("chain anchoring misconfigured: %s", error.code)
+        return None
+
+
+def get_batch_anchor_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    registry: Annotated[CommitmentRegistry | None, Depends(get_commitment_registry)],
+) -> BatchAnchorService:
+    """Read-only on-chain verification for ``GET /audit-batches/{n}/anchor``."""
+    from app.core.config import get_settings
+
+    return build_batch_anchor_service(session, get_settings(), registry)
+
+
 ConsentServiceDep = Annotated[ConsentService, Depends(get_consent_service)]
+BatchAnchorServiceDep = Annotated[BatchAnchorService, Depends(get_batch_anchor_service)]
 AuditAnchorServiceDep = Annotated[AuditAnchorService, Depends(get_audit_anchor_service)]
 AuditBatchServiceDep = Annotated[AuditBatchService, Depends(get_audit_batch_service)]
 CategoryVocabularyDep = Annotated[CategoryVocabulary, Depends(get_category_vocabulary)]

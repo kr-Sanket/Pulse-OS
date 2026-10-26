@@ -18,6 +18,7 @@ export type Actor = components["schemas"]["StaffDisplayResponse"];
 export type AuditHospital = components["schemas"]["AuditHospitalResponse"];
 export type AuditIntegrity = components["schemas"]["AuditIntegrityResponse"];
 export type AuditProof = components["schemas"]["AuditEventProofResponse"];
+export type BatchAnchor = components["schemas"]["AuditBatchAnchorResponse"];
 
 /** One page of the trail. Small enough to render grouped without a wall of rows, and the
  * page has a Load more, so it is a page size rather than the cap it used to be. */
@@ -87,6 +88,38 @@ export async function getAuditProof(
         result.response.status,
         PROOF_FAILURES,
         "Could not load the integrity proof.",
+      );
+    }
+    return { status: "ready", data: result.data };
+  });
+}
+
+const ANCHOR_FAILURES: Readonly<Record<number, string>> = {
+  401: "Your session has expired. Sign in again to see the blockchain status.",
+  404: "This integrity batch could not be found.",
+  429: "Too many integrity checks just now. Try again in a minute.",
+};
+
+/**
+ * Public-chain anchoring of one sealed batch (ADR-035). Read-only: the API re-reads the
+ * registry contract on every call and never submits anything.
+ */
+export async function getBatchAnchor(
+  client: PulseOSClient,
+  batchNumber: number,
+  signal: AbortSignal,
+): Promise<ApiResult<BatchAnchor>> {
+  return attempt(async () => {
+    const result = await client.GET("/api/v1/audit-batches/{batch_number}/anchor", {
+      params: { path: { batch_number: batchNumber } },
+      signal,
+    });
+    if (result.data === undefined) {
+      return statusFailure(
+        result.error,
+        result.response.status,
+        ANCHOR_FAILURES,
+        "Could not load the blockchain status.",
       );
     }
     return { status: "ready", data: result.data };

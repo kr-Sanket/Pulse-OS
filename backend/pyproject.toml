@@ -24,6 +24,9 @@ dependencies = [
     # Text-layer extraction for uploaded PDFs (records/text_extraction.py). Pure Python, no
     # OCR: scanned PDFs and images are deliberately not indexed.
     "pypdf>=5.0",
+    # Local signing of public-testnet anchoring transactions (ADR-035). Only the operator CLI
+    # signs; JSON-RPC itself goes over httpx.
+    "eth-account>=0.13",
 ]
 
 [project.optional-dependencies]

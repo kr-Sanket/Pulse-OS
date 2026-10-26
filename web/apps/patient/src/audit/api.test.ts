@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 
 import type { PulseOSClient } from "@pulseos/api-client";
 
-import { AUDIT_PAGE_SIZE, listAuditEvents } from "./api";
+import { AUDIT_PAGE_SIZE, getBatchAnchor, listAuditEvents } from "./api";
 
 interface StubResult {
   data?: unknown;
@@ -82,5 +82,20 @@ test("a rejected fetch (offline, or an aborted request) is an error result, not 
 
   const result = await listAuditEvents(client, SIGNAL);
 
+  expect(result.status).toBe("error");
+});
+
+test("a batch's chain anchoring is read by batch number, and a 429 reads as throttling", async () => {
+  const anchor = { batchNumber: 3 };
+  const { client, call } = stubClient({ data: anchor, response: { status: 200 } });
+
+  expect(await getBatchAnchor(client, 3, SIGNAL)).toEqual({ status: "ready", data: anchor });
+  expect(call).toHaveBeenCalledWith("/api/v1/audit-batches/{batch_number}/anchor", {
+    params: { path: { batch_number: 3 } },
+    signal: SIGNAL,
+  });
+
+  const throttled = stubClient({ error: {}, response: { status: 429 } });
+  const result = await getBatchAnchor(throttled.client, 3, SIGNAL);
   expect(result.status).toBe("error");
 });

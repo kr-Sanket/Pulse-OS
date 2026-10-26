@@ -74,9 +74,10 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
 | `0007` | `audit_batches`, `audit_batch_members` (ADR-027) |
 | `0008` | `notifications` (ADR-031) |
 | `0009` | adds nullable `verified_by_user_id` (FK → `users`) and `verified_at` to `hospitals`; set only on the PENDING → VERIFIED transition, so hospitals verified before 0009 keep NULL |
-| `0010` (head) | `hospital_audit_logs` (ADR-034, accepted): append-only lifecycle events per hospital; no schema change to `hospitals` — REJECTED/SUSPENDED are new values of the existing VARCHAR `verification_status` |
+| `0010` | `hospital_audit_logs` (ADR-034, accepted): append-only lifecycle events per hospital; no schema change to `hospitals` — REJECTED/SUSPENDED are new values of the existing VARCHAR `verification_status` |
+| `0011` (head) | `audit_batch_anchors` (ADR-035, accepted for local implementation): one public-chain submission row per (batch, network) |
 
-19 tables in total; there are no timeline, summary or embedding tables. `notifications` is a
+20 tables in total; there are no timeline, summary or embedding tables. `notifications` is a
 mutable convenience table (`is_read`, `read_at`), not audit evidence. Hospital lifecycle
 transitions are recorded in `hospital_audit_logs`, never in `audit_logs` (whose `patient_id`
 stays NOT NULL). Batch
@@ -85,11 +86,15 @@ constraints that the sealing design depends on — UNIQUE `batch_number`, `commi
 `hash_version` and `leaf_index` — are listed in BLOCKCHAIN_ARCHITECTURE.md and pinned by
 `tests/test_alembic.py` and the opt-in `tests/test_alembic_postgres.py`.
 
-## Downgrade and recovery (0010) — read before any rollback
+## Downgrade and recovery (0010, 0011) — read before any rollback
 
 Downgrades are tested only on scratch databases (SQLite and a disposable PostgreSQL 16); that
 is not evidence of production safety. Run any migration against a copy of real data first.
 
+- **`0011 → 0010`** drops `audit_batch_anchors`: every recorded submission (tx hash, block,
+  status) is lost locally. Commitments already on-chain are unaffected, and re-running
+  `scripts/audit_integrity.py anchor` after re-upgrading adopts them from the chain (it checks
+  `anchoredBlock(C)` before sending), but historical FAILED/PENDING rows are gone.
 - **`0010 → 0009`** drops `hospital_audit_logs`: **the entire hospital lifecycle history
   (who verified, rejected, suspended, reinstated, when, why) is lost** and cannot be rebuilt.
   Export it first if it matters.

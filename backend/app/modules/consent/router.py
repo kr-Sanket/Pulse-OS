@@ -21,6 +21,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
+from app.core.config import get_settings
 from app.core.errors import problem_response
 from app.modules.auth.dependencies import (
     RequireDoctor,
@@ -34,6 +35,7 @@ from app.modules.consent.dependencies import (
     PROBLEM,
     AuditAnchorServiceDep,
     AuditBatchServiceDep,
+    BatchAnchorServiceDep,
     CategoryVocabulary,
     CategoryVocabularyDep,
     ConsentServiceDep,
@@ -55,6 +57,7 @@ from app.modules.consent.schemas import (
     AccessRequestListItemResponse,
     AccessRequestListResponse,
     AccessRequestResponse,
+    AuditBatchAnchorResponse,
     AuditBatchFindingResponse,
     AuditBatchResponse,
     AuditEventListResponse,
@@ -64,6 +67,8 @@ from app.modules.consent.schemas import (
     AuditHospitalResponse,
     AuditIntegrityResponse,
     CategorySelectionRequest,
+    ChainAnchorSubmissionResponse,
+    ChainVerificationResponse,
     ConsentDecisionResponse,
     ConsentGrantListItemResponse,
     ConsentGrantListResponse,
@@ -878,4 +883,82 @@ async def verify_audit_batch(
             )
             for f in res.findings
         ],
+    )
+
+
+def _explorer_url(kind: str, value: str | None) -> str | None:
+    """A public block-explorer link, only when an http(s) explorer base is configured."""
+    base = get_settings().chain_explorer_base_url
+    if value is None or base is None or not base.startswith(("https://", "http://")):
+        return None
+    return f"{base.rstrip('/')}/{kind}/{value}"
+
+
+@audit_batches_router.get(
+    "/{batch_number}/anchor",
+    response_model=AuditBatchAnchorResponse,
+    responses={
+        **_UNAUTHENTICATED,
+        404: {"description": "Audit batch not found", "content": PROBLEM},
+        **_INVALID,
+        **_RATE_LIMITED,
+    },
+)
+async def get_audit_batch_anchor(
+    batch_number: int,
+    user: Annotated[AuthenticatedUser, Depends(rate_limited("audit_batch_verify"))],
+    anchors: BatchAnchorServiceDep,
+) -> AuditBatchAnchorResponse:
+    """Local Merkle verification plus public-chain anchoring of one batch (ADR-035).
+
+    Read-only: reports the stored submission (network, contract, transaction, block) and
+    re-reads the registry contract for the commitment recomputed from the locally verified
+    batch. Never submits anything — submission is the operator CLI's
+    (``scripts/audit_integrity.py anchor``). ``chainVerification.status`` is ``VERIFIED``
+    only when the chain records the expected commitment and, for a confirmed submission, its
+    receipt carries that commitment from the configured registry.
+
+    Roles: any authenticated user, like ``GET /audit-batches/{n}`` (attestation material, no
+    PHI). Rate limited (``audit_batch_verify``) — each call recomputes the batch and makes
+    up to two RPC reads (bounded by ``chain_rpc_timeout_seconds``).
+    Failure modes: 401, 404 (no such batch), 422 (batch_number < 1), 429.
+    """
+    del user
+    if batch_number < 1:
+        raise HTTPException(status_code=422, detail="batch_number must be at least 1")
+    try:
+        view = await anchors.status(batch_number)
+    except AuditBatchNotFoundError as error:
+        raise to_http_error(error) from None
+    anchor = view.anchor
+    return AuditBatchAnchorResponse(
+        batch_number=view.batch.batch_number,
+        leaf_count=view.batch.leaf_count,
+        root=view.batch.root,
+        commitment=view.batch.commitment,
+        local_status="VALID" if view.local.is_valid else "TAMPERED",
+        network=view.network,
+        chain_id=view.chain_id,
+        contract_address=view.contract_address,
+        explorer_contract_url=_explorer_url("address", view.contract_address),
+        anchor=None
+        if anchor is None
+        else ChainAnchorSubmissionResponse(
+            status=anchor.status.value,
+            tx_hash=anchor.tx_hash,
+            block_number=anchor.block_number,
+            block_timestamp=anchor.block_timestamp,
+            submitted_at=anchor.submitted_at,
+            confirmed_at=anchor.confirmed_at,
+            failure_reason=anchor.failure_reason,
+            explorer_tx_url=_explorer_url("tx", anchor.tx_hash)
+            if view.network is not None
+            else None,
+        ),
+        chain_verification=ChainVerificationResponse(
+            status=view.chain.status.value,
+            expected_commitment=view.chain.expected_commitment,
+            on_chain_block_number=view.chain.on_chain_block_number,
+            checked_at=view.chain.checked_at,
+        ),
     )

@@ -2,14 +2,14 @@
 
 > Core decisions: ADR-004 (hash-only, asynchronous, non-blocking; decision 2 amended) and
 > **ADR-027** (Merkle-batched anchoring of verified v3 audit events). PostgreSQL is authoritative;
-> the chain provides **tamper-evidence**, not storage. **Current state (2026-10-25): only the
-> local, database-side integrity layer is built** — versioned audit digests, Merkle batches and
-> commitments, database-only reconciliation, a network-free simulated anchor adapter, a
-> developer CLI workflow (`scripts/audit_integrity.py` supporting `seal`, `verify-batch`, `verify-event`,
-> `reconcile`; `seal` is environment-guarded, `278bbfc`), patient-facing v3 verification and proof
-> endpoints plus an any-role batch verification endpoint (`c7e5359`), and a patient-portal integrity
-> badge and proof dialog. Nothing is submitted to Polygon Amoy or any other chain; no contract exists;
-> no scheduler exists (sealing is manual); M6.4 is not authorized.
+> the chain provides **tamper-evidence**, not storage. **Current state (2026-10-26):** the local
+> integrity layer (versioned digests, Merkle batches, commitments, reconciliation, CLI, API v3,
+> patient proof dialog) is built, and **public anchoring is implemented in the working tree
+> (ADR-035, accepted 2026-10-26 for design and local implementation only)**: Solidity registry (`contracts/`), JSON-RPC adapter, `audit_batch_anchors`
+> (migration 0011), operator CLI `anchor`/`anchor-refresh`/`verify-chain`, read-only
+> `GET /audit-batches/{n}/anchor`, and a chain section in the patient proof dialog. It is verified
+> against a **local `anvil` EVM** only. **No public-testnet deployment or transaction exists yet**
+> (no RPC endpoint, deployer key or test funds were available); there is no scheduler.
 
 ## What is built vs what is not — four distinct layers
 
@@ -24,10 +24,13 @@ Do not collapse these when describing the system:
 3. **Local commitment (built).** Each batch has a 32-byte commitment `C` over protocol, batch
    number, leaf count and root. `C` is stored **in the same PostgreSQL database** as the events,
    so it is evidence only against someone who did not also rewrite the batch rows.
-4. **Public anchoring (not built).** Publishing `C` to Polygon Amoy — the step that would give
-   independent, third-party evidence — does not exist: no contract (`contracts/` is a
-   placeholder), no chain adapter, no receipts, no submission. UI copy says "local Merkle batch",
-   not "blockchain".
+4. **Public anchoring (implemented, ADR-035 accepted for local implementation; not deployed publicly).** The operator
+   CLI publishes `C` to the `AuditCommitmentRegistry` contract on an allow-listed testnet
+   (Amoy 80002 / Sepolia 11155111 / local 31337 — never mainnet) and records the submission;
+   verification re-reads the contract for the `C` recomputed from the locally verified batch and
+   checks the receipt's `CommitmentAnchored(C)` event. Exercised end to end on a local `anvil`
+   chain; no public testnet transaction exists yet. UI keeps "local Merkle batch" and "public
+   blockchain anchoring" as separate sections.
 
 ## What Goes On-Chain (and what never does)
 
@@ -76,7 +79,8 @@ commitments, database-only reconciliation; the opt-in PostgreSQL tests (includin
 0007) run in CI job `backend-postgres`. **Built since (2026-10-25):** the verification API and
 patient UI described in §Verification surfaces. **Deferred** — the scheduler and everything
 chain-facing: on-chain batch submission, receipts, chain-side verification. The M6 gate is not
-complete; M6.4 is not authorized.
+complete. *(Update 2026-10-26: chain-facing submission and verification now exist — ADR-035,
+accepted for design and local implementation; public-testnet deployment pending.)*
 
 ### Verification surfaces (API and UI)
 

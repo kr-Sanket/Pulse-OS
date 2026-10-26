@@ -6,6 +6,9 @@ Provides demonstrable, repeatable workflows for:
 2. Verifying sealed batches against stored Merkle roots and Keccak commitments.
 3. Generating and independently verifying Merkle proofs for individual audit records.
 4. Reconciling database audit records and detecting missing, modified, or inconsistent rows.
+5. Submitting a sealed batch's opaque commitment to the public-testnet registry, confirming
+   it, and independently re-reading it from the chain (ADR-035: anchor, anchor-refresh,
+   verify-chain). Only the 32-byte commitment is published.
 
 Supports human-readable terminal output and machine-readable JSON output (--json).
 Zero PHI is included in Merkle leaves, root metadata, proofs, or CLI output.
@@ -252,6 +255,24 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile",
         help="reconcile all audit batches and events across the database to detect tampering",
     )
+
+    # anchor / anchor-refresh / verify-chain (ADR-035)
+    for name, help_text in (
+        ("anchor", "submit a sealed batch's commitment to the configured testnet registry"),
+        ("anchor-refresh", "advance a pending submission to CONFIRMED or FAILED"),
+        ("verify-chain", "re-read a batch's commitment from the chain and compare (read-only)"),
+    ):
+        chain_parser = subparsers.add_parser(name, help=help_text)
+        chain_parser.add_argument(
+            "--batch-number", type=int, required=True, help="sequential batch number"
+        )
+        if name != "verify-chain":
+            chain_parser.add_argument(
+                "--confirm-env",
+                type=str,
+                default=None,
+                help="explicit confirmation of target environment (as for seal)",
+            )
 
     return parser
 
@@ -563,6 +584,76 @@ async def _run_reconcile(
     return 0 if report.consistent else 1
 
 
+def _anchor_payload(batch_number: int, outcome: Any) -> dict[str, Any]:
+    anchor = outcome.anchor
+    return {
+        "batch_number": batch_number,
+        "action": outcome.action.value,
+        "anchor": None
+        if anchor is None
+        else {
+            "network": anchor.network,
+            "chain_id": anchor.chain_id,
+            "contract_address": anchor.contract_address,
+            "commitment": anchor.commitment,
+            "status": anchor.status.value,
+            "tx_hash": anchor.tx_hash,
+            "block_number": anchor.block_number,
+            "failure_reason": anchor.failure_reason,
+        },
+    }
+
+
+async def _run_chain_command(
+    command: str, service: Any, session: Any, batch_number: int, json_output: bool
+) -> int:
+    """anchor / anchor-refresh / verify-chain. Exit 0 on success, 1 on a negative result."""
+    from app.modules.consent.chain_anchor_service import (
+        ChainVerificationStatus,
+        SubmissionAction,
+    )
+
+    if command == "verify-chain":
+        view = await service.status(batch_number)
+        data = {
+            "batch_number": batch_number,
+            "local_status": "VALID" if view.local.is_valid else "TAMPERED",
+            "root": view.batch.root,
+            "commitment": view.batch.commitment,
+            "expected_commitment": view.chain.expected_commitment,
+            "network": view.network,
+            "chain_id": view.chain_id,
+            "contract_address": view.contract_address,
+            "submission_status": None if view.anchor is None else view.anchor.status.value,
+            "tx_hash": None if view.anchor is None else view.anchor.tx_hash,
+            "chain_verification": view.chain.status.value,
+            "on_chain_block_number": view.chain.on_chain_block_number,
+            "checked_at": view.chain.checked_at.isoformat(),
+        }
+        if json_output:
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"=== On-chain verification: batch #{batch_number} ===")
+            for key, value in data.items():
+                print(f"  {key + ':':<24}{value}")
+        return 0 if view.chain.status is ChainVerificationStatus.VERIFIED else 1
+
+    if command == "anchor":
+        outcome = await service.submit(batch_number)
+    else:
+        outcome = await service.refresh(batch_number)
+    await session.commit()
+    data = _anchor_payload(batch_number, outcome)
+    if json_output:
+        print(json.dumps(data, indent=2))
+    else:
+        print(f"=== {command}: batch #{batch_number} -> {data['action']} ===")
+        for key, value in (data["anchor"] or {}).items():
+            print(f"  {key + ':':<20}{value}")
+    failed = outcome.action in {SubmissionAction.FAILED, SubmissionAction.NOT_SUBMITTED}
+    return 1 if failed else 0
+
+
 async def run(
     args: argparse.Namespace,
     *,
@@ -583,15 +674,29 @@ async def run(
 
     from app.core.config import get_settings
     from app.core.db import create_db_engine, create_session_factory
-    from app.modules.consent.dependencies import build_audit_batch_service
+    from app.modules.consent.dependencies import (
+        build_audit_batch_service,
+        build_batch_anchor_service,
+        build_commitment_registry,
+    )
 
     if settings is None:
         settings = get_settings()
 
+    chain_commands = {"anchor", "anchor-refresh", "verify-chain"}
+    registry = None
+    if args.command in chain_commands:
+        registry = build_commitment_registry(settings, with_signer=args.command == "anchor")
+        if registry is None:
+            raise AuditSafetyError(
+                "Chain anchoring is not configured (PULSEOS_CHAIN_RPC_URL, PULSEOS_CHAIN_ID, "
+                "PULSEOS_CHAIN_CONTRACT_ADDRESS)."
+            )
+
     # GUARD: Must run before standalone database engine creation,
     # session-factory construction, or any database access.
     # An injected session_factory is NOT an automatic bypass.
-    if args.command == "seal":
+    if args.command in {"seal", "anchor", "anchor-refresh"}:
         ensure_sealing_safety(
             settings=settings,
             confirm_env=getattr(args, "confirm_env", None),
@@ -605,6 +710,11 @@ async def run(
 
     try:
         async with factory() as session:
+            if args.command in chain_commands:
+                anchor_svc = build_batch_anchor_service(session, settings, registry)
+                return await _run_chain_command(
+                    args.command, anchor_svc, session, args.batch_number, args.json_output
+                )
             svc = build_audit_batch_service(session, settings)
             if args.command == "seal":
                 return await _run_seal(svc, session, args.limit, args.json_output)

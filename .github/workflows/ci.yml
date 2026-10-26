@@ -130,3 +130,23 @@ jobs:
 
       - name: Production build
         run: pnpm build
+
+  contracts:
+    name: Contracts (Foundry)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Format check
+        run: forge fmt --check
+
+      - name: Build
+        run: forge build
+
+      - name: Test
+        run: forge test -vv

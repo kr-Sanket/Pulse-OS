@@ -59,8 +59,11 @@ FHIR-export, consent-revalidation and audit-verification rows updated 2026-10-25
   recomputes **and** its Merkle path against the stored batch root verifies; tampered membership
   yields `ANCHOR_ALTERED`, never a 500. Sealing is manual via the CLI, guarded by an explicit
   environment confirmation (`--confirm-env`).
-- **What this does not provide yet:** independent, public-chain evidence. Nothing is submitted to
-  any chain; local-dev anchors are a simulation. A consistent rewrite of an unsealed event, or
+- **What this does not provide yet:** independent, public-chain evidence. Public-testnet
+  anchoring of batch commitments is implemented in the working tree (ADR-035, accepted for local implementation;
+  testnet chain ids only, key read only by the operator CLI, RPC URLs kept out of logs) but has
+  only been exercised on a local EVM — no public-testnet transaction exists. Local-dev
+  per-event anchors are a simulation. A consistent rewrite of an unsealed event, or
   deletion before sealing, is undetectable with database evidence alone.
 
 ## Data protection

@@ -51,6 +51,7 @@ from app.modules.consent.errors import (
 from app.modules.consent.models import (
     AuditAnchorEntry,
     AuditBatch,
+    AuditBatchAnchor,
     AuditBatchMember,
     AuditLog,
     ConsentDecision,
@@ -816,3 +817,37 @@ class AuditBatchRepository:
             .order_by(AuditBatchMember.batch_id, AuditBatchMember.leaf_index)
         )
         return [(member, event) for member, event in result.tuples()]
+
+
+class AuditBatchAnchorRepository:
+    """Persistence for batch submissions to a public-chain registry (ADR-035).
+
+    One row per ``(batch, network)``. Flushes, never commits: the operator CLI owns the
+    transaction. Not append-only by design — a submission moves PENDING → CONFIRMED/FAILED
+    and a FAILED one may be retried — but a CONFIRMED row is never rewritten (enforced by
+    ``BatchAnchorService``).
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get(self, *, batch_id: UUID, network: str) -> AuditBatchAnchor | None:
+        result = await self._session.execute(
+            select(AuditBatchAnchor).where(
+                AuditBatchAnchor.batch_id == batch_id, AuditBatchAnchor.network == network
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_for_batch(self, batch_id: UUID) -> list[AuditBatchAnchor]:
+        result = await self._session.execute(
+            select(AuditBatchAnchor)
+            .where(AuditBatchAnchor.batch_id == batch_id)
+            .order_by(AuditBatchAnchor.network)
+        )
+        return list(result.scalars())
+
+    async def save(self, anchor: AuditBatchAnchor) -> AuditBatchAnchor:
+        self._session.add(anchor)
+        await self._session.flush()
+        return anchor

@@ -23,7 +23,14 @@ import type { Tone } from "@/components/dashboard/StatusBadge";
 import { formatInstantDate, formatInstantTime, formatRelativeTime } from "@pulseos/ui";
 import { categoryLabel } from "@pulseos/ui";
 
-import type { ActorRole, AuditAction, AuditEvent, AuditIntegrity, AuditProof } from "./api";
+import type {
+  ActorRole,
+  AuditAction,
+  AuditEvent,
+  AuditIntegrity,
+  AuditProof,
+  BatchAnchor,
+} from "./api";
 
 /** Shown for an event whose actor this build cannot name — the projection found no staff
  * row, so the role is all the trail knows. */
@@ -193,8 +200,9 @@ export function toEventViews(
 // The verdict comes from the API (`integrity.status`), computed server-side on every read:
 // the row's digest is recomputed and, for a sealed event, proven a leaf of its Merkle batch.
 // The page words that verdict and nothing more. It never upgrades a row to "verified"
-// because it has a hash, and it never calls a local Merkle batch a blockchain anchor —
-// PulseOS publishes nothing to any chain today.
+// because it has a hash, and it never calls a local Merkle batch a blockchain anchor. A
+// batch's public-chain anchoring (ADR-035) is a separate verdict, shown only in the proof
+// dialog from `GET /audit-batches/{n}/anchor` — see `chainAnchorView` below.
 
 /** The batch network the API reports for local Merkle sealing (ADR-027). */
 export const LOCAL_MERKLE_BATCH_NETWORK = "local-merkle-batch";
@@ -229,7 +237,7 @@ export function integrityView(integrity: AuditIntegrity | null | undefined): Int
         label: "Integrity verified",
         tone: "success",
         detail: batched
-          ? "Unchanged since it was sealed into a local Merkle batch. Not anchored to a public blockchain."
+          ? "Unchanged since it was sealed into a local Merkle batch. This is a local check; the proof shows whether the batch is anchored on a public test network."
           : "Unchanged since it was anchored by the local development anchor. Not a public blockchain.",
         batched,
       };
@@ -283,6 +291,120 @@ export function proofRows(proof: AuditProof): readonly ProofRow[] {
     { label: "Batch Merkle root", value: proof.root, mono: true },
     { label: "Batch commitment", value: proof.commitment, mono: true },
   ];
+}
+
+// -- public-chain anchoring (ADR-035) ---------------------------------------------------
+//
+// Separate from the local verdict above and never merged into it. "Verified on-chain" is
+// shown only when the API has just re-read the registry contract and found the commitment
+// recomputed from the locally verified batch; a stored transaction hash alone is never
+// presented as proof. Networks are public *test* networks — never described as mainnet.
+
+const NETWORK_LABELS: Readonly<Record<string, string>> = {
+  "polygon-amoy": "Polygon Amoy testnet",
+  "ethereum-sepolia": "Ethereum Sepolia testnet",
+  "local-evm": "Local development chain",
+};
+
+export interface ChainAnchorView {
+  label: string;
+  tone: Tone;
+  detail: string;
+  rows: readonly ProofRow[];
+  explorerTxUrl: string | null;
+  explorerContractUrl: string | null;
+}
+
+const CHAIN_VERDICTS: Readonly<
+  Record<
+    BatchAnchor["chainVerification"]["status"],
+    Pick<ChainAnchorView, "label" | "tone" | "detail">
+  >
+> = {
+  NOT_CONFIGURED: {
+    label: "Not configured",
+    tone: "neutral",
+    detail: "Public-chain anchoring is not configured on this PulseOS deployment.",
+  },
+  UNAVAILABLE: {
+    label: "Chain unreachable",
+    tone: "warning",
+    detail: "The blockchain network could not be reached just now, so nothing was checked.",
+  },
+  LOCAL_INTEGRITY_FAILED: {
+    label: "Local check failed",
+    tone: "destructive",
+    detail:
+      "The batch no longer verifies locally, so there is no trustworthy commitment to compare on-chain.",
+  },
+  NOT_ON_CHAIN: {
+    label: "Not anchored yet",
+    tone: "warning",
+    detail: "This batch's commitment has not been recorded on the public test network yet.",
+  },
+  VERIFIED: {
+    label: "Verified on-chain",
+    tone: "success",
+    detail:
+      "Just re-read from the registry contract: it records exactly the commitment recomputed from this batch.",
+  },
+  MISMATCH: {
+    label: "On-chain mismatch",
+    tone: "destructive",
+    detail: "The blockchain does not match the anchoring record PulseOS holds for this batch.",
+  },
+};
+
+const SUBMISSION_LABELS: Readonly<Record<string, string>> = {
+  PENDING: "Submitted, awaiting confirmation",
+  CONFIRMED: "Confirmed",
+  FAILED: "Failed",
+};
+
+/** Only http(s) links reach an anchor tag, whatever the API returns. */
+function safeLink(url: string | null | undefined): string | null {
+  return typeof url === "string" && /^https?:\/\//.test(url) ? url : null;
+}
+
+export function chainAnchorView(anchor: BatchAnchor): ChainAnchorView {
+  const verdict = CHAIN_VERDICTS[anchor.chainVerification.status] ?? CHAIN_VERDICTS.UNAVAILABLE;
+  const rows: ProofRow[] = [];
+  if (anchor.network !== null && anchor.network !== undefined) {
+    rows.push({ label: "Network", value: NETWORK_LABELS[anchor.network] ?? anchor.network });
+  }
+  if (anchor.contractAddress) {
+    rows.push({ label: "Registry contract", value: anchor.contractAddress, mono: true });
+  }
+  const submission = anchor.anchor;
+  rows.push({
+    label: "Submission",
+    value: submission
+      ? (SUBMISSION_LABELS[submission.status] ?? submission.status)
+      : "Not submitted",
+  });
+  if (submission?.status === "FAILED" && submission.failureReason) {
+    rows.push({ label: "Failure reason", value: submission.failureReason, mono: true });
+  }
+  if (submission?.txHash) {
+    rows.push({ label: "Transaction", value: submission.txHash, mono: true });
+  }
+  const block = anchor.chainVerification.onChainBlockNumber ?? submission?.blockNumber;
+  if (block !== null && block !== undefined) {
+    rows.push({ label: "Block", value: `${block}` });
+  }
+  rows.push({ label: "Published commitment", value: anchor.commitment, mono: true });
+  rows.push({
+    label: "Checked",
+    value: `${formatInstantDate(anchor.chainVerification.checkedAt)}, ${formatInstantTime(
+      anchor.chainVerification.checkedAt,
+    )}`,
+  });
+  return {
+    ...verdict,
+    rows,
+    explorerTxUrl: safeLink(submission?.explorerTxUrl),
+    explorerContractUrl: safeLink(anchor.explorerContractUrl),
+  };
 }
 
 // -- the default view ------------------------------------------------------------------

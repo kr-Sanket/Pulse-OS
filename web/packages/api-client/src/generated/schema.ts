@@ -234,6 +234,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit-batches/{batch_number}/anchor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Audit Batch Anchor
+         * @description Local Merkle verification plus public-chain anchoring of one batch (ADR-035).
+         *
+         *     Read-only: reports the stored submission (network, contract, transaction, block) and
+         *     re-reads the registry contract for the commitment recomputed from the locally verified
+         *     batch. Never submits anything — submission is the operator CLI's
+         *     (``scripts/audit_integrity.py anchor``). ``chainVerification.status`` is ``VERIFIED``
+         *     only when the chain records the expected commitment and, for a confirmed submission, its
+         *     receipt carries that commitment from the configured registry.
+         *
+         *     Roles: any authenticated user, like ``GET /audit-batches/{n}`` (attestation material, no
+         *     PHI). Rate limited (``audit_batch_verify``) — each call recomputes the batch and makes
+         *     up to two RPC reads (bounded by ``chain_rpc_timeout_seconds``).
+         *     Failure modes: 401, 404 (no such batch), 422 (batch_number < 1), 429.
+         */
+        get: operations["get_audit_batch_anchor_api_v1_audit_batches__batch_number__anchor_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-logs": {
         parameters: {
             query?: never;
@@ -1512,6 +1544,38 @@ export interface components {
          * @enum {string}
          */
         AuditAction: "RECORD_UPLOADED" | "ACCESS_REQUESTED" | "CONSENT_APPROVED" | "CONSENT_REJECTED" | "CONSENT_REVOKED" | "RECORD_VIEWED" | "RECORD_DOWNLOADED" | "SUMMARY_GENERATED" | "ACCESS_DENIED" | "RECORDS_LISTED" | "RECORDS_SEARCHED" | "RECORD_EXPORTED";
+        /**
+         * AuditBatchAnchorResponse
+         * @description Local Merkle verification and public-chain anchoring of one sealed batch, side by side.
+         *
+         *     Zero PHI: batch metadata, hashes and chain coordinates only. Only ``commitment`` is ever
+         *     published on-chain; the Merkle ``root`` stays off-chain (ADR-027 decision 12).
+         */
+        AuditBatchAnchorResponse: {
+            anchor: components["schemas"]["ChainAnchorSubmissionResponse"] | null;
+            /** Batchnumber */
+            batchNumber: number;
+            /** Chainid */
+            chainId: number | null;
+            chainVerification: components["schemas"]["ChainVerificationResponse"];
+            /** Commitment */
+            commitment: string;
+            /** Contractaddress */
+            contractAddress: string | null;
+            /** Explorercontracturl */
+            explorerContractUrl: string | null;
+            /** Leafcount */
+            leafCount: number;
+            /**
+             * Localstatus
+             * @enum {string}
+             */
+            localStatus: "VALID" | "TAMPERED";
+            /** Network */
+            network: string | null;
+            /** Root */
+            root: string;
+        };
         /** AuditBatchFindingResponse */
         AuditBatchFindingResponse: {
             /** Auditlogid */
@@ -1748,6 +1812,54 @@ export interface components {
         CategorySelectionRequest: {
             /** Categorycodes */
             categoryCodes: string[];
+        };
+        /**
+         * ChainAnchorSubmissionResponse
+         * @description The stored submission of a batch commitment to a public-chain registry (ADR-035).
+         *
+         *     Operational record only — whether the commitment is really on-chain is
+         *     ``chainVerification``, re-read from the chain on every request.
+         */
+        ChainAnchorSubmissionResponse: {
+            /** Blocknumber */
+            blockNumber: number | null;
+            /** Blocktimestamp */
+            blockTimestamp: string | null;
+            /** Confirmedat */
+            confirmedAt: string | null;
+            /** Explorertxurl */
+            explorerTxUrl: string | null;
+            /** Failurereason */
+            failureReason: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "PENDING" | "CONFIRMED" | "FAILED";
+            /** Submittedat */
+            submittedAt: string | null;
+            /** Txhash */
+            txHash: string | null;
+        };
+        /**
+         * ChainVerificationResponse
+         * @description A fresh read of the registry for the batch's expected commitment.
+         */
+        ChainVerificationResponse: {
+            /**
+             * Checkedat
+             * Format: date-time
+             */
+            checkedAt: string;
+            /** Expectedcommitment */
+            expectedCommitment: string | null;
+            /** Onchainblocknumber */
+            onChainBlockNumber: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "NOT_CONFIGURED" | "UNAVAILABLE" | "LOCAL_INTEGRITY_FAILED" | "NOT_ON_CHAIN" | "VERIFIED" | "MISMATCH";
         };
         /**
          * ConsentDecisionResponse
@@ -3066,6 +3178,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditBatchResponse"];
+                };
+            };
+            /** @description Missing or invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Audit batch not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+            /** @description Rate limit exceeded */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": unknown;
+                };
+            };
+        };
+    };
+    get_audit_batch_anchor_api_v1_audit_batches__batch_number__anchor_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditBatchAnchorResponse"];
                 };
             };
             /** @description Missing or invalid credentials */

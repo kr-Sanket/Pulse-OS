@@ -79,6 +79,10 @@ PHI_BEARING_LOGGERS: Final = (
     "pypdf",
 )
 
+#: HTTP client libraries log every request URL at INFO. A chain RPC URL commonly embeds the
+#: provider's API key in its path (ADR-035), so these are pinned to WARNING like the above.
+SECRET_BEARING_LOGGERS: Final = ("httpx", "httpcore")
+
 
 def configure_logging(level: str) -> None:
     """Route all logging (including uvicorn's) through one JSON handler on stdout."""
@@ -98,5 +102,5 @@ def configure_logging(level: str) -> None:
     # Database drivers log statements *with bound parameters* at INFO/DEBUG — patient names,
     # extracted document text. They inherit the root level, so PULSEOS_LOG_LEVEL=DEBUG would
     # otherwise write PHI to the log. Pinned to WARNING whatever the root level (SECURITY.md).
-    for name in PHI_BEARING_LOGGERS:
+    for name in (*PHI_BEARING_LOGGERS, *SECRET_BEARING_LOGGERS):
         logging.getLogger(name).setLevel(logging.WARNING)
