@@ -58,7 +58,8 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
   history.
 - **Audit events are written in the same transaction** as the authorization decision they record.
 - **Processing status** on DocumentReference: `UPLOADED → PROCESSING → INDEXED | FAILED` is
-  modeled (ADR-008), but only `UPLOADED` is ever written — no worker advances it yet.
+  modeled (ADR-008). The upload worker (ADR-033) writes `INDEXED` or `FAILED` for PDFs; images
+  stay `UPLOADED`; `PROCESSING` is never written.
 
 ## Physical tables (from migrations and models, 2026-10-26)
 

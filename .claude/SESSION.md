@@ -5,7 +5,86 @@
 
 ---
 
-## Session 021 — 2026-10-25 · ← CURRENT STATE
+## Session 022 — 2026-10-26 · ← CURRENT STATE
+
+**Branch:** `main`. Committed **locally, not pushed** (PO-approved split) as three commits on
+`3343e03`: `c2a580f` (ADR-034), `e3c477a` (ADR-035) and the demo/AI/handoff commit after them. No push, merge, PR or deployment. Brief: PO "final feature implementation" request of 2026-10-26, which explicitly
+asked for public-testnet anchoring — recorded as proposed ADR-035 pending formal acceptance.
+
+### Work
+- **ADR-034 hospital lifecycle** (pre-existing uncommitted Slices 1–3, reviewed and finished):
+  fixed stale identity-map read under `FOR UPDATE` (`records/repository.py`, `populate_existing`),
+  doctor app badge map for REJECTED/SUSPENDED (tsc/build were failing), admin history panel
+  error/staleness. New PostgreSQL tests (real audit-insert rollback, lock blocking, concurrent
+  identical transitions, stale row) and an HTTP test that suspension keeps consent/access but
+  blocks upload/lookup/registration. ADR-034 text added to DECISIONS.md (Proposed).
+- **ADR-035 public-testnet anchoring (M6.4):** `contracts/` (Foundry, `AuditCommitmentRegistry`,
+  10 tests incl. ADR-027 pinned vectors); `consent/chain.py` (port + JSON-RPC adapter, chain-id
+  allow-list 80002/11155111/31337, EIP-55 normalisation, code-only errors); `consent/
+  chain_anchor_service.py` (retry-safe submit, refresh with receipt-event + confirmations +
+  contract-state check, on-demand verification); `AuditBatchAnchor` + migration **0011** (head);
+  CLI `anchor`/`anchor-refresh` (guarded like `seal`) and `verify-chain`; read-only
+  `GET /api/v1/audit-batches/{n}/anchor`; patient proof dialog "Public blockchain anchoring"
+  section; `eth-account` dependency; `.env.example`; CI `contracts` job; OpenAPI/client regenerated.
+  Security fix found on the way: `httpx` logs full request URLs at INFO (RPC URLs embed keys) —
+  pinned `httpx`/`httpcore` to WARNING.
+- **Workflows C/D:** `tests/test_demo_sharing_workflow.py`, `tests/test_demo_ai_workflow.py`
+  (whole sequences over HTTP); AI panels now label an uncited generated answer "Answer without
+  citations" instead of "no evidence". `docs/DEMO_GUIDE.md` written.
+
+### Quality gates (2026-10-26, local working tree — not CI)
+| Gate | Result |
+|---|---|
+| backend pytest + scratch PostgreSQL (127.0.0.1:55432) + anvil EVM | **1475 passed, 0 skipped** |
+| backend pytest default | **1436 passed, 39 skipped** (3 consecutive runs); one earlier run had `test_m3_gate::test_the_four_buckets_are_independent_of_one_another` fail once — pre-existing real-clock fixed-window flake, passes in isolation |
+| ruff check / format, mypy strict | clean (189 files) |
+| contracts `forge fmt --check` / `forge test` | clean / **10 passed** |
+| web lint / format / typecheck | clean |
+| web vitest | **727 passed** (api-client 17, ui 35, doctor 160, patient 243, hospital 272) |
+| web build | all three apps build |
+
+### Pre-commit reliability gate (same day)
+- **Activation vs. suspension race fixed:** activation now re-reads the hospital under
+  `FOR SHARE` (`HospitalRepository.get_by_id_for_share`) before touching the doctor; lock order
+  "hospital row first" documented in ADR-034 decision 10. PostgreSQL tests cover both
+  interleavings, concurrent activations, and the request gate; the two race tests fail against
+  the old unlocked read (checked by temporarily reverting it, then restoring byte-identical).
+- **Policy adopted:** SUSPENDED/non-VERIFIED hospitals cannot open new consent requests (409,
+  before Health-ID resolution — no enumeration); existing grants still read; nothing revoked.
+  Service + HTTP tests. Gate: `ClinicianDirectory.hospital_accepts_new_requests` (same lock).
+- **Docs:** migration downgrade/recovery section (DATABASE_DESIGN.md), 0010/0011 docstrings,
+  ADR-034/035 reconciled with the code (ADR-035 separates local-EVM verification from the
+  not-performed public deployment), stale "nothing on-chain"/"no contract" lines corrected.
+- **Gates:** backend 1481 passed / 0 skipped (PostgreSQL + anvil), 1438 passed / 43 skipped
+  default (×2); ruff, mypy clean; forge 10 passed; web 727 passed; lint/format/typecheck/build
+  clean; regenerating the API client produces no diff.
+
+### Product Owner decisions (2026-10-26) and final gate
+- **ADR-034 accepted. ADR-035 accepted for design + local implementation only**; public-testnet
+  deployment and transaction verification remain pending — no public chain anchor exists.
+- **Existence discovery gated:** `RecordService.list_existing_categories` refuses a clinician of
+  a non-VERIFIED hospital with the existing `HospitalNotVerifiedError` → 409, before the Health
+  ID is resolved (identical for any ID). Granted listing, record reads, AI answers and FHIR
+  export under an existing grant are untouched — covered by `test_records_service.py`,
+  `test_m3_gate.py`, `test_demo_ai_workflow.py`.
+- **Final gates:** backend 1484 passed / 0 skipped (PostgreSQL + anvil), 1441 passed / 43
+  skipped default (×2); ruff, mypy clean (189 files); forge 10 passed; web 727 passed;
+  lint/format/typecheck/build clean; API client regenerates with no diff.
+
+### Not done / blockers
+- **No public-testnet deployment or transaction**: no RPC endpoint, deployer key or test funds
+  were available. Never claim one until `verify-chain` reports VERIFIED against a real Amoy tx.
+- Commit (suggest two commits: ADR-034 series, ADR-035 series) and run CI.
+- No sealing/anchoring scheduler; admin history first page only; records-side 409 wording
+  ("not verified yet") also used for SUSPENDED.
+
+### Exact next step
+PO pushes the three local commits when ready → check CI (new `contracts` job) → fund a testnet-only key and deploy to Amoy
+per `contracts/README.md` → `anchor` a sealed demo batch → record tx hash/explorer link here.
+
+---
+
+## Session 021 — 2026-10-25
 
 **Read this entry alone to know where the project stands.** Everything below it is history.
 

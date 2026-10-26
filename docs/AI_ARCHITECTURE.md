@@ -21,8 +21,8 @@ Backfill (scripts/backfill_ai.py)           ─┘      1. normalize   ai/text.p
 - **Source data is sanitized FHIR R4 JSON** written by the Synthea import (see
   [DOMAIN_MODEL.md](DOMAIN_MODEL.md) §Synthetic data). Ingestion runs inside the import, or later
   from `scripts/backfill_ai.py` over records already in object storage.
-- **Uploaded PDFs with a text layer are indexed; images and scanned PDFs are not** (branch
-  `feature/upload-ai-indexing`, proposed ADR-033). `POST /records` enqueues `record_uploaded`;
+- **Uploaded PDFs with a text layer are indexed; images and scanned PDFs are not** (ADR-033,
+  Accepted; merged in PR #4). `POST /records` enqueues `record_uploaded`;
   the arq worker (`records/upload_indexing.py`) reads the object, extracts text with `pypdf`
   (`records/text_extraction.py`, ≤ 300 pages / 500 000 characters) and writes `ai_documents` /
   `ai_chunks` with the record's patient and category, then sets `processing_status`:

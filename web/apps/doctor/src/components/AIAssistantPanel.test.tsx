@@ -360,3 +360,26 @@ test("16. Regression: PatientRecordsPage passes resolved internal UUID to assist
 
   assistantSpy.mockRestore();
 });
+
+// 17. "No citations" is two different answers, and only one of them is "no evidence".
+test("17. answerKind separates cited, no-evidence and uncited answers", () => {
+  const citation = {
+    citationIndex: 1,
+    recordId: "rec-1",
+    categoryCode: "LAB_REPORT",
+    chunkIndex: 0,
+  };
+
+  expect(assistantModule.answerKind({ answer: "Ferritin low [1].", citations: [citation] })).toBe(
+    "cited",
+  );
+  expect(
+    assistantModule.answerKind({ answer: assistantModule.NO_EVIDENCE_ANSWER, citations: [] }),
+  ).toBe("no-evidence");
+  // A model answer whose markers were all removed as unsupported: generated text, no evidence
+  // link — must not be labelled "No matching clinical evidence found".
+  expect(assistantModule.answerKind({ answer: "Ferritin was low.", citations: [] })).toBe(
+    "uncited",
+  );
+  expect(assistantModule.UNCITED_ANSWER_NOTE).toMatch(/Verify it against the primary records/);
+});

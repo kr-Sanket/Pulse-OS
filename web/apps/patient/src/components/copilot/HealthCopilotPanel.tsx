@@ -37,6 +37,29 @@ export interface HealthCopilotPanelProps {
 
 export const MAX_QUESTION_LENGTH = 500;
 
+/** The backend's fixed answer when none of your records matched — returned without calling
+ * the model (`DEFAULT_EMPTY_EVIDENCE_ANSWER` in backend/app/modules/ai/query.py). */
+export const NO_EVIDENCE_ANSWER =
+  "The available medical records do not contain information regarding the requested topic.";
+
+/**
+ * Which of three answers this is. Only citations whose `[N]` marker appears in the text are
+ * returned, so "no citations" is either the fixed no-evidence sentence or a model answer that
+ * cited nothing — and the second must not be labelled "no matching records".
+ */
+export type AnswerKind = "cited" | "no-evidence" | "uncited";
+
+export function answerKind(response: Pick<AIAnswerResponse, "answer" | "citations">): AnswerKind {
+  if (response.citations.length > 0) {
+    return "cited";
+  }
+  return response.answer.trim() === NO_EVIDENCE_ANSWER ? "no-evidence" : "uncited";
+}
+
+export const UNCITED_ANSWER_TITLE = "Answer without citations";
+export const UNCITED_ANSWER_NOTE =
+  "This answer could not be linked to any of your records. Check your records, or ask your doctor, before relying on it.";
+
 export const SUGGESTED_QUESTIONS: readonly string[] = [
   "Summarize my active conditions",
   "Explain my latest lab reports",
@@ -107,7 +130,8 @@ export function HealthCopilotPanel({
     setQuery(suggestion);
   }
 
-  const isEvidenceEmpty = response !== null && response.citations.length === 0;
+  const kind = response === null ? null : answerKind(response);
+  const isEvidenceEmpty = kind === "no-evidence";
 
   return (
     <Card className={cn("border-border shadow-sm", className)} data-testid="health-copilot-panel">
@@ -274,9 +298,12 @@ export function HealthCopilotPanel({
               "space-y-4 rounded-lg border p-4.5 transition-colors",
               isEvidenceEmpty
                 ? "border-blue-200/60 bg-blue-50/40 dark:border-blue-900/40 dark:bg-blue-950/20"
-                : "border-border/80 bg-card",
+                : kind === "uncited"
+                  ? "border-amber-200/70 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/20"
+                  : "border-border/80 bg-card",
             )}
             data-testid="copilot-answer-container"
+            data-answer-kind={kind ?? undefined}
           >
             <div className="flex items-center gap-2">
               {isEvidenceEmpty ? (
@@ -284,6 +311,13 @@ export function HealthCopilotPanel({
                   <Info className="size-4 text-blue-600 dark:text-blue-400" aria-hidden />
                   <span className="text-xs font-semibold text-blue-900 dark:text-blue-300">
                     No matching medical records found
+                  </span>
+                </>
+              ) : kind === "uncited" ? (
+                <>
+                  <AlertCircle className="size-4 text-amber-600 dark:text-amber-400" aria-hidden />
+                  <span className="text-xs font-semibold text-amber-900 dark:text-amber-300">
+                    {UNCITED_ANSWER_TITLE}
                   </span>
                 </>
               ) : (
@@ -305,6 +339,15 @@ export function HealthCopilotPanel({
             >
               {response.answer}
             </p>
+
+            {kind === "uncited" && (
+              <p
+                className="text-amber-900 dark:text-amber-300 text-xs leading-relaxed"
+                data-testid="copilot-uncited-note"
+              >
+                {UNCITED_ANSWER_NOTE}
+              </p>
+            )}
 
             {response.citations.length > 0 && (
               <div

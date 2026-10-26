@@ -5,7 +5,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: mi
 
 ## [Unreleased]
 
-### Branch `feature/upload-ai-indexing` (uncommitted, awaiting review)
+### 2026-10-26 — `c2a580f`, `e3c477a` and the following demo/AI commit (local, not yet pushed)
+
+- **Added — hospital lifecycle (ADR-034, accepted):** REJECTED/SUSPENDED states, reinstatement,
+  SYSTEM_ADMIN lifecycle endpoints, append-only `hospital_audit_logs` (migration 0010), admin UI
+  history panel. Review fixes: stale-row `FOR UPDATE` read (`populate_existing`), doctor badge
+  map for new states, history error/staleness handling.
+- **Added — public-testnet anchoring (ADR-035, accepted for design + local implementation; public deployment pending):** `contracts/AuditCommitmentRegistry.sol`
+  (Foundry tests), `consent/chain.py` JSON-RPC adapter (testnet/local chain ids only),
+  `audit_batch_anchors` (migration 0011), CLI `anchor`/`anchor-refresh`/`verify-chain`,
+  `GET /api/v1/audit-batches/{n}/anchor`, patient proof-dialog chain section, CI `contracts` job.
+  Verified on a local anvil EVM; no public-testnet deployment yet.
+- **Security:** `httpx`/`httpcore` loggers pinned to WARNING (request URLs can embed RPC keys).
+- **Changed — suspended hospitals (ADR-034, PO decisions 2026-10-26):** clinicians of a
+  non-VERIFIED hospital can no longer open new access requests or run record-existence
+  discovery (409, before Health-ID resolution); reads, AI answers and FHIR export under
+  existing grants continue. Doctor activation and the request gate take a shared hospital-row
+  lock (hospital first), closing the activation/suspension race; PostgreSQL race tests added.
+- **Fixed — AI panels:** an uncited generated answer is labelled "Answer without citations"
+  instead of "no evidence found".
+- **Tests:** whole-workflow HTTP tests for patient→doctor sharing and AI-over-uploaded-PDF;
+  `docs/DEMO_GUIDE.md`.
+
+### ADR-033 upload AI indexing (merged in PR #4)
 
 - **Added — uploaded-record AI indexing:** the `record_uploaded` worker indexes text-layer PDFs
   (`pypdf`) into local AI retrieval and sets `processing_status` (`INDEXED` / `FAILED`); images

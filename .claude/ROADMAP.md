@@ -199,7 +199,8 @@ commitment per batch on-chain (amends ADR-004 decision 2; no per-event on-chain 
   a disposable scratch PostgreSQL 16, and CI job `backend-postgres` runs them (commits pushed;
   GitHub results not yet checked). *(Superseded: the CLI (`e350b2a`/`278bbfc`) now seals and
   reconciles, and API v3 (`c7e5359`) verifies batched v3 events — see Final review priorities.)*
-- **M6.4 — not authorized.**
+- **M6.4 — design and local implementation accepted (ADR-035, 2026-10-26); verified on a local
+  `anvil` EVM. Public-testnet (Amoy) deployment and transaction verification pending.**
 - **Later (deferred by ADR-027):** receipts and retry-safe submission; Solidity commitment registry
   and `PolygonAuditAnchor` on Amoy; scheduler; reconciliation CLI with chain-side checks; integrity
   API/frontend; graceful degradation when the testnet is down (never block consent flow). See
@@ -242,15 +243,21 @@ Detail and acceptance criteria: TODO.md §0a.
    verification controls in hospital portal (`AdminLayout`).
    Verifier user ID and timestamp are now persisted (`15e0b1c`, migration 0009) and shown in the
    admin verification queue.
-   *Remaining gaps:* no administrative audit event for verification (schema blocker, needs an ADR);
-   hospital rejection/suspension lifecycle not implemented (PO policy decision).
+   **2026-10-26 (`c2a580f`, local; ADR-034 accepted):** REJECTED/SUSPENDED lifecycle,
+   reinstatement, `hospital_audit_logs` (migration 0010), SYSTEM_ADMIN endpoints and UI history.
+   Suspended hospitals open no new consent requests and start no new existence discovery;
+   activation/request gate are race-free (hospital-row lock order, PostgreSQL-tested).
+   *Remaining gaps:* no CHECK on `hospitals.verification_status`; history panel first page only.
 4. ✅ **Demonstrable audit integrity (local)** — CLI (`e350b2a`) with an environment safety guard on
    `seal` (`278bbfc`); API v3 verification, per-event Merkle proofs and batch verification (`c7e5359`);
    Session 021: VERIFIED requires Merkle inclusion on every surface, proof endpoint returns
    a verdict instead of 500 on tampered membership, patient Audit History shows the per-entry verdict
    and a proof dialog.
    *Remaining gaps:* no sealing scheduler (seal manually before a demo); no append-only DB triggers;
-   commitments are local only. Public-chain anchoring stays deferred (Polygon Amoy / M6.4 not authorized).
+   **2026-10-26 (`e3c477a`, local; ADR-035 accepted for design + local implementation):** public-testnet anchoring implemented — Solidity
+   registry + Foundry tests, JSON-RPC adapter, migration 0011, operator CLI, read-only anchor API,
+   patient proof-dialog chain section — verified on a local `anvil` EVM only. **No public-testnet
+   deployment or transaction yet** (no RPC/key/funds available).
 5. ✅ **FHIR R4 export** (`2e05ee4`, consent re-check `0ea4bac`) — consent-enforced, audited, read-only
    `collection` Bundle: patients export their own records (patient portal button, Session 021);
    clinicians export currently granted, non-hidden categories (API only).

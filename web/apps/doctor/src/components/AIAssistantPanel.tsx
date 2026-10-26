@@ -39,6 +39,31 @@ export interface AIAssistantPanelProps {
 
 export const MAX_QUESTION_LENGTH = 500;
 
+/** The backend's fixed answer when no consented evidence matched (or a clinician answer was
+ * discarded because consent changed mid-generation) — `DEFAULT_EMPTY_EVIDENCE_ANSWER` in
+ * backend/app/modules/ai/query.py. Returned without calling the model. */
+export const NO_EVIDENCE_ANSWER =
+  "The available medical records do not contain information regarding the requested topic.";
+
+/**
+ * Which of three answers this is. The backend keeps only citations whose `[N]` marker is in
+ * the text, so "no citations" covers two different outcomes: the fixed no-evidence sentence,
+ * and a model answer none of whose statements carried a valid marker. Labelling the second as
+ * "no evidence found" would misdescribe a generated, unverifiable answer.
+ */
+export type AnswerKind = "cited" | "no-evidence" | "uncited";
+
+export function answerKind(response: Pick<AIAnswerResponse, "answer" | "citations">): AnswerKind {
+  if (response.citations.length > 0) {
+    return "cited";
+  }
+  return response.answer.trim() === NO_EVIDENCE_ANSWER ? "no-evidence" : "uncited";
+}
+
+export const UNCITED_ANSWER_TITLE = "Answer without citations";
+export const UNCITED_ANSWER_NOTE =
+  "No statement in this answer could be linked to a cited record. Verify it against the primary records before relying on it.";
+
 export function AIAssistantPanel({
   patientId,
   patientHealthId,
@@ -98,7 +123,8 @@ export function AIAssistantPanel({
     setErrorMessage(null);
   }
 
-  const isEvidenceEmpty = response !== null && response.citations.length === 0;
+  const kind = response === null ? null : answerKind(response);
+  const isEvidenceEmpty = kind === "no-evidence";
 
   return (
     <Card className={cn("border-border shadow-sm", className)} data-testid="ai-assistant-panel">
@@ -234,9 +260,12 @@ export function AIAssistantPanel({
               "space-y-4 rounded-lg border p-4.5 transition-colors",
               isEvidenceEmpty
                 ? "border-blue-200/60 bg-blue-50/40 dark:border-blue-900/40 dark:bg-blue-950/20"
-                : "border-border/80 bg-card",
+                : kind === "uncited"
+                  ? "border-amber-200/70 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/20"
+                  : "border-border/80 bg-card",
             )}
             data-testid="ai-answer-container"
+            data-answer-kind={kind ?? undefined}
           >
             <div className="flex items-center gap-2">
               {isEvidenceEmpty ? (
@@ -244,6 +273,13 @@ export function AIAssistantPanel({
                   <Info className="size-4 text-blue-600 dark:text-blue-400" aria-hidden />
                   <span className="text-xs font-semibold text-blue-900 dark:text-blue-300">
                     No matching clinical evidence found
+                  </span>
+                </>
+              ) : kind === "uncited" ? (
+                <>
+                  <AlertCircle className="size-4 text-amber-600 dark:text-amber-400" aria-hidden />
+                  <span className="text-xs font-semibold text-amber-900 dark:text-amber-300">
+                    {UNCITED_ANSWER_TITLE}
                   </span>
                 </>
               ) : (
@@ -265,6 +301,15 @@ export function AIAssistantPanel({
             >
               {response.answer}
             </p>
+
+            {kind === "uncited" && (
+              <p
+                className="text-amber-900 dark:text-amber-300 text-xs leading-relaxed"
+                data-testid="ai-uncited-note"
+              >
+                {UNCITED_ANSWER_NOTE}
+              </p>
+            )}
 
             {response.citations.length > 0 && (
               <div

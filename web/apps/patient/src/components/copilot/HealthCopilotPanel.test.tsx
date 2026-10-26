@@ -4,7 +4,14 @@ import { renderToString } from "react-dom/server";
 import type { PulseOSClient, AIAnswerResponse } from "@pulseos/api-client";
 import { generatePatientSelfAnswer, AIClientError, getAIErrorMessage } from "@pulseos/api-client";
 
-import { HealthCopilotPanel, MAX_QUESTION_LENGTH, SUGGESTED_QUESTIONS } from "./HealthCopilotPanel";
+import {
+  answerKind,
+  HealthCopilotPanel,
+  MAX_QUESTION_LENGTH,
+  NO_EVIDENCE_ANSWER,
+  SUGGESTED_QUESTIONS,
+  UNCITED_ANSWER_TITLE,
+} from "./HealthCopilotPanel";
 
 interface StubResult {
   data?: unknown;
@@ -242,4 +249,19 @@ test("10. Privacy: localStorage, sessionStorage, and console are never touched f
   // No internal patient identifiers leaked in DOM
   expect(html).not.toContain("00000000-0000-0000-0000-");
   expect(html).not.toContain("PHI-IND-");
+});
+
+// 11. "No citations" is two different answers, and only one of them is "no matching records".
+test("11. answerKind separates cited, no-evidence and uncited answers", () => {
+  const citation = {
+    citationIndex: 1,
+    recordId: "rec-1",
+    categoryCode: "LAB_REPORT",
+    chunkIndex: 0,
+  };
+
+  expect(answerKind({ answer: "Your ferritin was low [1].", citations: [citation] })).toBe("cited");
+  expect(answerKind({ answer: NO_EVIDENCE_ANSWER, citations: [] })).toBe("no-evidence");
+  expect(answerKind({ answer: "Your ferritin was low.", citations: [] })).toBe("uncited");
+  expect(UNCITED_ANSWER_TITLE).not.toMatch(/No matching/);
 });

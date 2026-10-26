@@ -5,7 +5,7 @@
 > Owner codes: FE (frontend lead), BE (backend lead), AI (AI+blockchain lead), PO (product owner), ANY (whoever/Claude).
 
 **Milestones:** M0 ✅ · M2 ✅ · M3 ✅ (gate criteria met in code) · **M4 substantially
-done — notifications, per-category consent decisions, System Admin provisioning/directory/dashboard and verifier metadata shipped; QR, the verification audit event and hospital rejection remain** · **M5 (AI) partially built** · **M6.1–M6.3 ✅** (local only, CLI sealing workflow available; M6.4+ **not authorized**) · M7 (hardening/deploy/paper) **not started**.
+done — notifications, per-category consent decisions, System Admin provisioning/directory/dashboard and verifier metadata shipped; QR, the verification audit event and hospital rejection remain** · **M5 (AI) partially built** · **M6.1–M6.3 ✅** (local only, CLI sealing workflow available); **M6.4 design + local implementation accepted (ADR-035), public-testnet deployment pending** · M7 (hardening/deploy/paper) **not started**.
 
 State as of 2026-10-25: Session 021's series and the four earlier commits are pushed to
 `origin/main`; its CI result is in GitHub Actions (last in-repo record: run #17 on `d09d721`). Full picture: [SESSION.md](SESSION.md) §Session 021. Milestone status is owned by ROADMAP.md.
@@ -33,6 +33,22 @@ State as of 2026-10-25: Session 021's series and the four earlier commits are pu
       2026-10-25, together with the ADR-027 decision-7 amendment.
 - [ ] ANY: backend OpenAPI drift check in CI — blocked on a Python lockfile (CI could resolve
       different FastAPI/Pydantic versions and produce spurious spec diffs).
+
+## 0b. Session 022 follow-ups (2026-10-26)
+
+- [x] PO: ADR-034 accepted; ADR-035 accepted for design + local implementation (2026-10-26).
+- [x] Committed locally: `c2a580f` (ADR-034), `e3c477a` (ADR-035), then demo/AI/handoff commit.
+- [ ] Push when ready and check CI (including the new `contracts` job).
+- [ ] Ops: dedicated testnet-only anchorer key + Amoy test POL + RPC endpoint → deploy registry
+      (`contracts/README.md`) → `anchor` / `anchor-refresh` / `verify-chain` a demo batch.
+- [x] PO policy (2026-10-26): SUSPENDED hospitals cannot open new consent requests — implemented (409).
+- [x] BE: hospital-row lock order for activation / request gate vs. transitions — implemented + PostgreSQL race tests.
+- [ ] BE: records-side 409 wording for SUSPENDED ("Hospital is not verified yet.").
+- [x] PO (2026-10-26): suspended hospitals start no new existence discovery — implemented (409).
+- [ ] FE: "load more" in the admin hospital history panel.
+- [ ] Test: make `test_m3_gate::test_the_four_buckets_are_independent_of_one_another` clock-independent
+      (fixed-window boundary flake).
+- [ ] Sealing/anchoring scheduler (arq cron) — still not built.
 
 ## 0a. Final review priorities (status 2026-10-25)
 
@@ -88,7 +104,7 @@ Items 1, 2, 4 and 5 are implemented for the review item 3 is partial.
    integrity badge + proof dialog.
    - [ ] BE: sealing scheduler (`audit_batch_interval_seconds` is configured but unused).
    - [ ] BE: append-only enforcement in the database (trigger/REVOKE) — needs a migration + ADR.
-   Public-chain anchoring stays deferred (Polygon Amoy / M6.4 not authorized).
+   Public-chain anchoring: implemented and accepted locally (ADR-035); Amoy deployment pending (§0b).
 5. [x] BE/FE: **FHIR R4 export** — `GET /records/export/fhir` (`2e05ee4`, re-check `0ea4bac`);
    patient portal download (Session 021). Still open:
    - [ ] BE: validate exported Bundles with an HL7 validator (none in the toolchain today).
