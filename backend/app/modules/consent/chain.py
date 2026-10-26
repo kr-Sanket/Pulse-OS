@@ -202,14 +202,18 @@ class JsonRpcCommitmentRegistry:
         contract_address: str,
         signer: Signer | None = None,
         timeout_seconds: float = 10.0,
+        min_priority_fee_per_gas: int = 0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        if min_priority_fee_per_gas < 0:
+            raise ChainConfigError("invalid_min_priority_fee")
         self._network = network_for_chain_id(chain_id)
         self._chain_id = chain_id
         self._contract = require_address(contract_address)
         self._rpc_url = rpc_url
         self._signer = signer
         self._timeout = timeout_seconds
+        self._min_priority_fee_per_gas = min_priority_fee_per_gas
         self._transport = transport
         self._request_id = 0
 
@@ -320,7 +324,14 @@ class JsonRpcCommitmentRegistry:
         if not isinstance(latest, dict):
             raise ChainUnavailableError("block_not_found")
         base_fee = _quantity(latest.get("baseFeePerGas", "0x0"))
-        priority_fee = _quantity(await self._call("eth_maxPriorityFeePerGas", []))
+        priority_fee = 0
+        try:
+            priority_fee = _quantity(await self._call("eth_maxPriorityFeePerGas", []))
+        except ChainRpcError:
+            if self._min_priority_fee_per_gas <= 0:
+                raise
+        if priority_fee < self._min_priority_fee_per_gas:
+            priority_fee = self._min_priority_fee_per_gas
         transaction = {
             "type": 2,
             "chainId": self._chain_id,

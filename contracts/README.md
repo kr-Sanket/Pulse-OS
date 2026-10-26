@@ -36,9 +36,16 @@ forge create src/AuditCommitmentRegistry.sol:AuditCommitmentRegistry \
   --rpc-url "$AMOY_RPC_URL" --account pulseos-anchorer --broadcast \
   --constructor-args <anchorer-address>
 
+# Optional: Verify on Polygonscan Amoy
+forge verify-contract <contract-address> src/AuditCommitmentRegistry.sol:AuditCommitmentRegistry \
+  --chain-id 80002 --verifier-url https://api-amoy.polygonscan.com/api \
+  --etherscan-api-key "$POLYGONSCAN_API_KEY" \
+  --constructor-args $(cast abi-encode "constructor(address)" <anchorer-address>)
+
 # 2. Configure the backend (backend/.env — never commit): PULSEOS_CHAIN_RPC_URL, PULSEOS_CHAIN_ID=80002,
 #    PULSEOS_CHAIN_CONTRACT_ADDRESS, PULSEOS_CHAIN_EXPLORER_BASE_URL=https://amoy.polygonscan.com,
-#    PULSEOS_CHAIN_ANCHORER_PRIVATE_KEY (operator machine only).
+#    PULSEOS_CHAIN_ANCHORER_PRIVATE_KEY (operator machine only),
+#    PULSEOS_CHAIN_MIN_PRIORITY_FEE_PER_GAS=30000000000 (30 Gwei tip floor for Amoy validators).
 
 # 3. Anchor a sealed batch and confirm it (guarded like `seal`).
 python scripts/audit_integrity.py anchor --batch-number 1 --confirm-env <env>

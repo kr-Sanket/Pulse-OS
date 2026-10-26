@@ -8,7 +8,7 @@ Secrets never get real defaults.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     chain_anchorer_private_key: SecretStr | None = None
     chain_min_confirmations: int = 2
     chain_rpc_timeout_seconds: float = 10.0
+    chain_min_priority_fee_per_gas: int = 0
+
+    @field_validator("chain_min_priority_fee_per_gas")
+    @classmethod
+    def _validate_min_priority_fee(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("chain_min_priority_fee_per_gas must be non-negative")
+        return v
 
 
 @lru_cache

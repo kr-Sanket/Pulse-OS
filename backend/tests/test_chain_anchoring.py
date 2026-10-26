@@ -114,12 +114,19 @@ class RpcStub:
         return httpx.MockTransport(handler)
 
 
-def _registry(stub: RpcStub, *, chain_id: int = 80002, signer: Any = None) -> Any:
+def _registry(
+    stub: RpcStub,
+    *,
+    chain_id: int = 80002,
+    signer: Any = None,
+    min_priority_fee_per_gas: int = 0,
+) -> Any:
     return JsonRpcCommitmentRegistry(
         rpc_url=RPC_URL,
         chain_id=chain_id,
         contract_address=CONTRACT,
         signer=signer,
+        min_priority_fee_per_gas=min_priority_fee_per_gas,
         transport=stub.transport(),
     )
 
@@ -234,6 +241,115 @@ def test_submit_signs_eip1559_anchor_call_for_configured_chain() -> None:
     assert decoded["value"] == 0
     assert decoded["data"].hex().removeprefix("0x") == (ANCHOR_SELECTOR + COMMITMENT)[2:]
     assert Account.recover_transaction(raw) == signer_address
+
+
+def test_submit_enforces_configured_min_priority_fee_floor() -> None:
+    from eth_account import Account
+    from eth_account.typed_transactions.typed_transaction import TypedTransaction
+    from hexbytes import HexBytes
+
+    signer = Account.from_key(TEST_KEY)
+    sent: list[str] = []
+
+    def send(params: list[str]) -> str:
+        sent.append(params[0])
+        return "0x" + "ab" * 32
+
+    # Node returns 1 Gwei (0x3b9aca00), but floor is 30 Gwei (30_000_000_000)
+    stub = RpcStub(
+        {
+            "eth_estimateGas": "0xb000",
+            "eth_getTransactionCount": "0x7",
+            "eth_getBlockByNumber": {"baseFeePerGas": "0x3b9aca00", "timestamp": "0x1"},
+            "eth_maxPriorityFeePerGas": "0x3b9aca00",  # 1 Gwei
+            "eth_sendRawTransaction": send,
+        }
+    )
+    floor = 30_000_000_000
+    registry = _registry(stub, signer=signer, min_priority_fee_per_gas=floor)
+    tx_hash = asyncio.run(registry.submit(COMMITMENT))
+    assert tx_hash == "0x" + "ab" * 32
+
+    raw = bytes.fromhex(sent[0][2:])
+    decoded = TypedTransaction.from_bytes(HexBytes(raw)).as_dict()
+    assert decoded["maxPriorityFeePerGas"] == floor
+    # maxFeePerGas = 2 * baseFee + maxPriorityFee = 2 * 1 Gwei + 30 Gwei = 32 Gwei
+    assert decoded["maxFeePerGas"] == 2 * 1_000_000_000 + floor
+
+
+def test_submit_handles_rpc_error_on_priority_fee_with_floor() -> None:
+    from eth_account import Account
+    from eth_account.typed_transactions.typed_transaction import TypedTransaction
+    from hexbytes import HexBytes
+
+    signer = Account.from_key(TEST_KEY)
+    sent: list[str] = []
+
+    def send(params: list[str]) -> str:
+        sent.append(params[0])
+        return "0x" + "ab" * 32
+
+    def raise_rpc_error(params: list[Any]) -> Any:
+        raise ChainRpcError("rpc_error")
+
+    # Node errors on eth_maxPriorityFeePerGas, but floor is configured
+    stub = RpcStub(
+        {
+            "eth_estimateGas": "0xb000",
+            "eth_getTransactionCount": "0x7",
+            "eth_getBlockByNumber": {"baseFeePerGas": "0x3b9aca00", "timestamp": "0x1"},
+            "eth_maxPriorityFeePerGas": raise_rpc_error,
+            "eth_sendRawTransaction": send,
+        }
+    )
+    floor = 25_000_000_000
+    registry = _registry(stub, signer=signer, min_priority_fee_per_gas=floor)
+    tx_hash = asyncio.run(registry.submit(COMMITMENT))
+    assert tx_hash == "0x" + "ab" * 32
+
+    raw = bytes.fromhex(sent[0][2:])
+    decoded = TypedTransaction.from_bytes(HexBytes(raw)).as_dict()
+    assert decoded["maxPriorityFeePerGas"] == floor
+
+
+def test_submit_raises_rpc_error_on_priority_fee_when_no_floor() -> None:
+    from eth_account import Account
+
+    signer = Account.from_key(TEST_KEY)
+
+    def raise_rpc_error(params: list[Any]) -> Any:
+        raise ChainRpcError("rpc_error")
+
+    stub = RpcStub(
+        {
+            "eth_estimateGas": "0xb000",
+            "eth_getTransactionCount": "0x7",
+            "eth_getBlockByNumber": {"baseFeePerGas": "0x3b9aca00", "timestamp": "0x1"},
+            "eth_maxPriorityFeePerGas": raise_rpc_error,
+        }
+    )
+    registry = _registry(stub, signer=signer, min_priority_fee_per_gas=0)
+    with pytest.raises(ChainRpcError) as exc:
+        asyncio.run(registry.submit(COMMITMENT))
+    assert exc.value.code == "rpc_error"
+
+
+def test_submit_rejects_negative_min_priority_fee() -> None:
+    stub = RpcStub({})
+    with pytest.raises(ChainConfigError) as exc:
+        _registry(stub, min_priority_fee_per_gas=-1)
+    assert exc.value.code == "invalid_min_priority_fee"
+
+
+def test_settings_validates_min_priority_fee() -> None:
+    from app.core.config import Settings
+    from pydantic import ValidationError
+
+    s = Settings(chain_min_priority_fee_per_gas=30_000_000_000)
+    assert s.chain_min_priority_fee_per_gas == 30_000_000_000
+
+    with pytest.raises(ValidationError):
+        Settings(chain_min_priority_fee_per_gas=-5)
 
 
 def test_receipt_and_log_matching() -> None:

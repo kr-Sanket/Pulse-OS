@@ -444,6 +444,7 @@ def build_commitment_registry(
         contract_address=settings.chain_contract_address,
         signer=signer,
         timeout_seconds=settings.chain_rpc_timeout_seconds,
+        min_priority_fee_per_gas=settings.chain_min_priority_fee_per_gas,
     )
 
 
