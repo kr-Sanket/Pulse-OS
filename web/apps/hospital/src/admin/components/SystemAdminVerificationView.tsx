@@ -42,6 +42,10 @@ export function SystemAdminVerificationView({ state }: SystemAdminVerificationVi
     error,
     success,
     verify,
+    reject,
+    suspend,
+    reinstate,
+    fetchAuditLogs,
     refresh,
     setFilter,
     dismissAlerts,
@@ -104,6 +108,8 @@ export function SystemAdminVerificationView({ state }: SystemAdminVerificationVi
   const totalCount = hospitals.length;
   const pendingCount = hospitals.filter((h) => h.status === "PENDING").length;
   const verifiedCount = hospitals.filter((h) => h.status === "VERIFIED").length;
+  const suspendedCount = hospitals.filter((h) => h.status === "SUSPENDED").length;
+  const rejectedCount = hospitals.filter((h) => h.status === "REJECTED").length;
 
   async function handleDirectVerify(e: React.FormEvent) {
     e.preventDefault();
@@ -252,6 +258,12 @@ export function SystemAdminVerificationView({ state }: SystemAdminVerificationVi
                   {opt.id === "VERIFIED" && verifiedCount > 0 ? (
                     <span className="ml-1.5 opacity-80 font-mono">({verifiedCount})</span>
                   ) : null}
+                  {opt.id === "SUSPENDED" && suspendedCount > 0 ? (
+                    <span className="ml-1.5 opacity-80 font-mono">({suspendedCount})</span>
+                  ) : null}
+                  {opt.id === "REJECTED" && rejectedCount > 0 ? (
+                    <span className="ml-1.5 opacity-80 font-mono">({rejectedCount})</span>
+                  ) : null}
                 </Button>
               );
             })}
@@ -317,7 +329,11 @@ export function SystemAdminVerificationView({ state }: SystemAdminVerificationVi
                   ? "No pending hospitals awaiting verification"
                   : filter === "VERIFIED"
                     ? "No verified hospitals found"
-                    : "No registered hospitals found"}
+                    : filter === "SUSPENDED"
+                      ? "No suspended hospitals found"
+                      : filter === "REJECTED"
+                        ? "No rejected hospitals found"
+                        : "No registered hospitals found"}
               </p>
               <p className="text-muted-foreground text-xs max-w-sm">
                 {filter === "PENDING"
@@ -344,6 +360,10 @@ export function SystemAdminVerificationView({ state }: SystemAdminVerificationVi
                 hospital={hospital}
                 busy={busyHid === hospital.hid}
                 onVerify={(hid) => void verify(hid)}
+                onReject={(hid, reason) => void reject(hid, reason)}
+                onSuspend={(hid, reason) => void suspend(hid, reason)}
+                onReinstate={(hid, reason) => void reinstate(hid, reason)}
+                onFetchAuditLogs={fetchAuditLogs}
               />
             ))}
           </div>
@@ -374,9 +394,12 @@ export function SystemAdminVerificationView({ state }: SystemAdminVerificationVi
               <code>RequireSystemAdmin</code>.
             </li>
             <li>
-              <strong>Rejection Omission:</strong> The backend data model defines only{" "}
-              <code>PENDING</code> and <code>VERIFIED</code> states; no rejection endpoint exists on
-              the server.
+              <strong>Lifecycle &amp; Audit (ADR-034):</strong> Rejection (
+              <code>POST /api/v1/hospitals/&#123;hid&#125;/reject</code>), suspension (
+              <code>POST /api/v1/hospitals/&#123;hid&#125;/suspend</code>), reinstatement (
+              <code>POST /api/v1/hospitals/&#123;hid&#125;/reinstate</code>), and audit trail (
+              <code>GET /api/v1/hospitals/&#123;hid&#125;/audit-logs</code>) are fully authoritative
+              on the server.
             </li>
           </ul>
         </CardContent>

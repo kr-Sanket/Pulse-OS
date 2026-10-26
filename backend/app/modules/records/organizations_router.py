@@ -27,6 +27,9 @@ from app.modules.records.schemas import (
     DoctorRegistrationRequest,
     DoctorResponse,
     HospitalAdminProfileResponse,
+    HospitalAuditLogListResponse,
+    HospitalAuditLogResponse,
+    HospitalLifecycleActionRequest,
     HospitalListResponse,
     HospitalRegistrationRequest,
     HospitalResponse,
@@ -37,6 +40,7 @@ hospitals_router = APIRouter(prefix="/hospitals", tags=["hospitals"])
 doctors_router = APIRouter(prefix="/doctors", tags=["doctors"])
 
 HospitalAdminUser = Annotated[AuthenticatedUser, Depends(RequireHospitalAdmin)]
+_DEFAULT_ACTION_REQUEST = HospitalLifecycleActionRequest()
 
 
 @hospitals_router.post(
@@ -129,6 +133,94 @@ async def verify_hospital(
     except RecordsError as exc:
         raise to_http_error(exc) from exc
     return HospitalResponse.model_validate(hospital)
+
+
+@hospitals_router.post("/{hid}/reject", response_model=HospitalResponse)
+async def reject_hospital(
+    hid: str,
+    user: Annotated[AuthenticatedUser, Depends(RequireSystemAdmin)],
+    service: HospitalServiceDep,
+    body: HospitalLifecycleActionRequest = _DEFAULT_ACTION_REQUEST,
+) -> HospitalResponse:
+    """Mark a PENDING hospital REJECTED (ADR-034). Idempotent.
+
+    Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+    Failure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.
+    """
+    try:
+        hospital = await service.reject_hospital(
+            hid, actor_user_id=user.user_id, reason=body.reason
+        )
+    except RecordsError as exc:
+        raise to_http_error(exc) from exc
+    return HospitalResponse.model_validate(hospital)
+
+
+@hospitals_router.post("/{hid}/suspend", response_model=HospitalResponse)
+async def suspend_hospital(
+    hid: str,
+    user: Annotated[AuthenticatedUser, Depends(RequireSystemAdmin)],
+    service: HospitalServiceDep,
+    body: HospitalLifecycleActionRequest = _DEFAULT_ACTION_REQUEST,
+) -> HospitalResponse:
+    """Mark a VERIFIED hospital SUSPENDED (ADR-034). Idempotent.
+
+    Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+    Failure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.
+    """
+    try:
+        hospital = await service.suspend_hospital(
+            hid, actor_user_id=user.user_id, reason=body.reason
+        )
+    except RecordsError as exc:
+        raise to_http_error(exc) from exc
+    return HospitalResponse.model_validate(hospital)
+
+
+@hospitals_router.post("/{hid}/reinstate", response_model=HospitalResponse)
+async def reinstate_hospital(
+    hid: str,
+    user: Annotated[AuthenticatedUser, Depends(RequireSystemAdmin)],
+    service: HospitalServiceDep,
+    body: HospitalLifecycleActionRequest = _DEFAULT_ACTION_REQUEST,
+) -> HospitalResponse:
+    """Mark a SUSPENDED hospital VERIFIED / REINSTATED (ADR-034). Idempotent.
+
+    Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+    Failure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.
+    """
+    try:
+        hospital = await service.reinstate_hospital(
+            hid, actor_user_id=user.user_id, reason=body.reason
+        )
+    except RecordsError as exc:
+        raise to_http_error(exc) from exc
+    return HospitalResponse.model_validate(hospital)
+
+
+@hospitals_router.get("/{hid}/audit-logs", response_model=HospitalAuditLogListResponse)
+async def list_hospital_audit_logs(
+    hid: str,
+    user: Annotated[AuthenticatedUser, Depends(RequireSystemAdmin)],
+    service: HospitalServiceDep,
+    cursor: Annotated[str | None, Query(description="Opaque keyset pagination cursor.")] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> HospitalAuditLogListResponse:
+    """List administrative lifecycle audit history for a hospital, newest first (ADR-034).
+
+    Roles: SYSTEM_ADMIN.
+    Failure modes: 401, 403, 404 (unknown HID), 422 (invalid cursor/limit).
+    """
+    if hid.strip().upper() == "ME":
+        raise HTTPException(status_code=404, detail="Hospital not found.")
+    try:
+        page = await service.list_lifecycle_events(hid, after=parse_cursor(cursor), limit=limit)
+    except RecordsError as exc:
+        raise to_http_error(exc) from exc
+    return HospitalAuditLogListResponse(
+        items=[HospitalAuditLogResponse.model_validate(log) for log in page.items],
+        next_cursor=page.next_cursor,
+    )
 
 
 @hospitals_router.get("/me/doctors", response_model=DoctorListResponse)

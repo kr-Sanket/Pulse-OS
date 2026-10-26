@@ -189,8 +189,22 @@ class ClinicianDirectoryService:
     (ADR-013), and ``is_active`` is a fact about the profile rather than a permission.
     """
 
-    def __init__(self, doctors: DoctorRepository) -> None:
+    def __init__(self, doctors: DoctorRepository, hospitals: HospitalRepository) -> None:
         self._doctors = doctors
+        self._hospitals = hospitals
+
+    async def hospital_accepts_new_requests(self, hospital_id: UUID) -> bool:
+        """Whether a practitioner of ``hospital_id`` may *initiate* new access (ADR-034).
+
+        Only a VERIFIED hospital may. Read under the shared hospital-row lock, so a request
+        cannot interleave with a concurrent suspension (same lock order as doctor
+        activation). Says nothing about existing grants — those stay governed by consent.
+        """
+        hospital = await self._hospitals.get_by_id_for_share(hospital_id)
+        return (
+            hospital is not None
+            and hospital.verification_status is HospitalVerificationStatus.VERIFIED
+        )
 
     async def get_by_user_id(self, user_id: UUID) -> ClinicianProfile | None:
         doctor = await self._doctors.get_by_user_id(user_id)
@@ -270,7 +284,7 @@ def hospital_verification_directory(session: AsyncSession) -> HospitalVerificati
 
 
 def clinician_directory(session: AsyncSession) -> ClinicianDirectoryService:
-    return ClinicianDirectoryService(DoctorRepository(session))
+    return ClinicianDirectoryService(DoctorRepository(session), HospitalRepository(session))
 
 
 def record_category_directory(session: AsyncSession) -> RecordCategoryDirectoryService:

@@ -28,12 +28,28 @@ const BASE_STATE: HospitalVerificationState = {
       address: "Vellore, Tamil Nadu",
       status: "VERIFIED",
     },
+    {
+      hid: "HID-0003",
+      name: "Apollo Delhi",
+      address: "Delhi",
+      status: "SUSPENDED",
+    },
+    {
+      hid: "HID-0004",
+      name: "City Clinic",
+      address: "Mumbai",
+      status: "REJECTED",
+    },
   ],
   filter: "ALL",
   busyHid: null,
   error: null,
   success: null,
   verify: vi.fn(),
+  reject: vi.fn(),
+  suspend: vi.fn(),
+  reinstate: vi.fn(),
+  fetchAuditLogs: vi.fn().mockResolvedValue([]),
   refresh: vi.fn(),
   setFilter: vi.fn(),
   dismissAlerts: vi.fn(),
@@ -53,21 +69,90 @@ describe("HospitalVerificationCard", () => {
     expect(html).toContain("Verify Hospital");
   });
 
-  it("renders Verified badge and disabled status when hospital is already VERIFIED", () => {
+  it("renders Reject button for PENDING hospital when onReject is provided", () => {
     const onVerify = vi.fn();
+    const onReject = vi.fn();
+    const html = renderToString(
+      <HospitalVerificationCard
+        hospital={BASE_HOSPITAL}
+        busy={false}
+        onVerify={onVerify}
+        onReject={onReject}
+      />,
+    );
+
+    expect(html).toContain("Verify Hospital");
+    expect(html).toContain("Reject");
+  });
+
+  it("renders Suspend action button when hospital is VERIFIED", () => {
+    const onVerify = vi.fn();
+    const onSuspend = vi.fn();
     const verifiedHospital: HospitalReviewItem = {
       ...BASE_HOSPITAL,
       status: "VERIFIED",
     };
 
     const html = renderToString(
-      <HospitalVerificationCard hospital={verifiedHospital} busy={false} onVerify={onVerify} />,
+      <HospitalVerificationCard
+        hospital={verifiedHospital}
+        busy={false}
+        onVerify={onVerify}
+        onSuspend={onSuspend}
+      />,
     );
 
     expect(html).toContain("Verified");
     expect(html).toContain("Organization can register doctors and upload records");
-    // Verify button should be disabled for already verified hospital
-    expect(html).toContain('disabled=""');
+    expect(html).toContain("Suspend");
+  });
+
+  it("renders Reinstate action button when hospital is SUSPENDED", () => {
+    const onVerify = vi.fn();
+    const onReinstate = vi.fn();
+    const suspendedHospital: HospitalReviewItem = {
+      ...BASE_HOSPITAL,
+      status: "SUSPENDED",
+    };
+
+    const html = renderToString(
+      <HospitalVerificationCard
+        hospital={suspendedHospital}
+        busy={false}
+        onVerify={onVerify}
+        onReinstate={onReinstate}
+      />,
+    );
+
+    expect(html).toContain("Suspended");
+    expect(html).toContain("Reinstate");
+  });
+
+  it("renders Terminal State badge and prevents actions when hospital is REJECTED", () => {
+    const onVerify = vi.fn();
+    const onReject = vi.fn();
+    const onSuspend = vi.fn();
+    const onReinstate = vi.fn();
+    const rejectedHospital: HospitalReviewItem = {
+      ...BASE_HOSPITAL,
+      status: "REJECTED",
+    };
+
+    const html = renderToString(
+      <HospitalVerificationCard
+        hospital={rejectedHospital}
+        busy={false}
+        onVerify={onVerify}
+        onReject={onReject}
+        onSuspend={onSuspend}
+        onReinstate={onReinstate}
+      />,
+    );
+
+    expect(html).toContain("Rejected");
+    expect(html).toContain("Terminal State");
+    expect(html).not.toContain("Verify Hospital");
+    expect(html).not.toContain("Reinstate");
   });
 
   it("renders verification timestamp and shortened verifier UUID when attribution is present", () => {
@@ -105,7 +190,7 @@ describe("HospitalVerificationCard", () => {
     expect(html).not.toContain("Admin (");
   });
 
-  it("renders busy state and disables actions while verification is in-flight", () => {
+  it("renders busy state and disables actions while action is in-flight", () => {
     const onVerify = vi.fn();
     const html = renderToString(
       <HospitalVerificationCard hospital={BASE_HOSPITAL} busy={true} onVerify={onVerify} />,
@@ -115,14 +200,13 @@ describe("HospitalVerificationCard", () => {
     expect(html).toContain('disabled=""');
   });
 
-  it("omits rejection button because backend does not support rejection", () => {
+  it("renders View Audit History toggle button", () => {
     const onVerify = vi.fn();
     const html = renderToString(
       <HospitalVerificationCard hospital={BASE_HOSPITAL} busy={false} onVerify={onVerify} />,
     );
 
-    expect(html).not.toContain("Reject Hospital");
-    expect(html).not.toContain("Decline Hospital");
+    expect(html).toContain("View Audit History");
   });
 });
 
@@ -152,11 +236,10 @@ describe("SystemAdminVerificationView", () => {
     expect(html).toContain("System Administrator Access Required");
     expect(html).toContain("HOSPITAL_ADMIN");
     expect(html).toContain("is not authorized to review or verify hospital accounts");
-    // Action inputs and buttons must not be visible to unauthorized users
     expect(html).not.toContain("Hospital Account Verification");
   });
 
-  it("renders full System Admin verification view when user is SYSTEM_ADMIN", () => {
+  it("renders full System Admin verification view with all 5 filter options", () => {
     const html = renderToString(<SystemAdminVerificationView state={BASE_STATE} />);
 
     expect(html).toContain("Hospital Account Verification");
@@ -164,8 +247,13 @@ describe("SystemAdminVerificationView", () => {
     expect(html).toContain("Verify Directly by Hospital ID (HID)");
     expect(html).toContain("All Hospitals");
     expect(html).toContain("Pending Verification");
+    expect(html).toContain("Verified");
+    expect(html).toContain("Suspended");
+    expect(html).toContain("Rejected");
     expect(html).toContain("TMH Jamshedpur");
     expect(html).toContain("CMC Vellore");
+    expect(html).toContain("Apollo Delhi");
+    expect(html).toContain("City Clinic");
   });
 
   it("renders loading state when fetching real server records", () => {
@@ -193,7 +281,7 @@ describe("SystemAdminVerificationView", () => {
     expect(html).toContain("Retry");
   });
 
-  it("displays success banner when verification succeeds", () => {
+  it("displays success banner when action succeeds", () => {
     const state: HospitalVerificationState = {
       ...BASE_STATE,
       success: 'Hospital "TMH Jamshedpur" (HID-0001) has been successfully verified.',
@@ -205,7 +293,7 @@ describe("SystemAdminVerificationView", () => {
     expect(html).toContain("has been successfully verified");
   });
 
-  it("displays error banner when verification fails", () => {
+  it("displays error banner when an action fails", () => {
     const state: HospitalVerificationState = {
       ...BASE_STATE,
       error: "Hospital not found. Check the Hospital ID (HID) and try again.",
@@ -239,10 +327,35 @@ describe("SystemAdminVerificationView", () => {
     expect(html).toContain("No verified hospitals found");
   });
 
-  it("displays backend capability disclosure and confirms rejection omission", () => {
+  it("displays empty state for suspended filter when no hospitals are suspended", () => {
+    const state: HospitalVerificationState = {
+      ...BASE_STATE,
+      filter: "SUSPENDED",
+      hospitals: [],
+    };
+
+    const html = renderToString(<SystemAdminVerificationView state={state} />);
+    expect(html).toContain("No suspended hospitals found");
+  });
+
+  it("displays empty state for rejected filter when no hospitals are rejected", () => {
+    const state: HospitalVerificationState = {
+      ...BASE_STATE,
+      filter: "REJECTED",
+      hospitals: [],
+    };
+
+    const html = renderToString(<SystemAdminVerificationView state={state} />);
+    expect(html).toContain("No rejected hospitals found");
+  });
+
+  it("displays backend capability disclosure for ADR-015 and ADR-034", () => {
     const html = renderToString(<SystemAdminVerificationView state={BASE_STATE} />);
     expect(html).toContain("Platform Verification Architecture &amp; Backend Contract");
-    expect(html).toContain("no rejection endpoint exists on the server");
-    expect(html).toContain("Backed by <code>GET /api/v1/hospitals</code>");
+    expect(html).toContain("Lifecycle &amp; Audit (ADR-034)");
+    expect(html).toContain("POST /api/v1/hospitals/{hid}/reject");
+    expect(html).toContain("POST /api/v1/hospitals/{hid}/suspend");
+    expect(html).toContain("POST /api/v1/hospitals/{hid}/reinstate");
+    expect(html).toContain("GET /api/v1/hospitals/{hid}/audit-logs");
   });
 });

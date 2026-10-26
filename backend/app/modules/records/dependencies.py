@@ -28,6 +28,7 @@ from app.modules.records.errors import (
     HospitalNotFoundError,
     HospitalNotVerifiedError,
     InvalidExportRequestError,
+    InvalidHospitalStatusTransitionError,
     OrgRegistrationConflictError,
     ProfileNotFoundError,
     RecordNotFoundError,
@@ -41,6 +42,7 @@ from app.modules.records.organizations import HospitalService
 from app.modules.records.repository import (
     DoctorRepository,
     HospitalAdminRepository,
+    HospitalAuditLogRepository,
     HospitalRepository,
     MedicalRecordRepository,
     RecordCategoryRepository,
@@ -73,6 +75,8 @@ def to_http_error(exc: RecordsError) -> HTTPException:
         )
     if isinstance(exc, HospitalNotVerifiedError):
         return HTTPException(status_code=409, detail="Hospital is not verified yet.")
+    if isinstance(exc, InvalidHospitalStatusTransitionError):
+        return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, OrgRegistrationConflictError):
         return HTTPException(status_code=409, detail=exc.detail)
     if isinstance(exc, UnknownPatientError):
@@ -170,6 +174,7 @@ def get_hospital_service(
         hospitals=HospitalRepository(session),
         admins=HospitalAdminRepository(session),
         doctors=DoctorRepository(session),
+        auditor=HospitalAuditLogRepository(session),
     )
 
 

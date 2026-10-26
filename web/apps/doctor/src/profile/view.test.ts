@@ -76,6 +76,20 @@ test("a verified hospital reads as verified; an unverified one says so", () => {
   expect(pending.hospitalVerificationTone).toBe("warning");
 });
 
+test("suspended and rejected hospitals (ADR-034) get their own badge", () => {
+  const suspended = toIdentityView(
+    withProfile({ hospital: { ...PROFILE.hospital, verificationStatus: "SUSPENDED" } }),
+  );
+  const rejected = toIdentityView(
+    withProfile({ hospital: { ...PROFILE.hospital, verificationStatus: "REJECTED" } }),
+  );
+
+  expect(suspended.hospitalVerificationLabel).toBe("Suspended");
+  expect(suspended.hospitalVerificationTone).toBe("warning");
+  expect(rejected.hospitalVerificationLabel).toBe("Rejected");
+  expect(rejected.hospitalVerificationTone).toBe("destructive");
+});
+
 // -- status messaging ---------------------------------------------------------------------
 
 test("an active clinician is told nothing, because nothing is wrong", () => {

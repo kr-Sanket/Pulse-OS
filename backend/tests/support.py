@@ -122,6 +122,8 @@ class FakeClinicianDirectory:
     def __init__(self) -> None:
         self.by_user_id: dict[UUID, Clinician] = {}
         self.by_doctor_id: dict[UUID, UUID] = {}
+        #: Hospitals that are not VERIFIED (ADR-034); every other hospital accepts requests.
+        self.unverified_hospitals: set[UUID] = set()
 
     def register(
         self, user_id: UUID, *, doctor_id: UUID, hospital_id: UUID, is_active: bool = True
@@ -142,6 +144,9 @@ class FakeClinicianDirectory:
 
     async def get_user_id_by_doctor_id(self, doctor_id: UUID) -> UUID | None:
         return self.by_doctor_id.get(doctor_id)
+
+    async def hospital_accepts_new_requests(self, hospital_id: UUID) -> bool:
+        return hospital_id not in self.unverified_hospitals
 
 
 class FakeCategoryVocabularySource:

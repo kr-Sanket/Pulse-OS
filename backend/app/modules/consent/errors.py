@@ -62,6 +62,11 @@ class ClinicianNotActiveError(ConsentError):
     """The clinician is not ACTIVE, so every clinical capability is refused (ADR-015)."""
 
 
+class HospitalNotAcceptingRequestsError(ConsentError):
+    """The clinician's hospital is not VERIFIED (e.g. SUSPENDED), so it may not initiate
+    new access requests (ADR-034). Existing grants are unaffected."""
+
+
 class UnknownPatientError(ConsentError):
     """No patient matches the supplied Health ID."""
 

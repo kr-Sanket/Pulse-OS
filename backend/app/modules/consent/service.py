@@ -55,6 +55,7 @@ from app.modules.consent.errors import (
     DuplicatePendingRequestError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
+    HospitalNotAcceptingRequestsError,
     HospitalProfileNotFoundError,
     PatientProfileNotFoundError,
     RequestNotDecidableError,
@@ -267,6 +268,11 @@ class ClinicianDirectory(Protocol):
     async def get_by_user_id(self, user_id: UUID) -> Clinician | None: ...
 
     async def get_user_id_by_doctor_id(self, doctor_id: UUID) -> UUID | None: ...
+
+    async def hospital_accepts_new_requests(self, hospital_id: UUID) -> bool:
+        """Whether practitioners of this hospital may open *new* access requests (ADR-034:
+        only a VERIFIED hospital). Never consulted for reads under an existing grant."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,6 +535,10 @@ class ConsentService:
         "everything".
         """
         clinician = await self._require_active_clinician(caller)
+        # ADR-034: a non-VERIFIED (suspended) hospital initiates no new access. Checked before
+        # the patient is resolved, so the refusal reveals nothing about the Health ID.
+        if not await self._clinicians.hospital_accepts_new_requests(clinician.hospital_id):
+            raise HospitalNotAcceptingRequestsError()
         wanted = self._unique_categories(category_ids)
         patient = await self._patients.get_by_health_id(patient_health_id)
         if patient is None:

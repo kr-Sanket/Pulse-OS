@@ -591,6 +591,39 @@ def test_a_suspended_clinician_cannot_discover_records() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "status", [HospitalVerificationStatus.SUSPENDED, HospitalVerificationStatus.PENDING]
+)
+def test_a_non_verified_hospital_initiates_no_discovery(
+    status: HospitalVerificationStatus,
+) -> None:
+    """ADR-034: an ACTIVE clinician of a SUSPENDED (or never-verified) hospital starts no new
+    discovery. Refused before the Health ID is resolved: a known and an unknown Health ID get
+    the same error, so the refusal says nothing about any patient."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _upload(h, "CBC")
+            h.hospital.verification_status = status
+            await session.flush()
+
+            for health_id in (h.patient.health_id, "PHI-IND-2026-0000000"):
+                with pytest.raises(HospitalNotVerifiedError):
+                    await h.service.list_existing_categories(
+                        h.doctor_caller, patient_health_id=health_id
+                    )
+
+            h.hospital.verification_status = HospitalVerificationStatus.VERIFIED
+            await session.flush()
+            found = await h.service.list_existing_categories(
+                h.doctor_caller, patient_health_id=h.patient.health_id
+            )
+            assert [category.code for category in found] == ["CBC"]
+
+    asyncio.run(scenario())
+
+
 def test_existence_requires_a_clinician_profile() -> None:
     async def scenario() -> None:
         async with sqlite_session() as session:

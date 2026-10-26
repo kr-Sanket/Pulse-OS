@@ -242,7 +242,10 @@ async def list_records(
 @records_router.get(
     "/existence",
     response_model=RecordExistenceResponse,
-    responses={429: {"description": "Rate limit exceeded"}},
+    responses={
+        409: {"description": "The clinician's hospital is not verified (ADR-034)"},
+        429: {"description": "Rate limit exceeded"},
+    },
 )
 async def list_record_existence(
     user: Clinician,
@@ -257,12 +260,15 @@ async def list_record_existence(
     a display name per category and nothing else — no record id, filename, hospital, date,
     description or count — so a caller with no grant learns only what step 1 allows.
 
-    Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
+    Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015), and
+    that hospital must be VERIFIED — a SUSPENDED hospital initiates no new discovery
+    (ADR-034), refused before the Health ID is resolved so the answer is the same for any ID.
     Consent requirement: none, and deliberately so — ``consent.enforce`` answers whether a
     *record* may be read, which cannot be answered before any grant exists. Every read past
     this point still crosses it. Nothing here is audited: no record was accessed.
     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
-    422 (missing/oversized Health ID, or no patient with that Health ID).
+    409 (hospital not VERIFIED), 422 (missing/oversized Health ID, or no patient with that
+    Health ID).
     """
     try:
         categories = await service.list_existing_categories(

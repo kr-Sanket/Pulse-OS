@@ -1555,6 +1555,116 @@
         "title": "HospitalAuditEventResponse",
         "type": "object"
       },
+      "HospitalAuditLogListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HospitalAuditLogResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "HospitalAuditLogListResponse",
+        "type": "object"
+      },
+      "HospitalAuditLogResponse": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/HospitalLifecycleAction"
+          },
+          "actorUserId": {
+            "format": "uuid",
+            "title": "Actoruserid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "hospitalId": {
+            "format": "uuid",
+            "title": "Hospitalid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "title": "Occurredat",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "id",
+          "hospitalId",
+          "actorUserId",
+          "action",
+          "occurredAt",
+          "createdAt"
+        ],
+        "title": "HospitalAuditLogResponse",
+        "type": "object"
+      },
+      "HospitalLifecycleAction": {
+        "description": "Administrative lifecycle actions for hospital verification (ADR-034).",
+        "enum": [
+          "VERIFIED",
+          "REJECTED",
+          "SUSPENDED",
+          "REINSTATED"
+        ],
+        "title": "HospitalLifecycleAction",
+        "type": "string"
+      },
+      "HospitalLifecycleActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "HospitalLifecycleActionRequest",
+        "type": "object"
+      },
       "HospitalListResponse": {
         "properties": {
           "items": {
@@ -1673,7 +1783,9 @@
       "HospitalVerificationStatus": {
         "enum": [
           "PENDING",
-          "VERIFIED"
+          "VERIFIED",
+          "REJECTED",
+          "SUSPENDED"
         ],
         "title": "HospitalVerificationStatus",
         "type": "string"
@@ -2469,7 +2581,7 @@
   "paths": {
     "/api/v1/access-requests": {
       "post": {
-        "description": "Ask a patient for access to a set of record categories.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).\nConsent requirement: none \u2014 this *asks* for consent, it reads nothing.\nDuplicates are refused with 409, before anything is written: a category this clinician\nalready holds an active grant for, or one already asked for on an open (PENDING,\nunexpired) request of theirs to the same patient that has not yet been answered for it.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n409 (duplicate, as above), 422 (validation, unknown Health ID, unknown category code).",
+        "description": "Ask a patient for access to a set of record categories.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015), and\nthat hospital must be VERIFIED \u2014 a SUSPENDED hospital opens no new requests (ADR-034),\nchecked before the Health ID is resolved. Existing grants are unaffected.\nConsent requirement: none \u2014 this *asks* for consent, it reads nothing.\nDuplicates are refused with 409, before anything is written: a category this clinician\nalready holds an active grant for, or one already asked for on an open (PENDING,\nunexpired) request of theirs to the same patient that has not yet been answered for it.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n409 (duplicate, as above; or hospital not VERIFIED), 422 (validation, unknown Health ID,\nunknown category code).",
         "operationId": "create_access_request_api_v1_access_requests_post",
         "requestBody": {
           "content": {
@@ -2514,7 +2626,7 @@
             "content": {
               "application/problem+json": {}
             },
-            "description": "A category is already actively granted, or already asked for on an open request"
+            "description": "A category is already actively granted, or already asked for on an open request, or the clinician's hospital is not VERIFIED (ADR-034)"
           },
           "422": {
             "content": {
@@ -3892,6 +4004,238 @@
         ]
       }
     },
+    "/api/v1/hospitals/{hid}/audit-logs": {
+      "get": {
+        "description": "List administrative lifecycle audit history for a hospital, newest first (ADR-034).\n\nRoles: SYSTEM_ADMIN.\nFailure modes: 401, 403, 404 (unknown HID), 422 (invalid cursor/limit).",
+        "operationId": "list_hospital_audit_logs_api_v1_hospitals__hid__audit_logs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hid",
+            "required": true,
+            "schema": {
+              "title": "Hid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque keyset pagination cursor.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque keyset pagination cursor.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalAuditLogListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Hospital Audit Logs",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/{hid}/reinstate": {
+      "post": {
+        "description": "Mark a SUSPENDED hospital VERIFIED / REINSTATED (ADR-034). Idempotent.\n\nRoles: SYSTEM_ADMIN (platform operations \u2014 touches no medical content).\nFailure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.",
+        "operationId": "reinstate_hospital_api_v1_hospitals__hid__reinstate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hid",
+            "required": true,
+            "schema": {
+              "title": "Hid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HospitalLifecycleActionRequest",
+                "default": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reinstate Hospital",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/{hid}/reject": {
+      "post": {
+        "description": "Mark a PENDING hospital REJECTED (ADR-034). Idempotent.\n\nRoles: SYSTEM_ADMIN (platform operations \u2014 touches no medical content).\nFailure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.",
+        "operationId": "reject_hospital_api_v1_hospitals__hid__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hid",
+            "required": true,
+            "schema": {
+              "title": "Hid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HospitalLifecycleActionRequest",
+                "default": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject Hospital",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
+    "/api/v1/hospitals/{hid}/suspend": {
+      "post": {
+        "description": "Mark a VERIFIED hospital SUSPENDED (ADR-034). Idempotent.\n\nRoles: SYSTEM_ADMIN (platform operations \u2014 touches no medical content).\nFailure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.",
+        "operationId": "suspend_hospital_api_v1_hospitals__hid__suspend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hid",
+            "required": true,
+            "schema": {
+              "title": "Hid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HospitalLifecycleActionRequest",
+                "default": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HospitalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suspend Hospital",
+        "tags": [
+          "hospitals"
+        ]
+      }
+    },
     "/api/v1/hospitals/{hid}/verify": {
       "post": {
         "description": "Mark a hospital VERIFIED (ADR-015 step 2). Idempotent.\n\nRoles: SYSTEM_ADMIN (platform operations \u2014 touches no medical content).\nFailure modes: 401, 403, 404 (unknown HID).",
@@ -4487,7 +4831,7 @@
     },
     "/api/v1/records/existence": {
       "get": {
-        "description": "Which record categories a patient holds anything in \u2014 existence only.\n\nStep 1 of the consent flow (docs/SYSTEM_ARCHITECTURE.md): the clinician learns that\nrecords exist so they can ask for the right categories. The response carries a code and\na display name per category and nothing else \u2014 no record id, filename, hospital, date,\ndescription or count \u2014 so a caller with no grant learns only what step 1 allows.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).\nConsent requirement: none, and deliberately so \u2014 ``consent.enforce`` answers whether a\n*record* may be read, which cannot be answered before any grant exists. Every read past\nthis point still crosses it. Nothing here is audited: no record was accessed.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n422 (missing/oversized Health ID, or no patient with that Health ID).",
+        "description": "Which record categories a patient holds anything in \u2014 existence only.\n\nStep 1 of the consent flow (docs/SYSTEM_ARCHITECTURE.md): the clinician learns that\nrecords exist so they can ask for the right categories. The response carries a code and\na display name per category and nothing else \u2014 no record id, filename, hospital, date,\ndescription or count \u2014 so a caller with no grant learns only what step 1 allows.\n\nRoles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015), and\nthat hospital must be VERIFIED \u2014 a SUSPENDED hospital initiates no new discovery\n(ADR-034), refused before the Health ID is resolved so the answer is the same for any ID.\nConsent requirement: none, and deliberately so \u2014 ``consent.enforce`` answers whether a\n*record* may be read, which cannot be answered before any grant exists. Every read past\nthis point still crosses it. Nothing here is audited: no record was accessed.\nFailure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),\n409 (hospital not VERIFIED), 422 (missing/oversized Health ID, or no patient with that\nHealth ID).",
         "operationId": "list_record_existence_api_v1_records_existence_get",
         "parameters": [
           {
@@ -4512,6 +4856,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "The clinician's hospital is not verified (ADR-034)"
           },
           "422": {
             "content": {

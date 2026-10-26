@@ -17,7 +17,20 @@ import uuid
 from datetime import date, datetime
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, ForeignKey, String, Uuid
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    String,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -30,6 +43,17 @@ def _enum_values(enum_cls: type[StrEnum]) -> list[str]:
 class HospitalVerificationStatus(StrEnum):
     PENDING = "PENDING"
     VERIFIED = "VERIFIED"
+    REJECTED = "REJECTED"
+    SUSPENDED = "SUSPENDED"
+
+
+class HospitalLifecycleAction(StrEnum):
+    """Administrative lifecycle actions for hospital verification (ADR-034)."""
+
+    VERIFIED = "VERIFIED"
+    REJECTED = "REJECTED"
+    SUSPENDED = "SUSPENDED"
+    REINSTATED = "REINSTATED"
 
 
 class DoctorStatus(StrEnum):
@@ -200,3 +224,46 @@ class MedicalRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=RecordProcessingStatus.UPLOADED,
     )
     is_hidden: Mapped[bool] = mapped_column(Boolean(), nullable=False, default=False)
+
+
+class HospitalAuditLog(UUIDPrimaryKeyMixin, Base):
+    """Append-only audit trail for administrative hospital verification lifecycle events (ADR-034).
+
+    Written in the same database transaction as the hospital status transition. No update/delete
+    API exists; rows are immutable evidence.
+    """
+
+    __tablename__ = "hospital_audit_logs"
+
+    hospital_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), ForeignKey("hospitals.id"), nullable=False
+    )
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(Uuid(), ForeignKey("users.id"), nullable=False)
+    action: Mapped[HospitalLifecycleAction] = mapped_column(
+        Enum(
+            HospitalLifecycleAction,
+            name="hospital_lifecycle_action",
+            native_enum=False,
+            length=20,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('VERIFIED', 'REJECTED', 'SUSPENDED', 'REINSTATED')",
+            name="action_valid",
+        ),
+        Index(
+            "ix_hospital_audit_logs_hospital_id_occurred_at_id",
+            "hospital_id",
+            text("occurred_at DESC"),
+            text("id DESC"),
+        ),
+    )

@@ -454,13 +454,23 @@ class RecordService:
 
         The relationship this module *can* decide is ADR-015's: the caller must be a
         clinician whose profile is ACTIVE. A suspended doctor loses every clinical
-        capability, discovery included.
+        capability, discovery included. And discovery is how a *new* access begins, so the
+        clinician's hospital must be VERIFIED (ADR-034): a suspended hospital initiates no
+        new discovery. That is checked before the Health ID is resolved, so the refusal is
+        identical for every Health ID and reveals nothing about any patient. Reads under an
+        existing grant (``list_shared_for_clinician``, record reads, AI, export) are not
+        gated on hospital status.
         """
         doctor = await self._doctors.get_by_user_id(caller.user_id)
         if doctor is None:
             raise ProfileNotFoundError()
         if doctor.status is not DoctorStatus.ACTIVE:
             raise ClinicianNotActiveError()
+        hospital = await self._hospitals.get_by_id(doctor.hospital_id)
+        if hospital is None or hospital.verification_status is not (
+            HospitalVerificationStatus.VERIFIED
+        ):
+            raise HospitalNotVerifiedError()
         patient = await self._patients.get_by_health_id(patient_health_id)
         if patient is None:
             raise UnknownPatientError()

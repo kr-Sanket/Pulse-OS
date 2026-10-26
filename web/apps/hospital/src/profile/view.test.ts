@@ -48,6 +48,26 @@ test("a pending hospital may not operate, and is told what that blocks (ADR-015)
   expect(view.verificationNotice).toContain("no records can be uploaded");
 });
 
+test("a rejected hospital may not operate, and is told it was rejected", () => {
+  const view = toIdentityView(withHospital({ verificationStatus: "REJECTED" }));
+
+  expect(view.verificationLabel).toBe("Rejected");
+  expect(view.verificationTone).toBe("destructive");
+  expect(view.canOperate).toBe(false);
+  expect(view.verificationNotice).toContain("rejected");
+  expect(view.verificationNotice).toContain("no records can be uploaded");
+});
+
+test("a suspended hospital may not operate, and is told it was suspended", () => {
+  const view = toIdentityView(withHospital({ verificationStatus: "SUSPENDED" }));
+
+  expect(view.verificationLabel).toBe("Suspended");
+  expect(view.verificationTone).toBe("warning");
+  expect(view.canOperate).toBe(false);
+  expect(view.verificationNotice).toContain("suspended");
+  expect(view.verificationNotice).toContain("record uploads are disabled");
+});
+
 test("a missing or blank address is reported as not recorded, never as empty", () => {
   expect(toIdentityView(withHospital({ address: null })).address).toBe(NO_ADDRESS);
   expect(toIdentityView(withHospital({ address: "   " })).address).toBe(NO_ADDRESS);

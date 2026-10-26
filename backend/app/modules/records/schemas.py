@@ -5,6 +5,7 @@ router with ``Form(...)``; the models here are the JSON bodies and all responses
 """
 
 from datetime import UTC, date, datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import Field, StrictBool, field_validator
@@ -14,6 +15,7 @@ from app.modules.records.models import (
     DoctorStatus,
     Hospital,
     HospitalAdmin,
+    HospitalLifecycleAction,
     HospitalVerificationStatus,
     RecordOrigin,
     RecordProcessingStatus,
@@ -51,6 +53,20 @@ class DoctorRegistrationRequest(RequestModel):
     )
 
 
+class HospitalLifecycleActionRequest(RequestModel):
+    reason: str | None = Field(default=None, max_length=255)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _normalize_reason(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Reason must be a string")
+        stripped = value.strip()
+        return stripped if stripped else None
+
+
 # -- organizations: responses --------------------------------------------------------
 
 
@@ -73,6 +89,28 @@ class HospitalResponse(ApiModel):
 
 class HospitalListResponse(ApiModel):
     items: list[HospitalResponse]
+
+
+class HospitalAuditLogResponse(ApiModel):
+    id: UUID
+    hospital_id: UUID
+    actor_user_id: UUID
+    action: HospitalLifecycleAction
+    reason: str | None = None
+    occurred_at: datetime
+    created_at: datetime
+
+    @field_validator("occurred_at", "created_at", mode="after")
+    @classmethod
+    def _ensure_utc(cls, v: datetime | None) -> datetime | None:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=UTC)
+        return v
+
+
+class HospitalAuditLogListResponse(ApiModel):
+    items: list[HospitalAuditLogResponse]
+    next_cursor: str | None = None
 
 
 class HospitalAdminProfileResponse(ApiModel):

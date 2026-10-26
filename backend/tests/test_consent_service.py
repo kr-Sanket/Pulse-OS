@@ -24,6 +24,7 @@ from app.modules.consent.errors import (
     DuplicatePendingRequestError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
+    HospitalNotAcceptingRequestsError,
     PatientProfileNotFoundError,
     RequestNotDecidableError,
     RequestNotFoundError,
@@ -2269,5 +2270,44 @@ def test_repeated_decisions_on_an_expired_request_are_refused_the_same_way() -> 
                     await decide(h.patient, request_id, [h.categories["CBC"]])
                 assert excinfo.value.status == "EXPIRED"
             assert await h.actions() == ["ACCESS_REQUESTED"]
+
+    asyncio.run(scenario())
+
+
+def test_a_non_verified_hospital_opens_no_new_request_but_existing_grants_still_read() -> None:
+    """ADR-034: suspension blocks *initiating* access, never access already consented to."""
+
+    async def scenario() -> None:
+        async with sqlite_session() as session:
+            h = await _harness(session)
+            await _approve(h, "CBC")
+            hospital_id = h.clinicians.by_user_id[h.doctor.user_id].hospital_id
+            h.clinicians.unverified_hospitals.add(hospital_id)
+            before = await h.actions()
+
+            with pytest.raises(HospitalNotAcceptingRequestsError):
+                await _request(h, "MRI")
+            # Refused before the Health ID is resolved: an unknown one gets the same error.
+            with pytest.raises(HospitalNotAcceptingRequestsError):
+                await h.service.create_request(
+                    h.doctor,
+                    patient_health_id="PHI-IND-2026-ZZZZZZZ",
+                    category_ids=[h.categories["MRI"]],
+                    purpose="p",
+                )
+            assert await h.actions() == before  # nothing written, nothing audited
+
+            # The grant given before suspension still admits the read.
+            await h.service.enforce(
+                h.doctor,
+                patient_id=h.patient_id,
+                category_id=h.categories["CBC"],
+                action=AuditAction.RECORD_VIEWED,
+                record_id=h.record_id,
+            )
+            assert (await h.actions())[-1] == "RECORD_VIEWED"
+
+            h.clinicians.unverified_hospitals.clear()
+            await _request(h, "MRI")
 
     asyncio.run(scenario())

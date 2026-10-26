@@ -858,3 +858,154 @@ def test_a_clinician_cannot_change_a_patients_visibility_setting(
         assert refused.status_code == 403
 
     assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 404
+
+
+# -- hospital suspension (ADR-034) ------------------------------------------------------
+
+
+def test_hospital_suspension_blocks_new_operations_but_keeps_consent_and_access(
+    client: TestClient, cast: Cast, fake_auth: FakeAuthProvider, db_engine: AsyncEngine
+) -> None:
+    """Suspending a hospital stops new hospital-level operations (uploads, Health-ID lookup,
+    doctor onboarding/activation) without touching consent: grants already given stay
+    ACTIVE, and a clinician of the suspended hospital still reads what the patient shared.
+    Reinstatement restores the blocked operations."""
+    record_id = _upload(client, cast, "CBC")
+    grant_id = _grant_cbc(client, cast)
+    grants_before = client.get(GRANTS, headers=cast.patient).json()
+
+    async def add_system_admin(session: AsyncSession) -> UUID:
+        user = User(firebase_uid="fb-sys-m34", role=Role.SYSTEM_ADMIN)
+        session.add(user)
+        await session.flush()
+        return user.id
+
+    sys_id = run_with_session(db_engine, add_system_admin)
+    fake_auth.register_user(
+        "sys", user_id=sys_id, firebase_uid="fb-sys-m34", role=Role.SYSTEM_ADMIN
+    )
+    sys_headers = _bearer("sys")
+
+    for hid in ("HID-0001", "HID-0002"):  # the uploader's and the clinician's hospitals
+        response = client.post(
+            f"{API}/hospitals/{hid}/suspend", json={"reason": "review"}, headers=sys_headers
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["verificationStatus"] == "SUSPENDED"
+
+    # Consent history and still-authorised access are untouched.
+    assert client.get(GRANTS, headers=cast.patient).json() == grants_before
+    (grant,) = [g for g in grants_before["items"] if g["id"] == grant_id]
+    assert grant["status"] == "ACTIVE"
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 200
+    # The hospital keeps read access to its own uploads and its own activity trail
+    # (/hospitals/me/audit-logs is not captured by /hospitals/{hid}/audit-logs).
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.admin_tmh).status_code == 200
+    assert client.get(HOSPITAL_AUDIT, headers=cast.admin_tmh).status_code == 200
+
+    # New hospital-level operations are refused.
+    blocked_upload = client.post(
+        RECORDS,
+        data={"categoryCode": "CBC", "dateOfService": "2026-03-02", "patientHealthId": HEALTH_ID},
+        files={"file": PDF},
+        headers=cast.admin_tmh,
+    )
+    assert blocked_upload.status_code == 409
+    lookup = client.get(
+        f"{API}/patients/lookup", params={"healthId": HEALTH_ID}, headers=cast.admin_tmh
+    )
+    assert lookup.status_code == 409
+    assert "Aarav" not in lookup.text
+    fake_auth.register_token("new-doc", firebase_uid="fb-new-doc-m34", claims={})
+    joined = client.post(
+        f"{API}/doctors/register",
+        json={
+            "fullName": "Dr New",
+            "registrationNumber": "R-NEW-1",
+            "hospitalHid": "HID-0002",
+        },
+        headers=_bearer("new-doc"),
+    )
+    assert joined.status_code == 409
+
+    # Reinstatement restores them; the existing grant was never interrupted.
+    for hid in ("HID-0001", "HID-0002"):
+        assert (
+            client.post(f"{API}/hospitals/{hid}/reinstate", headers=sys_headers).status_code == 200
+        )
+    _upload(client, cast, "CBC")
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 200
+
+
+def test_suspended_hospital_cannot_open_new_access_requests_but_keeps_granted_access(
+    client: TestClient, cast: Cast, fake_auth: FakeAuthProvider, db_engine: AsyncEngine
+) -> None:
+    """ADR-034 policy: a SUSPENDED hospital's clinicians initiate no new access requests
+    (409, before the Health ID is resolved, so nothing about the patient leaks), while reads
+    under an active, unexpired grant continue and no consent row is rewritten or revoked."""
+    record_id = _upload(client, cast, "CBC")
+    grant_id = _grant_cbc(client, cast)
+    grants_before = client.get(GRANTS, headers=cast.patient).json()
+    inbox_before = client.get(REQUESTS, headers=cast.patient).json()
+
+    async def add_system_admin(session: AsyncSession) -> UUID:
+        user = User(firebase_uid="fb-sys-m35", role=Role.SYSTEM_ADMIN)
+        session.add(user)
+        await session.flush()
+        return user.id
+
+    sys_id = run_with_session(db_engine, add_system_admin)
+    fake_auth.register_user(
+        "sys35", user_id=sys_id, firebase_uid="fb-sys-m35", role=Role.SYSTEM_ADMIN
+    )
+    sys_headers = _bearer("sys35")
+    suspended = client.post(f"{API}/hospitals/HID-0002/suspend", headers=sys_headers)
+    assert suspended.status_code == 200, suspended.text
+
+    new_request = {"patientHealthId": HEALTH_ID, "categoryCodes": ["MRI"], "purpose": "p"}
+    refused = client.post(REQUESTS, json=new_request, headers=cast.doctor_cmc)
+    assert refused.status_code == 409, refused.text
+    assert "not verified" in refused.json()["detail"]
+    # Same answer for a Health ID that names nobody: no enumeration through the refusal.
+    unknown = client.post(
+        REQUESTS,
+        json={**new_request, "patientHealthId": generate_health_id()},
+        headers=cast.doctor_cmc,
+    )
+    assert (unknown.status_code, unknown.json()["detail"]) == (409, refused.json()["detail"])
+    # Nothing was written: the patient's inbox and grants are exactly as before.
+    assert client.get(REQUESTS, headers=cast.patient).json() == inbox_before
+    assert client.get(GRANTS, headers=cast.patient).json() == grants_before
+
+    # Existing authorised access continues under the untouched grant.
+    (grant,) = [g for g in grants_before["items"] if g["id"] == grant_id]
+    assert grant["status"] == "ACTIVE"
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 200
+    params = {"patientHealthId": HEALTH_ID}
+    assert client.get(GRANTED_RECORDS, params=params, headers=cast.doctor_cmc).status_code == 200
+    # The doctor's consent-gated FHIR export also still runs on the existing grant.
+    export = client.get(f"{RECORDS}/export/fhir", params=params, headers=cast.doctor_cmc)
+    assert export.status_code == 200, export.text
+
+    # New discovery is refused too (ADR-034), identically for any Health ID.
+    discovery = client.get(EXISTENCE, params=params, headers=cast.doctor_cmc)
+    assert discovery.status_code == 409, discovery.text
+    assert "CBC" not in discovery.text
+    unknown_discovery = client.get(
+        EXISTENCE, params={"patientHealthId": generate_health_id()}, headers=cast.doctor_cmc
+    )
+    assert (unknown_discovery.status_code, unknown_discovery.json()) == (
+        409,
+        discovery.json(),
+    )
+
+    # The patient can still revoke; revocation is honoured as always.
+    assert client.post(f"{GRANTS}/{grant_id}/revoke", headers=cast.patient).status_code == 200
+    assert client.get(f"{RECORDS}/{record_id}", headers=cast.doctor_cmc).status_code == 404
+
+    # Reinstatement restores the ability to ask.
+    assert (
+        client.post(f"{API}/hospitals/HID-0002/reinstate", headers=sys_headers).status_code == 200
+    )
+    assert client.post(REQUESTS, json=new_request, headers=cast.doctor_cmc).status_code == 201
+    assert client.get(EXISTENCE, params=params, headers=cast.doctor_cmc).status_code == 200

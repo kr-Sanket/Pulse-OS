@@ -324,7 +324,7 @@ def _to_grant_list_response(
         **_NO_PROFILE,
         409: {
             "description": "A category is already actively granted, or already asked for on "
-            "an open request",
+            "an open request, or the clinician's hospital is not VERIFIED (ADR-034)",
             "content": PROBLEM,
         },
         **_INVALID,
@@ -341,13 +341,16 @@ async def create_access_request(
 ) -> AccessRequestResponse:
     """Ask a patient for access to a set of record categories.
 
-    Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
+    Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015), and
+    that hospital must be VERIFIED — a SUSPENDED hospital opens no new requests (ADR-034),
+    checked before the Health ID is resolved. Existing grants are unaffected.
     Consent requirement: none — this *asks* for consent, it reads nothing.
     Duplicates are refused with 409, before anything is written: a category this clinician
     already holds an active grant for, or one already asked for on an open (PENDING,
     unexpired) request of theirs to the same patient that has not yet been answered for it.
     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
-    409 (duplicate, as above), 422 (validation, unknown Health ID, unknown category code).
+    409 (duplicate, as above; or hospital not VERIFIED), 422 (validation, unknown Health ID,
+    unknown category code).
     """
     try:
         view = await service.create_request(

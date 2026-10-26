@@ -3,10 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { PulseOSClient } from "@pulseos/api-client";
 import {
   fetchCurrentUser,
+  fetchHospitalAuditLogs,
   listHospitals,
+  reinstateHospital,
+  rejectHospital,
+  suspendHospital,
   verifyHospital,
   type AuthenticatedUser,
   type Hospital,
+  type HospitalAuditLogList,
 } from "./api";
 
 interface StubResult {
@@ -218,5 +223,125 @@ describe("System Admin API: listHospitals", () => {
     if (result.status === "error") {
       expect(result.message).toContain("session has expired");
     }
+  });
+});
+
+describe("System Admin API: rejectHospital", () => {
+  it("successfully rejects hospital with reason and returns updated HospitalResponse", async () => {
+    const rejectedResponse: Hospital = {
+      hid: "HID-0001",
+      name: "TMH Jamshedpur",
+      address: "Jamshedpur, Jharkhand",
+      createdAt: "2026-01-01T00:00:00Z",
+      verificationStatus: "REJECTED",
+    };
+
+    const { client, POST } = stubClient([ok(rejectedResponse)]);
+
+    const result = await rejectHospital(client, "HID-0001", "Missing required license");
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") {
+      expect(result.data.verificationStatus).toBe("REJECTED");
+    }
+
+    expect(POST).toHaveBeenCalledWith("/api/v1/hospitals/{hid}/reject", {
+      params: { path: { hid: "HID-0001" } },
+      body: { reason: "Missing required license" },
+    });
+  });
+
+  it("handles 409 transition error clearly", async () => {
+    const { client } = stubClient([
+      fail(409, { detail: "Hospital status VERIFIED cannot transition to REJECTED" }),
+    ]);
+
+    const result = await rejectHospital(client, "HID-0001");
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.message).toContain("cannot transition");
+    }
+  });
+});
+
+describe("System Admin API: suspendHospital", () => {
+  it("successfully suspends hospital with optional reason", async () => {
+    const suspendedResponse: Hospital = {
+      hid: "HID-0001",
+      name: "TMH Jamshedpur",
+      address: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      verificationStatus: "SUSPENDED",
+    };
+
+    const { client, POST } = stubClient([ok(suspendedResponse)]);
+
+    const result = await suspendHospital(client, "HID-0001", "Compliance audit pending");
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") {
+      expect(result.data.verificationStatus).toBe("SUSPENDED");
+    }
+
+    expect(POST).toHaveBeenCalledWith("/api/v1/hospitals/{hid}/suspend", {
+      params: { path: { hid: "HID-0001" } },
+      body: { reason: "Compliance audit pending" },
+    });
+  });
+});
+
+describe("System Admin API: reinstateHospital", () => {
+  it("successfully reinstates hospital with optional reason", async () => {
+    const reinstatedResponse: Hospital = {
+      hid: "HID-0001",
+      name: "TMH Jamshedpur",
+      address: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      verificationStatus: "VERIFIED",
+    };
+
+    const { client, POST } = stubClient([ok(reinstatedResponse)]);
+
+    const result = await reinstateHospital(client, "HID-0001", "Compliance audit passed");
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") {
+      expect(result.data.verificationStatus).toBe("VERIFIED");
+    }
+
+    expect(POST).toHaveBeenCalledWith("/api/v1/hospitals/{hid}/reinstate", {
+      params: { path: { hid: "HID-0001" } },
+      body: { reason: "Compliance audit passed" },
+    });
+  });
+});
+
+describe("System Admin API: fetchHospitalAuditLogs", () => {
+  it("successfully fetches lifecycle audit history", async () => {
+    const auditResponse: HospitalAuditLogList = {
+      items: [
+        {
+          id: "log-1",
+          hospitalId: "h-1",
+          actorUserId: "admin-1",
+          action: "REINSTATED",
+          reason: "Approved after review",
+          occurredAt: "2026-10-26T10:00:00Z",
+          createdAt: "2026-10-26T10:00:00Z",
+        },
+      ],
+      nextCursor: null,
+    };
+
+    const { client, GET } = stubClient([ok(auditResponse)]);
+
+    const result = await fetchHospitalAuditLogs(client, "HID-0001");
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") {
+      expect(result.data.items).toHaveLength(1);
+      expect(result.data.items[0]?.action).toBe("REINSTATED");
+    }
+
+    expect(GET).toHaveBeenCalledWith("/api/v1/hospitals/{hid}/audit-logs", {
+      params: { path: { hid: "HID-0001" } },
+      signal: undefined,
+    });
   });
 });

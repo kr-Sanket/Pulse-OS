@@ -95,6 +95,8 @@ def create_app() -> FastAPI:
     application.include_router(health_router)
     application.include_router(auth_router, prefix=API_V1_PREFIX)
     application.include_router(patients_router, prefix=API_V1_PREFIX)
+    # /hospitals/me/audit-logs is consent-owned data on a records-owned URL prefix (ADR-023).
+    application.include_router(hospital_audit_logs_router, prefix=API_V1_PREFIX)
     application.include_router(hospitals_router, prefix=API_V1_PREFIX)
     application.include_router(doctors_router, prefix=API_V1_PREFIX)
     application.include_router(records_router, prefix=API_V1_PREFIX)
@@ -106,8 +108,6 @@ def create_app() -> FastAPI:
     application.include_router(audit_batches_router, prefix=API_V1_PREFIX)
     application.include_router(notifications_router, prefix=API_V1_PREFIX)
     application.include_router(ai_router, prefix=API_V1_PREFIX)
-    # /hospitals/me/audit-logs is consent-owned data on a records-owned URL prefix (ADR-023).
-    application.include_router(hospital_audit_logs_router, prefix=API_V1_PREFIX)
     return application
 
 

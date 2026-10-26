@@ -9,7 +9,7 @@ record listings, which a patient reads as a clinical history rather than an inbo
 """
 
 from collections.abc import Collection
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Final
 from uuid import UUID
 
@@ -24,6 +24,8 @@ from app.modules.records.models import (
     Doctor,
     Hospital,
     HospitalAdmin,
+    HospitalAuditLog,
+    HospitalLifecycleAction,
     HospitalVerificationStatus,
     MedicalRecord,
     RecordCategory,
@@ -139,8 +141,32 @@ class HospitalRepository:
     async def get_by_id(self, hospital_id: UUID) -> Hospital | None:
         return await self._session.get(Hospital, hospital_id)
 
-    async def get_by_hid(self, hid: str) -> Hospital | None:
-        result = await self._session.execute(select(Hospital).where(Hospital.hid == hid))
+    async def get_by_hid(self, hid: str, *, for_update: bool = False) -> Hospital | None:
+        stmt = select(Hospital).where(Hospital.hid == hid)
+        if for_update:
+            # populate_existing: a row already in the identity map must be refreshed from the
+            # locked read, or a lifecycle transition could decide on a stale status (ADR-034).
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_id_for_share(self, hospital_id: UUID) -> Hospital | None:
+        """Read a hospital under ``FOR SHARE`` for an operation that depends on its status.
+
+        Lock order (ADR-034): every status-dependent operation locks the hospital row
+        *first*. Lifecycle transitions take ``FOR UPDATE`` (``get_by_hid``); doctor
+        activation and new consent requests take this shared lock, so they run concurrently
+        with each other but serialise against a transition: a suspension committed first is
+        seen here, and one arriving later waits for this transaction to finish. A no-op on
+        SQLite (the test harness), whose writers are serialised anyway.
+        """
+        stmt = (
+            select(Hospital)
+            .where(Hospital.id == hospital_id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def list_by_ids(self, hospital_ids: Collection[UUID]) -> list[Hospital]:
@@ -176,6 +202,58 @@ class HospitalRepository:
         except IntegrityError as exc:
             raise DuplicateHidError() from exc
         return hospital
+
+
+class HospitalAuditLogRepository:
+    """Persistence for administrative hospital verification lifecycle audit logs (ADR-034).
+
+    Append-only: records events in the caller's active database transaction without committing.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record_lifecycle_event(
+        self,
+        *,
+        hospital_id: UUID,
+        actor_user_id: UUID,
+        action: HospitalLifecycleAction,
+        reason: str | None = None,
+    ) -> HospitalAuditLog:
+        """Write an immutable audit log entry in the shared transaction."""
+        event = HospitalAuditLog(
+            hospital_id=hospital_id,
+            actor_user_id=actor_user_id,
+            action=action,
+            reason=reason,
+            occurred_at=datetime.now(UTC),
+        )
+        self._session.add(event)
+        await self._session.flush()
+        return event
+
+    async def list_by_hospital_id(
+        self,
+        hospital_id: UUID,
+        *,
+        after: CursorKey | None = None,
+        limit: int | None = None,
+    ) -> list[HospitalAuditLog]:
+        """Fetch audit log entries for a hospital, newest first by occurred_at."""
+        stmt = (
+            select(HospitalAuditLog)
+            .where(HospitalAuditLog.hospital_id == hospital_id)
+            .order_by(HospitalAuditLog.occurred_at.desc(), HospitalAuditLog.id.desc())
+        )
+        if after is not None:
+            stmt = stmt.where(
+                _keyset_filter(HospitalAuditLog.occurred_at, HospitalAuditLog.id, after)
+            )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await self._session.execute(stmt)
+        return list(result.scalars())
 
 
 class RecordCategoryRepository:

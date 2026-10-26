@@ -60,7 +60,7 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
 - **Processing status** on DocumentReference: `UPLOADED → PROCESSING → INDEXED | FAILED` is
   modeled (ADR-008), but only `UPLOADED` is ever written — no worker advances it yet.
 
-## Physical tables (from migrations and models, 2026-10-25)
+## Physical tables (from migrations and models, 2026-10-26)
 
 | Migration | Tables |
 |---|---|
@@ -73,15 +73,32 @@ Patient (Health ID PHI-IND-YYYY-XXXXXXC per ADR-012, health profile, QR payload)
 | `aedb0169a4eb` | `ai_documents`, `ai_chunks` |
 | `0007` | `audit_batches`, `audit_batch_members` (ADR-027) |
 | `0008` | `notifications` (ADR-031) |
-| `0009` (head) | adds nullable `verified_by_user_id` (FK → `users`) and `verified_at` to `hospitals`; set only on the PENDING → VERIFIED transition, so hospitals verified before 0009 keep NULL |
+| `0009` | adds nullable `verified_by_user_id` (FK → `users`) and `verified_at` to `hospitals`; set only on the PENDING → VERIFIED transition, so hospitals verified before 0009 keep NULL |
+| `0010` (head) | `hospital_audit_logs` (ADR-034, accepted): append-only lifecycle events per hospital; no schema change to `hospitals` — REJECTED/SUSPENDED are new values of the existing VARCHAR `verification_status` |
 
-18 tables in total; there are no timeline, summary or embedding tables. `notifications` is a
-mutable convenience table (`is_read`, `read_at`), not audit evidence. Hospital verification
-writes no audit row (`audit_logs.patient_id` is NOT NULL, and verification has no patient). Batch
+19 tables in total; there are no timeline, summary or embedding tables. `notifications` is a
+mutable convenience table (`is_read`, `read_at`), not audit evidence. Hospital lifecycle
+transitions are recorded in `hospital_audit_logs`, never in `audit_logs` (whose `patient_id`
+stays NOT NULL). Batch
 constraints that the sealing design depends on — UNIQUE `batch_number`, `commitment`,
 `audit_log_id` and `(batch_id, leaf_index)`, plus CHECKs on `batch_number`, `leaf_count`,
 `hash_version` and `leaf_index` — are listed in BLOCKCHAIN_ARCHITECTURE.md and pinned by
 `tests/test_alembic.py` and the opt-in `tests/test_alembic_postgres.py`.
+
+## Downgrade and recovery (0010) — read before any rollback
+
+Downgrades are tested only on scratch databases (SQLite and a disposable PostgreSQL 16); that
+is not evidence of production safety. Run any migration against a copy of real data first.
+
+- **`0010 → 0009`** drops `hospital_audit_logs`: **the entire hospital lifecycle history
+  (who verified, rejected, suspended, reinstated, when, why) is lost** and cannot be rebuilt.
+  Export it first if it matters.
+- **Older application code does not know `REJECTED` or `SUSPENDED`.** The values live in
+  `hospitals.verification_status` (VARCHAR, no CHECK constraint), so the downgrade does not
+  touch them; pre-ADR-034 code reading such a row fails to map it to its enum. Before
+  deploying older code, decide each such hospital's state explicitly (e.g. a reviewed data
+  migration) — never by hand on a live database.
+- Never point any of this at the development database on port 5433 from a test or script.
 
 ## Explicitly Deferred
 

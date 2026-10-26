@@ -444,3 +444,262 @@ def test_list_hospitals_system_admin_only_and_filters(
     pending_after = client.get("/api/v1/hospitals?status=PENDING", headers=sys_headers)
     assert pending_after.status_code == 200
     assert len(pending_after.json()["items"]) == 0
+
+
+def test_hospital_lifecycle_endpoints_authz(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    admin_signup: str,
+    db_engine: AsyncEngine,
+) -> None:
+    admin_headers = _register_admin(client, fake_auth, admin_signup)
+    hid = client.get(HOSPITAL_ME, headers=admin_headers).json()["hospital"]["hid"]
+
+    endpoints = [
+        ("POST", f"/api/v1/hospitals/{hid}/reject"),
+        ("POST", f"/api/v1/hospitals/{hid}/suspend"),
+        ("POST", f"/api/v1/hospitals/{hid}/reinstate"),
+        ("GET", f"/api/v1/hospitals/{hid}/audit-logs"),
+    ]
+
+    # 1. 401 Unauthenticated
+    for method, path in endpoints:
+        res = client.request(method, path)
+        assert res.status_code == 401, f"{method} {path} should be 401 unauthenticated"
+
+    # 2. 403 Forbidden for non-system admins (HOSPITAL_ADMIN, PATIENT, DOCTOR)
+    fake_auth.register_user("pat-lc", user_id=uuid4(), firebase_uid="fb-pat-lc", role=Role.PATIENT)
+    fake_auth.register_user("doc-lc", user_id=uuid4(), firebase_uid="fb-doc-lc", role=Role.DOCTOR)
+    non_sysadmin_headers = [admin_headers, _bearer("pat-lc"), _bearer("doc-lc")]
+
+    for headers in non_sysadmin_headers:
+        for method, path in endpoints:
+            res = client.request(method, path, headers=headers)
+            assert res.status_code == 403, f"{method} {path} should be 403 for non-system admin"
+
+
+def test_hospital_lifecycle_endpoints_validation_and_errors(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    db_engine: AsyncEngine,
+    sqlite_db: None,
+) -> None:
+    _register_system_admin(db_engine, fake_auth, "sysadmin-val", "fb-sys-val")
+    sys_headers = _bearer("sysadmin-val")
+
+    # 1. 404 for unknown hospital HID
+    for path in [
+        "/api/v1/hospitals/HID-9999/reject",
+        "/api/v1/hospitals/HID-9999/suspend",
+        "/api/v1/hospitals/HID-9999/reinstate",
+        "/api/v1/hospitals/HID-9999/audit-logs",
+    ]:
+        method = "GET" if path.endswith("audit-logs") else "POST"
+        res = client.request(method, path, headers=sys_headers)
+        assert res.status_code == 404, f"{path} should return 404 for unknown HID"
+
+    # 404 for "ME" on audit-logs
+    assert client.get("/api/v1/hospitals/ME/audit-logs", headers=sys_headers).status_code == 404
+
+    # 2. 422 for reason exceeding 255 characters
+    long_reason = {"reason": "a" * 256}
+    for action in ["reject", "suspend", "reinstate"]:
+        res = client.post(
+            f"/api/v1/hospitals/HID-0001/{action}", json=long_reason, headers=sys_headers
+        )
+        assert res.status_code == 422
+
+    # 3. 422 for unknown fields (extra="forbid")
+    extra_field = {"reason": "Valid reason", "unknownField": "bad"}
+    for action in ["reject", "suspend", "reinstate"]:
+        res = client.post(
+            f"/api/v1/hospitals/HID-0001/{action}", json=extra_field, headers=sys_headers
+        )
+        assert res.status_code == 422
+
+    # 4. 422 for malformed pagination cursor on audit-logs
+    res_bad_cursor = client.get(
+        "/api/v1/hospitals/HID-0001/audit-logs?cursor=not-valid-base64",
+        headers=sys_headers,
+    )
+    assert res_bad_cursor.status_code == 422
+
+
+def test_hospital_lifecycle_transitions_idempotency_and_audit_history(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    admin_signup: str,
+    db_engine: AsyncEngine,
+) -> None:
+    admin_headers = _register_admin(client, fake_auth, admin_signup)
+    hid = client.get(HOSPITAL_ME, headers=admin_headers).json()["hospital"]["hid"]
+
+    sys_admin_id = _register_system_admin(db_engine, fake_auth, "sysadmin-life", "fb-sys-life")
+    sys_headers = _bearer("sysadmin-life")
+
+    # 1. Invalid transitions from PENDING
+    assert client.post(f"/api/v1/hospitals/{hid}/suspend", headers=sys_headers).status_code == 409
+    assert client.post(f"/api/v1/hospitals/{hid}/reinstate", headers=sys_headers).status_code == 409
+
+    # 2. Rejection of PENDING hospital with reason
+    rej = client.post(
+        f"/api/v1/hospitals/{hid}/reject",
+        json={"reason": "Incomplete documentation submitted."},
+        headers=sys_headers,
+    )
+    assert rej.status_code == 200
+    assert rej.json()["verificationStatus"] == "REJECTED"
+
+    # Rejection is terminal: cannot verify, suspend, or reinstate
+    assert client.post(f"/api/v1/hospitals/{hid}/verify", headers=sys_headers).status_code == 409
+    assert client.post(f"/api/v1/hospitals/{hid}/suspend", headers=sys_headers).status_code == 409
+    assert client.post(f"/api/v1/hospitals/{hid}/reinstate", headers=sys_headers).status_code == 409
+
+    # Rejection idempotency: repeat call returns 200 and no duplicate audit log
+    repeat_rej = client.post(f"/api/v1/hospitals/{hid}/reject", headers=sys_headers)
+    assert repeat_rej.status_code == 200
+    assert repeat_rej.json()["verificationStatus"] == "REJECTED"
+
+    audit_rej = client.get(f"/api/v1/hospitals/{hid}/audit-logs", headers=sys_headers)
+    assert audit_rej.status_code == 200
+    logs_rej = audit_rej.json()["items"]
+    assert len(logs_rej) == 1
+    assert logs_rej[0]["action"] == "REJECTED"
+    assert logs_rej[0]["reason"] == "Incomplete documentation submitted."
+    assert logs_rej[0]["actorUserId"] == str(sys_admin_id)
+
+    # 3. Second hospital: PENDING -> VERIFIED -> SUSPENDED -> REINSTATED
+    fake_auth.register_token("admin-2-token", firebase_uid="fb-admin-2", claims={})
+    h2_res = client.post(
+        HOSPITAL_REGISTER,
+        json={"hospitalName": "Metro Care", "hospitalAddress": "Delhi", "adminFullName": "Dr. Rao"},
+        headers=_bearer("admin-2-token"),
+    )
+    assert h2_res.status_code == 201
+    h2_hid = h2_res.json()["hospital"]["hid"]
+
+    # PENDING -> VERIFIED
+    v_res = client.post(f"/api/v1/hospitals/{h2_hid}/verify", headers=sys_headers)
+    assert v_res.status_code == 200
+    assert v_res.json()["verificationStatus"] == "VERIFIED"
+
+    # Cannot reject VERIFIED hospital
+    assert client.post(f"/api/v1/hospitals/{h2_hid}/reject", headers=sys_headers).status_code == 409
+
+    # VERIFIED -> SUSPENDED with blank reason (normalizes to None)
+    s_res = client.post(
+        f"/api/v1/hospitals/{h2_hid}/suspend",
+        json={"reason": "   \n\t  "},
+        headers=sys_headers,
+    )
+    assert s_res.status_code == 200
+    assert s_res.json()["verificationStatus"] == "SUSPENDED"
+
+    # Suspend is idempotent: repeat returns 200
+    res_susp = client.post(f"/api/v1/hospitals/{h2_hid}/suspend", headers=sys_headers)
+    assert res_susp.status_code == 200
+
+    # SUSPENDED -> REINSTATED with reason
+    r_res = client.post(
+        f"/api/v1/hospitals/{h2_hid}/reinstate",
+        json={"reason": "Compliance review passed."},
+        headers=sys_headers,
+    )
+    assert r_res.status_code == 200
+    assert r_res.json()["verificationStatus"] == "VERIFIED"
+
+    # Reinstate is idempotent: repeat returns 200
+    res_reinst = client.post(f"/api/v1/hospitals/{h2_hid}/reinstate", headers=sys_headers)
+    assert res_reinst.status_code == 200
+
+    # 4. Audit history listing: newest first, correct actions, keyset pagination
+    full_audit = client.get(f"/api/v1/hospitals/{h2_hid}/audit-logs", headers=sys_headers)
+    assert full_audit.status_code == 200
+    items = full_audit.json()["items"]
+    assert len(items) == 3
+    # Newest first: REINSTATED, SUSPENDED, VERIFIED
+    assert items[0]["action"] == "REINSTATED"
+    assert items[0]["reason"] == "Compliance review passed."
+    assert items[1]["action"] == "SUSPENDED"
+    assert items[1]["reason"] is None
+    assert items[2]["action"] == "VERIFIED"
+    assert items[2]["reason"] is None
+
+    # Test pagination: limit=1
+    page1 = client.get(f"/api/v1/hospitals/{h2_hid}/audit-logs?limit=1", headers=sys_headers)
+    assert page1.status_code == 200
+    p1_data = page1.json()
+    assert len(p1_data["items"]) == 1
+    assert p1_data["items"][0]["action"] == "REINSTATED"
+    assert p1_data["nextCursor"] is not None
+
+    page2 = client.get(
+        f"/api/v1/hospitals/{h2_hid}/audit-logs?limit=1&cursor={p1_data['nextCursor']}",
+        headers=sys_headers,
+    )
+    assert page2.status_code == 200
+    p2_data = page2.json()
+    assert len(p2_data["items"]) == 1
+    assert p2_data["items"][0]["action"] == "SUSPENDED"
+    assert p2_data["nextCursor"] is not None
+
+
+def test_doctor_activation_boundary_during_suspension_http(
+    client: TestClient,
+    fake_auth: FakeAuthProvider,
+    admin_signup: str,
+    db_engine: AsyncEngine,
+) -> None:
+    admin_headers = _register_admin(client, fake_auth, admin_signup)
+    hid = client.get(HOSPITAL_ME, headers=admin_headers).json()["hospital"]["hid"]
+
+    _register_system_admin(db_engine, fake_auth, "sysadmin-doc-bound", "fb-sys-doc-bound")
+    sys_headers = _bearer("sysadmin-doc-bound")
+
+    # Verify hospital and register doctor
+    assert client.post(f"/api/v1/hospitals/{hid}/verify", headers=sys_headers).status_code == 200
+
+    fake_auth.register_token("doc-test-token", firebase_uid="fb-doc-test", claims={})
+    doc_res = client.post(
+        DOCTORS_REGISTER,
+        json={
+            "fullName": "Dr. Boundary",
+            "specialty": "Neurology",
+            "registrationNumber": "REG-BOUND-1",
+            "hospitalHid": hid,
+        },
+        headers=_bearer("doc-test-token"),
+    )
+    assert doc_res.status_code == 201
+
+    listing = client.get("/api/v1/hospitals/me/doctors", headers=admin_headers)
+    assert listing.status_code == 200
+    doctor_id = listing.json()["items"][0]["id"]
+
+    # Initial activation -> 200 ACTIVE
+    act1 = client.post(f"/api/v1/hospitals/me/doctors/{doctor_id}/activate", headers=admin_headers)
+    assert act1.status_code == 200 and act1.json()["status"] == "ACTIVE"
+
+    # Suspend hospital
+    assert client.post(f"/api/v1/hospitals/{hid}/suspend", headers=sys_headers).status_code == 200
+
+    # Deactivation remains permitted during suspension -> 200 DISABLED
+    deact = client.post(
+        f"/api/v1/hospitals/me/doctors/{doctor_id}/deactivate", headers=admin_headers
+    )
+    assert deact.status_code == 200 and deact.json()["status"] == "DISABLED"
+
+    # Activation is blocked during suspension -> 409 HospitalNotVerifiedError
+    act_blocked = client.post(
+        f"/api/v1/hospitals/me/doctors/{doctor_id}/activate", headers=admin_headers
+    )
+    assert act_blocked.status_code == 409
+
+    # Reinstate hospital
+    assert client.post(f"/api/v1/hospitals/{hid}/reinstate", headers=sys_headers).status_code == 200
+
+    # Activation is permitted again after reinstatement -> 200 ACTIVE
+    act_reinstated = client.post(
+        f"/api/v1/hospitals/me/doctors/{doctor_id}/activate", headers=admin_headers
+    )
+    assert act_reinstated.status_code == 200 and act_reinstated.json()["status"] == "ACTIVE"

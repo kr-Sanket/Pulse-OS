@@ -6,6 +6,11 @@ Two families: organization/onboarding errors (ADR-015) and record-content errors
 must not learn that it exists.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.modules.records.models import HospitalVerificationStatus
+
 
 class RecordsError(Exception):
     """Base class for records-module domain errors."""
@@ -39,6 +44,21 @@ class HospitalNotFoundError(RecordsError):
 class HospitalNotVerifiedError(RecordsError):
     """The operation requires a VERIFIED hospital (ADR-015: PENDING hospitals cannot
     take doctor registrations or upload records)."""
+
+
+class InvalidHospitalStatusTransitionError(RecordsError):
+    """The requested hospital verification lifecycle transition is not permitted (ADR-034)."""
+
+    def __init__(
+        self,
+        current_status: "HospitalVerificationStatus",
+        target_status: "HospitalVerificationStatus",
+    ) -> None:
+        super().__init__(
+            f"Cannot transition hospital from {current_status.value} to {target_status.value}."
+        )
+        self.current_status = current_status
+        self.target_status = target_status
 
 
 class ProfileNotFoundError(RecordsError):

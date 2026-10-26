@@ -33,6 +33,12 @@ export const VERIFICATION_NOTICES: Readonly<Record<HospitalVerificationStatus, s
   PENDING:
     "Your hospital is awaiting verification by a PulseOS system administrator. Until it is " +
     "verified, doctors cannot register to it and no records can be uploaded.",
+  REJECTED:
+    "Your hospital registration was rejected by a PulseOS system administrator. " +
+    "Doctors cannot register to it and no records can be uploaded.",
+  SUSPENDED:
+    "Your hospital has been suspended by a PulseOS system administrator. " +
+    "Doctor registration and record uploads are disabled.",
 };
 
 const VERIFICATION_BADGES: Readonly<
@@ -40,6 +46,8 @@ const VERIFICATION_BADGES: Readonly<
 > = {
   VERIFIED: { label: "Verified", tone: "success" },
   PENDING: { label: "Pending verification", tone: "warning" },
+  REJECTED: { label: "Rejected", tone: "destructive" },
+  SUSPENDED: { label: "Suspended", tone: "warning" },
 };
 
 export interface HospitalIdentityView {

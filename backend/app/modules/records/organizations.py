@@ -11,6 +11,7 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.auth.accounts import UserAccountService
@@ -25,6 +26,7 @@ from app.modules.records.errors import (
     HidAllocationError,
     HospitalNotFoundError,
     HospitalNotVerifiedError,
+    InvalidHospitalStatusTransitionError,
     OrgRegistrationConflictError,
     ProfileNotFoundError,
 )
@@ -33,6 +35,8 @@ from app.modules.records.models import (
     DoctorStatus,
     Hospital,
     HospitalAdmin,
+    HospitalAuditLog,
+    HospitalLifecycleAction,
     HospitalVerificationStatus,
 )
 from app.modules.records.repository import (
@@ -40,7 +44,7 @@ from app.modules.records.repository import (
     HospitalAdminRepository,
     HospitalRepository,
 )
-from app.shared.pagination import CursorKey, encode_cursor
+from app.shared.pagination import DEFAULT_PAGE_SIZE, CursorKey, encode_cursor
 
 # 10k HIDs; hospitals number in the tens, so repeated collisions mean something is broken.
 _MAX_HID_ATTEMPTS = 8
@@ -75,6 +79,44 @@ class DoctorPage:
     next_cursor: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class HospitalAuditLogPage:
+    items: list[HospitalAuditLog]
+    next_cursor: str | None
+
+
+def _normalize_reason(reason: str | None) -> str | None:
+    if reason is None:
+        return None
+    stripped = reason.strip()
+    if not stripped:
+        return None
+    if len(stripped) > 255:
+        raise ValueError("Reason must not exceed 255 characters.")
+    return stripped
+
+
+class HospitalLifecycleAuditor(Protocol):
+    """Observer for administrative hospital verification lifecycle events (ADR-034)."""
+
+    async def record_lifecycle_event(
+        self,
+        *,
+        hospital_id: UUID,
+        actor_user_id: UUID,
+        action: HospitalLifecycleAction,
+        reason: str | None = None,
+    ) -> Any: ...
+
+    async def list_by_hospital_id(
+        self,
+        hospital_id: UUID,
+        *,
+        after: CursorKey | None = None,
+        limit: int | None = None,
+    ) -> list[HospitalAuditLog]: ...
+
+
 class HospitalService:
     def __init__(
         self,
@@ -83,12 +125,14 @@ class HospitalService:
         admins: HospitalAdminRepository,
         doctors: DoctorRepository,
         hid_factory: Callable[[], str] = generate_hid,
+        auditor: HospitalLifecycleAuditor | None = None,
     ) -> None:
         self._accounts = accounts
         self._hospitals = hospitals
         self._admins = admins
         self._doctors = doctors
         self._hid_factory = hid_factory
+        self._auditor = auditor
 
     # -- hospital + admin onboarding (ADR-015 step 1) --------------------------------
 
@@ -133,21 +177,154 @@ class HospitalService:
         return HospitalRegistrationOutcome(hospital=hospital, admin=admin, created=True)
 
     async def verify_hospital(self, hid: str, *, verifier_user_id: UUID) -> Hospital:
-        """SYSTEM_ADMIN marks a hospital VERIFIED (ADR-015 step 2).
+        """SYSTEM_ADMIN marks a hospital VERIFIED (ADR-015 step 2, ADR-034).
 
-        ADM-01: Verification attribution is recorded when transitioning from a
-        non-VERIFIED state to VERIFIED.
-        Idempotent: If already VERIFIED, verification metadata is preserved and
-        not overwritten. Pre-verified legacy records with missing attribution
-        remain untouched.
+        Permitted transitions:
+        - PENDING -> VERIFIED (initial verification; records attribution and audit event)
+        - SUSPENDED -> VERIFIED (reinstatement; records REINSTATED audit event)
+        - VERIFIED -> VERIFIED (idempotent; returns unchanged without duplicate audit event)
+
+        Prohibited:
+        - REJECTED is terminal; raises InvalidHospitalStatusTransitionError.
         """
-        hospital = await self._hospitals.get_by_hid(hid.strip().upper())
+        hospital = await self._hospitals.get_by_hid(hid.strip().upper(), for_update=True)
         if hospital is None:
             raise HospitalNotFoundError()
-        if hospital.verification_status != HospitalVerificationStatus.VERIFIED:
+
+        if hospital.verification_status is HospitalVerificationStatus.VERIFIED:
+            return hospital
+
+        if hospital.verification_status is HospitalVerificationStatus.REJECTED:
+            raise InvalidHospitalStatusTransitionError(
+                hospital.verification_status, HospitalVerificationStatus.VERIFIED
+            )
+
+        if hospital.verification_status is HospitalVerificationStatus.SUSPENDED:
+            if self._auditor is not None:
+                await self._auditor.record_lifecycle_event(
+                    hospital_id=hospital.id,
+                    actor_user_id=verifier_user_id,
+                    action=HospitalLifecycleAction.REINSTATED,
+                )
             hospital.verification_status = HospitalVerificationStatus.VERIFIED
-            hospital.verified_by_user_id = verifier_user_id
-            hospital.verified_at = datetime.now(UTC)
+            return hospital
+
+        # PENDING -> VERIFIED
+        if self._auditor is not None:
+            await self._auditor.record_lifecycle_event(
+                hospital_id=hospital.id,
+                actor_user_id=verifier_user_id,
+                action=HospitalLifecycleAction.VERIFIED,
+            )
+        hospital.verification_status = HospitalVerificationStatus.VERIFIED
+        hospital.verified_by_user_id = verifier_user_id
+        hospital.verified_at = datetime.now(UTC)
+        return hospital
+
+    async def reject_hospital(
+        self, hid: str, *, actor_user_id: UUID, reason: str | None = None
+    ) -> Hospital:
+        """SYSTEM_ADMIN marks a PENDING hospital REJECTED (ADR-034).
+
+        Permitted transitions:
+        - PENDING -> REJECTED (records REJECTED audit event with optional reason)
+        - REJECTED -> REJECTED (idempotent; returns unchanged without duplicate audit event)
+
+        Prohibited:
+        - VERIFIED -> REJECTED, SUSPENDED -> REJECTED raise InvalidHospitalStatusTransitionError.
+        """
+        hospital = await self._hospitals.get_by_hid(hid.strip().upper(), for_update=True)
+        if hospital is None:
+            raise HospitalNotFoundError()
+
+        if hospital.verification_status is HospitalVerificationStatus.REJECTED:
+            return hospital
+
+        if hospital.verification_status is not HospitalVerificationStatus.PENDING:
+            raise InvalidHospitalStatusTransitionError(
+                hospital.verification_status, HospitalVerificationStatus.REJECTED
+            )
+
+        norm_reason = _normalize_reason(reason)
+        if self._auditor is not None:
+            await self._auditor.record_lifecycle_event(
+                hospital_id=hospital.id,
+                actor_user_id=actor_user_id,
+                action=HospitalLifecycleAction.REJECTED,
+                reason=norm_reason,
+            )
+        hospital.verification_status = HospitalVerificationStatus.REJECTED
+        return hospital
+
+    async def suspend_hospital(
+        self, hid: str, *, actor_user_id: UUID, reason: str | None = None
+    ) -> Hospital:
+        """SYSTEM_ADMIN marks a VERIFIED hospital SUSPENDED (ADR-034).
+
+        Permitted transitions:
+        - VERIFIED -> SUSPENDED (records SUSPENDED audit event with optional reason)
+        - SUSPENDED -> SUSPENDED (idempotent; returns unchanged without duplicate audit event)
+
+        Prohibited:
+        - PENDING -> SUSPENDED, REJECTED -> SUSPENDED raise InvalidHospitalStatusTransitionError.
+        """
+        hospital = await self._hospitals.get_by_hid(hid.strip().upper(), for_update=True)
+        if hospital is None:
+            raise HospitalNotFoundError()
+
+        if hospital.verification_status is HospitalVerificationStatus.SUSPENDED:
+            return hospital
+
+        if hospital.verification_status is not HospitalVerificationStatus.VERIFIED:
+            raise InvalidHospitalStatusTransitionError(
+                hospital.verification_status, HospitalVerificationStatus.SUSPENDED
+            )
+
+        norm_reason = _normalize_reason(reason)
+        if self._auditor is not None:
+            await self._auditor.record_lifecycle_event(
+                hospital_id=hospital.id,
+                actor_user_id=actor_user_id,
+                action=HospitalLifecycleAction.SUSPENDED,
+                reason=norm_reason,
+            )
+        hospital.verification_status = HospitalVerificationStatus.SUSPENDED
+        return hospital
+
+    async def reinstate_hospital(
+        self, hid: str, *, actor_user_id: UUID, reason: str | None = None
+    ) -> Hospital:
+        """SYSTEM_ADMIN marks a SUSPENDED hospital VERIFIED / REINSTATED (ADR-034).
+
+        Permitted transitions:
+        - SUSPENDED -> VERIFIED (records REINSTATED audit event with optional reason)
+        - VERIFIED -> VERIFIED (idempotent; returns unchanged without duplicate audit event)
+
+        Prohibited:
+        - PENDING -> VERIFIED (must use verify_hospital for initial verification)
+        - REJECTED -> VERIFIED (rejection is terminal)
+        """
+        hospital = await self._hospitals.get_by_hid(hid.strip().upper(), for_update=True)
+        if hospital is None:
+            raise HospitalNotFoundError()
+
+        if hospital.verification_status is HospitalVerificationStatus.VERIFIED:
+            return hospital
+
+        if hospital.verification_status is not HospitalVerificationStatus.SUSPENDED:
+            raise InvalidHospitalStatusTransitionError(
+                hospital.verification_status, HospitalVerificationStatus.VERIFIED
+            )
+
+        norm_reason = _normalize_reason(reason)
+        if self._auditor is not None:
+            await self._auditor.record_lifecycle_event(
+                hospital_id=hospital.id,
+                actor_user_id=actor_user_id,
+                action=HospitalLifecycleAction.REINSTATED,
+                reason=norm_reason,
+            )
+        hospital.verification_status = HospitalVerificationStatus.VERIFIED
         return hospital
 
     async def list_hospitals(
@@ -157,6 +334,34 @@ class HospitalService:
     ) -> list[Hospital]:
         """SYSTEM_ADMIN reads hospital directory / verification backlog."""
         return await self._hospitals.list_all(verification_status=verification_status)
+
+    async def list_lifecycle_events(
+        self,
+        hid: str,
+        *,
+        after: CursorKey | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
+    ) -> HospitalAuditLogPage:
+        """Fetch audit log entries for a hospital by HID, newest first (ADR-034).
+
+        Roles: SYSTEM_ADMIN. Raises HospitalNotFoundError if HID is unknown.
+        """
+        hospital = await self._hospitals.get_by_hid(hid.strip().upper())
+        if hospital is None:
+            raise HospitalNotFoundError()
+
+        if self._auditor is None:
+            return HospitalAuditLogPage(items=[], next_cursor=None)
+
+        rows = await self._auditor.list_by_hospital_id(hospital.id, after=after, limit=limit + 1)
+        has_more = len(rows) > limit
+        items = rows[:limit]
+        next_cursor = (
+            encode_cursor(CursorKey(created_at=items[-1].occurred_at, item_id=items[-1].id))
+            if has_more
+            else None
+        )
+        return HospitalAuditLogPage(items=items, next_cursor=next_cursor)
 
     async def get_own_hospital(self, user_id: UUID) -> tuple[HospitalAdmin, Hospital]:
         """The caller's admin profile + hospital (ADR-013 layer 2: own hospital)."""
@@ -249,8 +454,21 @@ class HospitalService:
         self, user_id: UUID, doctor_id: UUID, status: DoctorStatus
     ) -> Doctor:
         """Activate/deactivate a doctor of the caller's own hospital. A doctor of another
-        hospital is reported exactly like a nonexistent one (404-not-403 rule)."""
+        hospital is reported exactly like a nonexistent one (404-not-403 rule).
+
+        ADR-034: Only VERIFIED hospitals can activate doctors; suspended hospitals cannot.
+        Activation re-reads the hospital under a shared row lock (lock order: hospital row
+        first, then the doctor), so it cannot interleave with a concurrent suspension and
+        commit an ACTIVE doctor at a hospital that is no longer VERIFIED. Deactivation takes
+        no hospital lock and stays available whatever the hospital's status.
+        """
         admin, _ = await self.get_own_hospital(user_id)
+        if status is DoctorStatus.ACTIVE:
+            locked = await self._hospitals.get_by_id_for_share(admin.hospital_id)
+            if locked is None or locked.verification_status is not (
+                HospitalVerificationStatus.VERIFIED
+            ):
+                raise HospitalNotVerifiedError()
         doctor = await self._doctors.get_by_id(doctor_id)
         if doctor is None or doctor.hospital_id != admin.hospital_id:
             raise DoctorNotFoundError()

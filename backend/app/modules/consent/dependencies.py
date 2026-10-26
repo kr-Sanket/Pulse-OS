@@ -52,6 +52,7 @@ from app.modules.consent.errors import (
     DuplicateRequestCategoryError,
     EmptyCategorySelectionError,
     GrantNotFoundError,
+    HospitalNotAcceptingRequestsError,
     HospitalProfileNotFoundError,
     PatientProfileNotFoundError,
     RequestNotDecidableError,
@@ -104,6 +105,11 @@ def to_http_error(exc: ConsentError) -> HTTPException:
         PatientProfileNotFoundError | ClinicianProfileNotFoundError | HospitalProfileNotFoundError,
     ):
         return HTTPException(status_code=404, detail="Profile not found for this account.")
+    if isinstance(exc, HospitalNotAcceptingRequestsError):
+        return HTTPException(
+            status_code=409,
+            detail="Your hospital is not verified, so it cannot open new access requests.",
+        )
     if isinstance(exc, ClinicianNotActiveError):
         return HTTPException(
             status_code=403, detail="Your clinician profile is not active at its hospital."
@@ -225,6 +231,9 @@ class RecordsClinicianDirectory:
 
     async def get_user_id_by_doctor_id(self, doctor_id: UUID) -> UUID | None:
         return await self._directory.get_user_id_by_doctor_id(doctor_id)
+
+    async def hospital_accepts_new_requests(self, hospital_id: UUID) -> bool:
+        return await self._directory.hospital_accepts_new_requests(hospital_id)
 
 
 class RecordsCategoryVocabulary:

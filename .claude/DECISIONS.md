@@ -1654,3 +1654,77 @@ assistant relied on imported Synthea data. Uploads accept PDF, JPEG and PNG.
 is). Bounded extraction (300 pages / 500,000 characters) but no per-job CPU timeout beyond arq's
 job timeout. Re-indexing on file replacement is not needed — record files are immutable.
 
+
+## ADR-034 — Hospital verification lifecycle and administrative audit trail
+**Date:** 2026-10-26 · **Status:** **Accepted** by the Product Owner 2026-10-26, after local
+verification (service, HTTP and opt-in PostgreSQL concurrency tests) · **Amends:** ADR-015,
+ADM-01 (migration 0009)
+
+**Context:** hospitals were only PENDING or VERIFIED. A platform admin could not refuse a
+registration or pause a verified hospital, and verification left no history beyond the latest
+verifier. Hospital administrative actions have no patient, so they cannot go in `audit_logs`,
+whose `patient_id` is NOT NULL (and stays so).
+
+**Decision:**
+1. `hospitals.verification_status` ∈ {PENDING, VERIFIED, REJECTED, SUSPENDED}.
+2. SYSTEM_ADMIN-only endpoints: `POST /api/v1/hospitals/{hid}/verify|reject|suspend|reinstate`
+   with optional body `{reason?: string ≤ 255}` (extra fields forbidden, blank → null), and
+   `GET /api/v1/hospitals/{hid}/audit-logs` (newest first, keyset-paginated). 404 unknown HID,
+   409 for a disallowed transition.
+3. Every real transition writes one row to the new append-only `hospital_audit_logs` table
+   (migration 0010: hospital_id FK, actor_user_id FK, action ∈ {VERIFIED, REJECTED, SUSPENDED,
+   REINSTATED}, reason, occurred_at), in the same transaction as the status change and after
+   `SELECT … FOR UPDATE` (with `populate_existing`) on the hospital row, so conflicting
+   concurrent transitions serialise and only one writes an event.
+4. A request whose target state already holds returns 200 and writes no event.
+5. REJECTED is terminal.
+6. Reinstatement keeps the original `verified_by_user_id`/`verified_at`; the REINSTATED event
+   records who reinstated.
+7. Anything other than VERIFIED blocks new hospital-level operations: record upload, admin
+   Health-ID lookup, doctor registration, doctor activation, **new consent requests** and **new
+   record-existence discovery** (`GET /records/existence`) by the hospital's clinicians (PO
+   decisions 2026-10-26; both 409, checked before the Health ID is resolved, so the refusal is
+   identical for every Health ID and reveals nothing about any patient). Doctor deactivation
+   stays allowed.
+8. Suspension never rewrites consent: existing grants, request history, and access by ACTIVE
+   clinicians under an active, unexpired grant are untouched (reads, granted listings, AI
+   answers and FHIR export all run on existing grants); the patient can still revoke. No
+   grant is revoked automatically.
+10. **Lock order.** Every status-dependent operation locks the hospital row *first*.
+   Transitions take `SELECT … FOR UPDATE` (`populate_existing`); doctor activation and the
+   new-request gate (`records.directory.ClinicianDirectoryService.hospital_accepts_new_requests`)
+   take `FOR SHARE` (`HospitalRepository.get_by_id_for_share`) before touching anything else.
+   Shared locks don't block each other; a transition waits for them, and they wait for an
+   uncommitted transition and then see its result — so no ACTIVE doctor and no new request
+   can be committed against a hospital that a concurrent transaction suspended. Neither
+   activation nor the request gate holds another row lock when it takes the hospital lock,
+   and transitions lock the hospital before writing anything, so the order cannot invert into
+   a deadlock (both interleavings are exercised on PostgreSQL). Deactivation takes no
+   hospital lock.
+9. `/hospitals/me/audit-logs` (ADR-023) is registered ahead of `/hospitals/{hid}/audit-logs`.
+
+**Transition matrix** (rows: current state; columns: action)
+
+| From \ Action | verify | reject | suspend | reinstate |
+|---|---|---|---|---|
+| PENDING | → VERIFIED (VERIFIED event) | → REJECTED (REJECTED event) | 409 | 409 |
+| VERIFIED | 200 no-op, no event | 409 | → SUSPENDED (SUSPENDED event) | 200 no-op, no event |
+| SUSPENDED | → VERIFIED (REINSTATED event) | 409 | 200 no-op, no event | → VERIFIED (REINSTATED event) |
+| REJECTED | 409 (terminal) | 200 no-op, no event | 409 | 409 |
+
+**Verification (2026-10-26, local):** transition matrix, idempotency, audit atomicity and
+`FOR UPDATE` blocking (`tests/test_organizations_*`, `test_hospital_lifecycle_postgres.py`);
+activation vs. suspension in both interleavings, concurrent activations, and the request gate
+waiting on a suspension (PostgreSQL; the race tests fail against the previous unlocked read);
+suspended-hospital request and discovery policy over HTTP (`test_m3_gate.py`) and in the
+services, including AI answers and FHIR export continuing under an existing grant
+(`test_demo_ai_workflow.py`, `test_m3_gate.py`).
+
+**Consequences / open items:** append-only and the allowed status values are application-
+enforced (no trigger, no CHECK on `hospitals.verification_status`). Downgrading 0010 drops the
+whole lifecycle history, and REJECTED/SUSPENDED rows would break pre-0010 code
+(docs/DATABASE_DESIGN.md §Downgrade and recovery). Record upload, admin lookup and doctor
+registration and existence discovery check status without a row lock (an operation racing a
+suspension commits, or is answered, as if ordered just before it; none of them grants access).
+The records-side 409 detail reads "Hospital is not verified yet." also when suspended. The
+admin history panel shows the first page only.

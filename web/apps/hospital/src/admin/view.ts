@@ -3,7 +3,7 @@
 // Pure functions, no React, so all view rules can be unit tested without a DOM.
 
 import type { Tone } from "@/components/shell/StatusBadge";
-import type { Hospital, HospitalVerificationStatus } from "./api";
+import type { Hospital, HospitalLifecycleAction, HospitalVerificationStatus } from "./api";
 
 export interface HospitalReviewItem {
   hid: string;
@@ -19,14 +19,27 @@ export const VERIFICATION_STATUS_CONFIG: Readonly<
 > = {
   PENDING: { label: "Pending Verification", tone: "warning" },
   VERIFIED: { label: "Verified", tone: "success" },
+  REJECTED: { label: "Rejected", tone: "destructive" },
+  SUSPENDED: { label: "Suspended", tone: "neutral" },
 };
 
-export type VerificationFilter = "ALL" | "PENDING" | "VERIFIED";
+export const LIFECYCLE_ACTION_CONFIG: Readonly<
+  Record<HospitalLifecycleAction, { label: string; tone: Tone }>
+> = {
+  VERIFIED: { label: "Verified", tone: "success" },
+  REJECTED: { label: "Rejected", tone: "destructive" },
+  SUSPENDED: { label: "Suspended", tone: "warning" },
+  REINSTATED: { label: "Reinstated", tone: "primary" },
+};
+
+export type VerificationFilter = "ALL" | "PENDING" | "VERIFIED" | "SUSPENDED" | "REJECTED";
 
 export const FILTER_OPTIONS: readonly { id: VerificationFilter; label: string }[] = [
   { id: "ALL", label: "All Hospitals" },
   { id: "PENDING", label: "Pending Verification" },
   { id: "VERIFIED", label: "Verified" },
+  { id: "SUSPENDED", label: "Suspended" },
+  { id: "REJECTED", label: "Rejected" },
 ];
 
 export function toReviewItemFromResponse(hospital: Hospital): HospitalReviewItem {
@@ -38,6 +51,22 @@ export function toReviewItemFromResponse(hospital: Hospital): HospitalReviewItem
     verifiedAt: hospital.verifiedAt ?? null,
     verifiedByUserId: hospital.verifiedByUserId ?? null,
   };
+}
+
+export type HistoryPanelState = "loading" | "error" | "empty" | "list";
+
+/**
+ * Which body the lifecycle audit-history panel shows (ADR-034). An error always wins over
+ * stale or empty data, so a failed load is never presented as "no events recorded".
+ */
+export function historyPanelState(
+  loading: boolean,
+  error: string | null,
+  logs: readonly unknown[] | null,
+): HistoryPanelState {
+  if (error !== null) return "error";
+  if (loading || logs === null) return "loading";
+  return logs.length === 0 ? "empty" : "list";
 }
 
 /**

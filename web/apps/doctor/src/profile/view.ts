@@ -36,6 +36,10 @@ type HospitalVerification = DoctorProfile["hospital"]["verificationStatus"];
 const VERIFICATION_BADGES: Readonly<Record<HospitalVerification, { label: string; tone: Tone }>> = {
   VERIFIED: { label: "Verified", tone: "success" },
   PENDING: { label: "Pending verification", tone: "warning" },
+  // ADR-034. A clinician can only have joined a VERIFIED hospital, so REJECTED is reachable
+  // only through data repair; SUSPENDED is the hospital pausing new hospital-level operations.
+  SUSPENDED: { label: "Suspended", tone: "warning" },
+  REJECTED: { label: "Rejected", tone: "destructive" },
 };
 
 export interface DoctorIdentityView {

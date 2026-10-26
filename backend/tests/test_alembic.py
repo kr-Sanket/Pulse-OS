@@ -51,6 +51,7 @@ APP_TABLES = {
     "audit_batches",
     "audit_batch_members",
     "notifications",
+    "hospital_audit_logs",
 }
 
 
@@ -322,5 +323,101 @@ def test_0009_downgrade_removes_verification_columns_cleanly(tmp_path: Path) -> 
         cols_reup = {col["name"] for col in inspect(engine).get_columns("hospitals")}
         assert "verified_by_user_id" in cols_reup
         assert "verified_at" in cols_reup
+    finally:
+        engine.dispose()
+
+
+def test_0010_creates_hospital_audit_logs_table_and_constraints(tmp_path: Path) -> None:
+    db_file = tmp_path / "hospital_audit_logs_0010.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+    command.upgrade(config, "0010")
+
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        inspector = inspect(engine)
+        assert "hospital_audit_logs" in set(inspector.get_table_names())
+        columns = {col["name"]: col for col in inspector.get_columns("hospital_audit_logs")}
+        assert "id" in columns
+        assert "hospital_id" in columns
+        assert columns["hospital_id"]["nullable"] is False
+        assert "actor_user_id" in columns
+        assert columns["actor_user_id"]["nullable"] is False
+        assert "action" in columns
+        assert columns["action"]["nullable"] is False
+        assert "reason" in columns
+        assert columns["reason"]["nullable"] is True
+        assert "occurred_at" in columns
+        assert columns["occurred_at"]["nullable"] is False
+        assert "created_at" in columns
+        assert columns["created_at"]["nullable"] is False
+
+        fks = inspector.get_foreign_keys("hospital_audit_logs")
+        fks_by_col = {tuple(fk.get("constrained_columns", [])): fk for fk in fks}
+        assert ("hospital_id",) in fks_by_col
+        assert fks_by_col[("hospital_id",)]["referred_table"] == "hospitals"
+        assert fks_by_col[("hospital_id",)]["referred_columns"] == ["id"]
+        assert ("actor_user_id",) in fks_by_col
+        assert fks_by_col[("actor_user_id",)]["referred_table"] == "users"
+        assert fks_by_col[("actor_user_id",)]["referred_columns"] == ["id"]
+
+        indexes = inspector.get_indexes("hospital_audit_logs")
+        idx_names = {idx["name"] for idx in indexes}
+        assert "ix_hospital_audit_logs_hospital_id_occurred_at_id" in idx_names
+    finally:
+        engine.dispose()
+
+
+def test_0010_matches_model_metadata() -> None:
+    from app.core.db import Base
+    from app.modules.records.models import HospitalAuditLog  # noqa: F401
+
+    table = Base.metadata.tables["hospital_audit_logs"]
+    col_names = set(table.columns.keys())
+    assert col_names == {
+        "id",
+        "hospital_id",
+        "actor_user_id",
+        "action",
+        "reason",
+        "occurred_at",
+        "created_at",
+    }
+    assert table.columns["hospital_id"].nullable is False
+    assert table.columns["actor_user_id"].nullable is False
+    assert table.columns["action"].nullable is False
+    assert table.columns["reason"].nullable is True
+    assert table.columns["occurred_at"].nullable is False
+    assert table.columns["created_at"].nullable is False
+
+    fk_by_col = {fk.parent.name: fk for fk in table.foreign_keys}
+    assert fk_by_col["hospital_id"].target_fullname == "hospitals.id"
+    assert fk_by_col["actor_user_id"].target_fullname == "users.id"
+
+
+def test_0010_downgrade_removes_hospital_audit_logs_cleanly(tmp_path: Path) -> None:
+    db_file = tmp_path / "hospital_audit_logs_down.db"
+    config = _config(f"sqlite+aiosqlite:///{db_file}")
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        tables_head = set(inspect(engine).get_table_names())
+        assert "hospital_audit_logs" in tables_head
+    finally:
+        engine.dispose()
+
+    command.downgrade(config, "0009")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        tables_down = set(inspect(engine).get_table_names())
+        assert "hospital_audit_logs" not in tables_down
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(f"sqlite:///{db_file}")
+    try:
+        tables_reup = set(inspect(engine).get_table_names())
+        assert "hospital_audit_logs" in tables_reup
     finally:
         engine.dispose()

@@ -7,7 +7,17 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "@/api";
-import { fetchCurrentUser, listHospitals, verifyHospital, type Hospital } from "./api";
+import {
+  fetchCurrentUser,
+  fetchHospitalAuditLogs,
+  listHospitals,
+  reinstateHospital,
+  rejectHospital,
+  suspendHospital,
+  verifyHospital,
+  type Hospital,
+  type HospitalAuditLog,
+} from "./api";
 import {
   toReviewItemFromResponse,
   validateHospitalId,
@@ -44,6 +54,11 @@ export interface HospitalVerificationState {
 
   /** Actions */
   verify: (hid: string) => Promise<Hospital | null>;
+  reject: (hid: string, reason?: string) => Promise<Hospital | null>;
+  suspend: (hid: string, reason?: string) => Promise<Hospital | null>;
+  reinstate: (hid: string, reason?: string) => Promise<Hospital | null>;
+  /** Rejects with the user-facing message when the history cannot be loaded. */
+  fetchAuditLogs: (hid: string) => Promise<readonly HospitalAuditLog[]>;
   refresh: () => Promise<void>;
   setFilter: (filter: VerificationFilter) => void;
   dismissAlerts: () => void;
@@ -197,6 +212,167 @@ export function useHospitalVerification(
     [busyHid, refresh],
   );
 
+  // 4. Action: Reject hospital by HID with optional reason
+  const reject = useCallback(
+    async (rawHid: string, reason?: string): Promise<Hospital | null> => {
+      const hid = rawHid.trim().toUpperCase();
+      if (busyHid !== null) return null;
+
+      const validationError = validateHospitalId(hid);
+      if (validationError) {
+        setError(validationError);
+        setSuccess(null);
+        return null;
+      }
+
+      setBusyHid(hid);
+      setError(null);
+      setSuccess(null);
+
+      try {
+        const result = await rejectHospital(api, hid, reason);
+        if (result.status === "error") {
+          setError(result.message);
+          return null;
+        }
+
+        const rejectedHospital = result.data;
+        const updatedItem = toReviewItemFromResponse(rejectedHospital);
+
+        setHospitals((current) => {
+          const index = current.findIndex((h) => h.hid === hid);
+          if (index >= 0) {
+            const next = [...current];
+            next[index] = updatedItem;
+            return next;
+          }
+          return [updatedItem, ...current];
+        });
+
+        setSuccess(
+          `Hospital "${rejectedHospital.name}" (${rejectedHospital.hid}) has been rejected.`,
+        );
+        void refresh();
+        return rejectedHospital;
+      } finally {
+        setBusyHid(null);
+      }
+    },
+    [busyHid, refresh],
+  );
+
+  // 5. Action: Suspend hospital by HID with optional reason
+  const suspend = useCallback(
+    async (rawHid: string, reason?: string): Promise<Hospital | null> => {
+      const hid = rawHid.trim().toUpperCase();
+      if (busyHid !== null) return null;
+
+      const validationError = validateHospitalId(hid);
+      if (validationError) {
+        setError(validationError);
+        setSuccess(null);
+        return null;
+      }
+
+      setBusyHid(hid);
+      setError(null);
+      setSuccess(null);
+
+      try {
+        const result = await suspendHospital(api, hid, reason);
+        if (result.status === "error") {
+          setError(result.message);
+          return null;
+        }
+
+        const suspendedHospital = result.data;
+        const updatedItem = toReviewItemFromResponse(suspendedHospital);
+
+        setHospitals((current) => {
+          const index = current.findIndex((h) => h.hid === hid);
+          if (index >= 0) {
+            const next = [...current];
+            next[index] = updatedItem;
+            return next;
+          }
+          return [updatedItem, ...current];
+        });
+
+        setSuccess(
+          `Hospital "${suspendedHospital.name}" (${suspendedHospital.hid}) has been suspended.`,
+        );
+        void refresh();
+        return suspendedHospital;
+      } finally {
+        setBusyHid(null);
+      }
+    },
+    [busyHid, refresh],
+  );
+
+  // 6. Action: Reinstate hospital by HID with optional reason
+  const reinstate = useCallback(
+    async (rawHid: string, reason?: string): Promise<Hospital | null> => {
+      const hid = rawHid.trim().toUpperCase();
+      if (busyHid !== null) return null;
+
+      const validationError = validateHospitalId(hid);
+      if (validationError) {
+        setError(validationError);
+        setSuccess(null);
+        return null;
+      }
+
+      setBusyHid(hid);
+      setError(null);
+      setSuccess(null);
+
+      try {
+        const result = await reinstateHospital(api, hid, reason);
+        if (result.status === "error") {
+          setError(result.message);
+          return null;
+        }
+
+        const reinstatedHospital = result.data;
+        const updatedItem = toReviewItemFromResponse(reinstatedHospital);
+
+        setHospitals((current) => {
+          const index = current.findIndex((h) => h.hid === hid);
+          if (index >= 0) {
+            const next = [...current];
+            next[index] = updatedItem;
+            return next;
+          }
+          return [updatedItem, ...current];
+        });
+
+        setSuccess(
+          `Hospital "${reinstatedHospital.name}" (${reinstatedHospital.hid}) has been reinstated.`,
+        );
+        void refresh();
+        return reinstatedHospital;
+      } finally {
+        setBusyHid(null);
+      }
+    },
+    [busyHid, refresh],
+  );
+
+  // 7. Action: Fetch lifecycle audit logs
+  const fetchAuditLogs = useCallback(
+    async (rawHid: string): Promise<readonly HospitalAuditLog[]> => {
+      const hid = rawHid.trim().toUpperCase();
+      const result = await fetchHospitalAuditLogs(api, hid);
+      if (result.status === "ready") {
+        return result.data.items;
+      }
+      // Surfaced by the history panel itself; an empty list would read as "no events".
+      throw new Error(result.message);
+    },
+    [],
+  );
+
   const dismissAlerts = useCallback(() => {
     setError(null);
     setSuccess(null);
@@ -215,6 +391,10 @@ export function useHospitalVerification(
     error,
     success,
     verify,
+    reject,
+    suspend,
+    reinstate,
+    fetchAuditLogs,
     refresh,
     setFilter,
     dismissAlerts,

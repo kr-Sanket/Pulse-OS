@@ -17,13 +17,16 @@ export interface paths {
          * Create Access Request
          * @description Ask a patient for access to a set of record categories.
          *
-         *     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
+         *     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015), and
+         *     that hospital must be VERIFIED — a SUSPENDED hospital opens no new requests (ADR-034),
+         *     checked before the Health ID is resolved. Existing grants are unaffected.
          *     Consent requirement: none — this *asks* for consent, it reads nothing.
          *     Duplicates are refused with 409, before anything is written: a category this clinician
          *     already holds an active grant for, or one already asked for on an open (PENDING,
          *     unexpired) request of theirs to the same patient that has not yet been answered for it.
          *     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
-         *     409 (duplicate, as above), 422 (validation, unknown Health ID, unknown category code).
+         *     409 (duplicate, as above; or hospital not VERIFIED), 422 (validation, unknown Health ID,
+         *     unknown category code).
          */
         post: operations["create_access_request_api_v1_access_requests_post"];
         delete?: never;
@@ -688,6 +691,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/hospitals/{hid}/audit-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Hospital Audit Logs
+         * @description List administrative lifecycle audit history for a hospital, newest first (ADR-034).
+         *
+         *     Roles: SYSTEM_ADMIN.
+         *     Failure modes: 401, 403, 404 (unknown HID), 422 (invalid cursor/limit).
+         */
+        get: operations["list_hospital_audit_logs_api_v1_hospitals__hid__audit_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/{hid}/reinstate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reinstate Hospital
+         * @description Mark a SUSPENDED hospital VERIFIED / REINSTATED (ADR-034). Idempotent.
+         *
+         *     Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+         *     Failure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.
+         */
+        post: operations["reinstate_hospital_api_v1_hospitals__hid__reinstate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/{hid}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Hospital
+         * @description Mark a PENDING hospital REJECTED (ADR-034). Idempotent.
+         *
+         *     Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+         *     Failure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.
+         */
+        post: operations["reject_hospital_api_v1_hospitals__hid__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hospitals/{hid}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suspend Hospital
+         * @description Mark a VERIFIED hospital SUSPENDED (ADR-034). Idempotent.
+         *
+         *     Roles: SYSTEM_ADMIN (platform operations — touches no medical content).
+         *     Failure modes: 401, 403, 404 (unknown HID), 409 (invalid transition), 422.
+         */
+        post: operations["suspend_hospital_api_v1_hospitals__hid__suspend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/hospitals/{hid}/verify": {
         parameters: {
             query?: never;
@@ -1008,12 +1103,15 @@ export interface paths {
          *     a display name per category and nothing else — no record id, filename, hospital, date,
          *     description or count — so a caller with no grant learns only what step 1 allows.
          *
-         *     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015).
+         *     Roles: DOCTOR, and the clinician profile must be ACTIVE at its hospital (ADR-015), and
+         *     that hospital must be VERIFIED — a SUSPENDED hospital initiates no new discovery
+         *     (ADR-034), refused before the Health ID is resolved so the answer is the same for any ID.
          *     Consent requirement: none, and deliberately so — ``consent.enforce`` answers whether a
          *     *record* may be read, which cannot be answered before any grant exists. Every read past
          *     this point still crosses it. Nothing here is audited: no record was accessed.
          *     Failure modes: 401, 403 (wrong role or inactive clinician), 404 (no clinician profile),
-         *     422 (missing/oversized Health ID, or no patient with that Health ID).
+         *     409 (hospital not VERIFIED), 422 (missing/oversized Health ID, or no patient with that
+         *     Health ID).
          */
         get: operations["list_record_existence_api_v1_records_existence_get"];
         put?: never;
@@ -2019,6 +2117,55 @@ export interface components {
             /** Targetrecordid */
             targetRecordId: string | null;
         };
+        /** HospitalAuditLogListResponse */
+        HospitalAuditLogListResponse: {
+            /** Items */
+            items: components["schemas"]["HospitalAuditLogResponse"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+        };
+        /** HospitalAuditLogResponse */
+        HospitalAuditLogResponse: {
+            action: components["schemas"]["HospitalLifecycleAction"];
+            /**
+             * Actoruserid
+             * Format: uuid
+             */
+            actorUserId: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Hospitalid
+             * Format: uuid
+             */
+            hospitalId: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Occurredat
+             * Format: date-time
+             */
+            occurredAt: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * HospitalLifecycleAction
+         * @description Administrative lifecycle actions for hospital verification (ADR-034).
+         * @enum {string}
+         */
+        HospitalLifecycleAction: "VERIFIED" | "REJECTED" | "SUSPENDED" | "REINSTATED";
+        /** HospitalLifecycleActionRequest */
+        HospitalLifecycleActionRequest: {
+            /** Reason */
+            reason?: string | null;
+        };
         /** HospitalListResponse */
         HospitalListResponse: {
             /** Items */
@@ -2056,7 +2203,7 @@ export interface components {
          * HospitalVerificationStatus
          * @enum {string}
          */
-        HospitalVerificationStatus: "PENDING" | "VERIFIED";
+        HospitalVerificationStatus: "PENDING" | "VERIFIED" | "REJECTED" | "SUSPENDED";
         /**
          * IntegrityStatus
          * @description The verdict for one audit event.
@@ -2504,7 +2651,7 @@ export interface operations {
                     "application/problem+json": unknown;
                 };
             };
-            /** @description A category is already actively granted, or already asked for on an open request */
+            /** @description A category is already actively granted, or already asked for on an open request, or the clinician's hospital is not VERIFIED (ADR-034) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3593,6 +3740,146 @@ export interface operations {
             };
         };
     };
+    list_hospital_audit_logs_api_v1_hospitals__hid__audit_logs_get: {
+        parameters: {
+            query?: {
+                /** @description Opaque keyset pagination cursor. */
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                hid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalAuditLogListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reinstate_hospital_api_v1_hospitals__hid__reinstate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["HospitalLifecycleActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_hospital_api_v1_hospitals__hid__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["HospitalLifecycleActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    suspend_hospital_api_v1_hospitals__hid__suspend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["HospitalLifecycleActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HospitalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     verify_hospital_api_v1_hospitals__hid__verify_post: {
         parameters: {
             query?: never;
@@ -4059,6 +4346,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RecordExistenceResponse"];
                 };
+            };
+            /** @description The clinician's hospital is not verified (ADR-034) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
